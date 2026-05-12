@@ -7,6 +7,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.bydmate.app.data.local.dao.BatterySnapshotDao
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.ChargePointDao
+import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.local.dao.OdometerSampleDao
 import com.bydmate.app.data.local.dao.PlaceDao
@@ -224,6 +225,22 @@ object AppModule {
         }
     }
 
+    private val MIGRATION_12_13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS cloud_sync_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    payloadJson TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    lastError TEXT,
+                    sentAt INTEGER
+                )
+            """)
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_cloud_sync_queue_sentAt ON cloud_sync_queue(sentAt)")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
@@ -232,7 +249,7 @@ object AppModule {
             AppDatabase::class.java,
             "bydmate.db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
             .build()
     }
 
@@ -247,6 +264,7 @@ object AppModule {
     @Provides fun provideRuleLogDao(db: AppDatabase): RuleLogDao = db.ruleLogDao()
     @Provides fun providePlaceDao(db: AppDatabase): PlaceDao = db.placeDao()
     @Provides fun provideOdometerSampleDao(db: AppDatabase): OdometerSampleDao = db.odometerSampleDao()
+    @Provides fun provideCloudSyncQueueDao(db: AppDatabase): CloudSyncQueueDao = db.cloudSyncQueueDao()
 
     @Provides
     @Singleton

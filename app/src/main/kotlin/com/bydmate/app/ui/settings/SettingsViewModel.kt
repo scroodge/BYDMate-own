@@ -8,12 +8,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterModel
+import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
@@ -33,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.bydmate.app.service.BootReceiver
+import com.bydmate.app.service.TrackingService
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
@@ -121,6 +124,13 @@ data class SettingsUiState(
     val abrpUserToken: String = "",
     val abrpCarModel: String = "",
     val abrpSaveStatus: String? = null,
+    val cloudSyncEnabled: Boolean = false,
+    val cloudSyncUrl: String = "",
+    val cloudSyncApiKey: String = "",
+    val cloudSyncVehicleId: String = "",
+    val cloudSyncIntervalSec: String = SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
+    val cloudSyncWifiOnly: Boolean = false,
+    val cloudSyncStatus: String? = null,
 )
 
 @HiltViewModel
@@ -136,7 +146,8 @@ class SettingsViewModel @Inject constructor(
     private val idleDrainDao: IdleDrainDao,
     private val insightsManager: InsightsManager,
     private val adbOnDeviceClient: AdbOnDeviceClient,
-    private val batteryStateRepository: BatteryStateRepository
+    private val batteryStateRepository: BatteryStateRepository,
+    private val cloudTelemetrySender: CloudTelemetrySender? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState(
@@ -204,6 +215,16 @@ class SettingsViewModel @Inject constructor(
             val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
             val abrpUserToken = settingsRepository.getString(SettingsRepository.KEY_ABRP_USER_TOKEN, "")
             val abrpCarModel = settingsRepository.getString(SettingsRepository.KEY_ABRP_CAR_MODEL, "")
+            val cloudSyncEnabled = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") == "true"
+            val cloudSyncUrl = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_URL, "")
+            val cloudSyncApiKey = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, "")
+            val cloudSyncVehicleId = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "")
+            val cloudSyncIntervalSec = settingsRepository.getString(
+                SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
+                SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC
+            )
+            val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
+            val cloudSyncStatus = formatCloudSyncStatus()
 
             _uiState.update {
                 it.copy(
@@ -230,6 +251,13 @@ class SettingsViewModel @Inject constructor(
                     abrpApiKey = abrpApiKey,
                     abrpUserToken = abrpUserToken,
                     abrpCarModel = abrpCarModel,
+                    cloudSyncEnabled = cloudSyncEnabled,
+                    cloudSyncUrl = cloudSyncUrl,
+                    cloudSyncApiKey = cloudSyncApiKey,
+                    cloudSyncVehicleId = cloudSyncVehicleId,
+                    cloudSyncIntervalSec = cloudSyncIntervalSec,
+                    cloudSyncWifiOnly = cloudSyncWifiOnly,
+                    cloudSyncStatus = cloudSyncStatus,
                 )
             }
 
@@ -699,6 +727,117 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(abrpSaveStatus = null) }
         }
     }
+
+    fun toggleCloudSync(enabled: Boolean) {
+        _uiState.update { it.copy(cloudSyncEnabled = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
+        }
+    }
+
+    fun updateCloudSyncUrl(value: String) {
+        _uiState.update { it.copy(cloudSyncUrl = value) }
+    }
+
+    fun updateCloudSyncApiKey(value: String) {
+        _uiState.update { it.copy(cloudSyncApiKey = value) }
+    }
+
+    fun updateCloudSyncVehicleId(value: String) {
+        _uiState.update { it.copy(cloudSyncVehicleId = value) }
+    }
+
+    fun updateCloudSyncIntervalSec(value: String) {
+        _uiState.update { it.copy(cloudSyncIntervalSec = value.filter { ch -> ch.isDigit() }.take(4)) }
+    }
+
+    fun toggleCloudSyncWifiOnly(enabled: Boolean) {
+        _uiState.update { it.copy(cloudSyncWifiOnly = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, enabled.toString())
+        }
+    }
+
+    fun saveCloudSyncSettings() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 3600) ?: 30
+            val url = state.cloudSyncUrl.trim()
+            val enabled = state.cloudSyncEnabled && url.startsWith("https://", ignoreCase = true)
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
+            val status = if (url.isBlank()) {
+                "Endpoint URL пустой"
+            } else if (!url.startsWith("https://", ignoreCase = true)) {
+                "Endpoint должен начинаться с https://"
+            } else {
+                "Сохранено"
+            }
+            _uiState.update {
+                it.copy(
+                    cloudSyncEnabled = enabled,
+                    cloudSyncIntervalSec = interval.toString(),
+                    cloudSyncStatus = status,
+                )
+            }
+        }
+    }
+
+    fun sendCloudTestPayload() {
+        val state = _uiState.value
+        viewModelScope.launch {
+            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 3600) ?: 30
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, state.cloudSyncUrl.trim())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, state.cloudSyncEnabled.toString())
+            val snapshot = VehicleTelemetrySnapshot.from(
+                data = TrackingService.lastData.value,
+                battery = null,
+                charging = null,
+                enginePowerKw = null,
+                capturedAtMs = System.currentTimeMillis(),
+                rangeEstKm = TrackingService.lastRangeKm.value,
+                currentTripDistanceKm = TrackingService.tripDistanceKm.value,
+                currentTripConsumptionKwh100km = null,
+                location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null,
+            )
+            _uiState.update { it.copy(cloudSyncStatus = "Отправка теста...") }
+            val result = cloudTelemetrySender?.sendTest(snapshot)
+                ?: Result.failure(IllegalStateException("Cloud sender недоступен"))
+            _uiState.update {
+                it.copy(
+                    cloudSyncIntervalSec = interval.toString(),
+                    cloudSyncStatus = result.fold(
+                        onSuccess = { "Last sync OK: ${formatTs(System.currentTimeMillis())}" },
+                        onFailure = { e -> "Last sync failed: ${e.message ?: "ошибка"}" },
+                    )
+                )
+            }
+        }
+    }
+
+    private suspend fun formatCloudSyncStatus(): String? {
+        val ts = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS, "0").toLongOrNull() ?: 0L
+        if (ts <= 0L) return null
+        val ok = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, "false") == "true"
+        val message = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ERROR, "")
+        return "${if (ok) "Last sync OK" else "Last sync failed"}: ${formatTs(ts)}" +
+            if (!ok && message.isNotBlank()) " ($message)" else ""
+    }
+
+    private fun formatTs(ts: Long): String =
+        SimpleDateFormat("dd.MM.yy HH:mm:ss", Locale.US).format(Date(ts))
+
+    private fun hasFineLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
 
     fun saveConsumptionGood(value: String) {
         _uiState.update { it.copy(consumptionGood = value) }

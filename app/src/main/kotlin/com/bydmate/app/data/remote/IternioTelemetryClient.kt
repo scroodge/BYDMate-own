@@ -55,11 +55,43 @@ class IternioTelemetryClient @Inject constructor(
     }
 
     /**
+     * Backward-compatible entry point used by existing tests/callers. The
+     * shared [VehicleTelemetrySnapshot] remains the canonical payload source.
+     */
+    suspend fun send(
+        apiKey: String,
+        userToken: String,
+        data: DiParsData,
+        nominalCapacityKwh: Double,
+        battery: BatteryReading?,
+        charging: ChargingReading?,
+        carModel: String?,
+        enginePowerKw: Int? = null,
+        sampleTimeMs: Long? = null,
+    ): Result<Unit> = send(
+        apiKey = apiKey,
+        userToken = userToken,
+        snapshot = VehicleTelemetrySnapshot.from(
+            data = data,
+            battery = battery,
+            charging = charging,
+            enginePowerKw = enginePowerKw,
+            capturedAtMs = sampleTimeMs ?: System.currentTimeMillis(),
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        ),
+        nominalCapacityKwh = nominalCapacityKwh,
+        carModel = carModel,
+    )
+
+    /**
      * @param apiKey Developer API key issued by Iternio. Optional from caller
      *               perspective — when blank, falls back to [DEFAULT_API_KEY]
      *               so the request still passes Iternio's `api_key` gate.
      * @param userToken Per-vehicle live-data token from ABRP "Generic" provider.
-     * @param data Live DiPars snapshot. SOC must be present — without it the
+     * @param snapshot Shared live telemetry snapshot. SOC must be present — without it the
      *             call returns a failure without hitting the network.
      * @param nominalCapacityKwh Nominal battery capacity (user setting; 72.9 on
      *                           Leopard 3). Sent as Iternio `capacity` so ABRP
@@ -86,27 +118,23 @@ class IternioTelemetryClient @Inject constructor(
     suspend fun send(
         apiKey: String,
         userToken: String,
-        data: DiParsData,
+        snapshot: VehicleTelemetrySnapshot,
         nominalCapacityKwh: Double,
-        battery: BatteryReading?,
-        charging: ChargingReading?,
         carModel: String?,
-        enginePowerKw: Int? = null,
-        sampleTimeMs: Long? = null,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val token = userToken.trim()
         if (token.isEmpty()) return@withContext Result.failure(IllegalArgumentException("пустой токен"))
         // Iternio docs: SOC is the one truly required telemetry field. Without
         // it the route planner has nothing to update, so we skip the call.
-        val soc = data.soc ?: return@withContext Result.failure(IllegalStateException("SOC недоступен"))
+        val soc = snapshot.soc ?: return@withContext Result.failure(IllegalStateException("SOC недоступен"))
 
         try {
             val telemetry = JSONObject()
-            val utc = (sampleTimeMs ?: System.currentTimeMillis()) / 1000L
+            val utc = snapshot.capturedAtMs / 1000L
             telemetry.put("utc", utc)
             telemetry.put("soc", soc)
 
-            data.speed?.let { telemetry.put("speed", it) }
+            snapshot.speedKmh?.let { telemetry.put("speed", it) }
             // Power priority: autoservice ENG_POW > DiPars data.power > 0.
             // ABRP rates data accuracy by samples-per-10s of each field;
             // dropping `power` when both sources are dead pulls accuracy to
@@ -114,48 +142,33 @@ class IternioTelemetryClient @Inject constructor(
             // and tag the chosen source in logcat so a missing live source
             // shows up as `power_source=zero_fallback`, distinct from a
             // genuine 0 kW snapshot during coast/standstill.
-            val sanePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }
-            val powerKw: Double = sanePower?.toDouble() ?: data.power ?: 0.0
+            val powerKw: Double = snapshot.powerKw ?: 0.0
             val powerSource = when {
-                sanePower != null -> "autoservice"
-                data.power != null -> "diplus"
+                snapshot.powerKw != null -> "snapshot"
                 else -> "zero_fallback"
             }
             telemetry.put("power", powerKw)
             Log.d(TAG, "power=$powerKw source=$powerSource")
 
-            data.avgBatTemp?.let { telemetry.put("batt_temp", it) }
-            data.exteriorTemp?.let { telemetry.put("ext_temp", it) }
+            snapshot.batteryTempC?.let { telemetry.put("batt_temp", it) }
+            snapshot.outsideTempC?.let { telemetry.put("ext_temp", it) }
             telemetry.put("capacity", nominalCapacityKwh)
-            data.mileage?.let { telemetry.put("odometer", it) }
-            data.insideTemp?.let { telemetry.put("cabin_temp", it) }
-            data.tirePressFL?.let { telemetry.put("tire_pressure_fl", it) }
-            data.tirePressFR?.let { telemetry.put("tire_pressure_fr", it) }
-            data.tirePressRL?.let { telemetry.put("tire_pressure_rl", it) }
-            data.tirePressRR?.let { telemetry.put("tire_pressure_rr", it) }
+            snapshot.odometerKm?.let { telemetry.put("odometer", it) }
+            snapshot.cabinTempC?.let { telemetry.put("cabin_temp", it) }
 
-            telemetry.put("is_charging", if (isCharging(data, charging)) 1 else 0)
-            data.gear?.let { telemetry.put("is_parked", if (it == 1) 1 else 0) }
+            telemetry.put("is_charging", if (snapshot.isCharging == true) 1 else 0)
+            snapshot.isParked?.let { telemetry.put("is_parked", if (it) 1 else 0) }
+            snapshot.tirePressFL?.let { telemetry.put("tire_pressure_fl", it) }
+            snapshot.tirePressFR?.let { telemetry.put("tire_pressure_fr", it) }
+            snapshot.tirePressRL?.let { telemetry.put("tire_pressure_rl", it) }
+            snapshot.tirePressRR?.let { telemetry.put("tire_pressure_rr", it) }
 
             // Autoservice-only enrichment — Leopard 3 etc. SoH lets ABRP derate
             // nominal capacity by battery aging; is_dcfc separates fast-charge
             // sessions from AC; kwh_charged shows session progress.
-            charging?.let { c ->
-                c.gunConnectState?.let { gun ->
-                    telemetry.put("is_dcfc", if (gun in DCFC_GUN_STATES) 1 else 0)
-                }
-                // -1.0f is the autoservice "no value" sentinel — drop it.
-                // .toDouble() is required: Android's JSONObject only exposes
-                // put(String, double) — there is no put(String, float). On JVM
-                // the desktop org.json has the float overload, so this lands as
-                // NoSuchMethodError only at runtime on the device.
-                c.chargingCapacityKwh?.takeIf { it >= 0f }?.let {
-                    telemetry.put("kwh_charged", it.toDouble())
-                }
-            }
-            battery?.sohPercent?.takeIf { it in 0f..100f }?.let {
-                telemetry.put("soh", it.toDouble())
-            }
+            snapshot.chargeType?.let { telemetry.put("is_dcfc", if (it == "DC") 1 else 0) }
+            snapshot.kwhCharged?.let { telemetry.put("kwh_charged", it) }
+            snapshot.sohPercent?.let { telemetry.put("soh", it) }
 
             carModel?.trim()?.takeIf { it.isNotEmpty() }?.let { telemetry.put("car_model", it) }
 

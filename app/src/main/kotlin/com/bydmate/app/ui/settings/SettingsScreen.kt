@@ -488,6 +488,119 @@ fun SettingsScreen(
                     }
                 }
 
+                SectionHeader(text = "Cloud Sync")
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = CardSurface),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(
+                                    "Enable Cloud Sync",
+                                    color = TextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    "Отправка live-снимков BYDMate в ваш HTTPS endpoint. GPS включается только при разрешении локации.",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                )
+                            }
+                            Switch(
+                                checked = state.cloudSyncEnabled,
+                                onCheckedChange = { viewModel.toggleCloudSync(it) },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+                        SettingsTextField(
+                            label = "Endpoint URL",
+                            value = state.cloudSyncUrl,
+                            onValueChange = { viewModel.updateCloudSyncUrl(it) },
+                            keyboardType = KeyboardType.Uri
+                        )
+                        SettingsTextField(
+                            label = "API Key",
+                            value = state.cloudSyncApiKey,
+                            onValueChange = { viewModel.updateCloudSyncApiKey(it) },
+                            keyboardType = KeyboardType.Password
+                        )
+                        SettingsTextField(
+                            label = "Vehicle ID",
+                            value = state.cloudSyncVehicleId,
+                            onValueChange = { viewModel.updateCloudSyncVehicleId(it) },
+                            keyboardType = KeyboardType.Text
+                        )
+                        SettingsTextField(
+                            label = "Interval seconds",
+                            value = state.cloudSyncIntervalSec,
+                            onValueChange = { viewModel.updateCloudSyncIntervalSec(it) },
+                            keyboardType = KeyboardType.Number
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "Wi-Fi only",
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Switch(
+                                checked = state.cloudSyncWifiOnly,
+                                onCheckedChange = { viewModel.toggleCloudSyncWifiOnly(it) },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { viewModel.saveCloudSyncSettings() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AccentGreen,
+                                    contentColor = NavyDark
+                                )
+                            ) {
+                                Text("Save", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                            Button(
+                                onClick = { viewModel.sendCloudTestPayload() },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = CardSurfaceElevated,
+                                    contentColor = TextPrimary
+                                )
+                            ) {
+                                Text("Send test", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                        state.cloudSyncStatus?.let {
+                            Text(
+                                it,
+                                color = if (it.contains("failed", ignoreCase = true) || it.contains("ошиб", ignoreCase = true)) AccentOrange else AccentGreen,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+
                 // --- Плавающий виджет ---
                 val widgetCtx = LocalContext.current
                 val widgetPrefs = remember { WidgetPreferences(widgetCtx) }
@@ -1158,4 +1271,3 @@ private fun ModelPickerDialog(
         }
     }
 }
-

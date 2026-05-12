@@ -42,6 +42,15 @@ open class SettingsRepository @Inject constructor(
         const val KEY_ABRP_USER_TOKEN = "abrp_user_token"
         /** Необязательный код модели автомобиля из библиотеки ABRP. */
         const val KEY_ABRP_CAR_MODEL = "abrp_car_model"
+        const val KEY_CLOUD_SYNC_ENABLED = "cloud_sync_enabled"
+        const val KEY_CLOUD_SYNC_URL = "cloud_sync_url"
+        const val KEY_CLOUD_SYNC_API_KEY = "cloud_sync_api_key"
+        const val KEY_CLOUD_SYNC_VEHICLE_ID = "cloud_sync_vehicle_id"
+        const val KEY_CLOUD_SYNC_INTERVAL_SEC = "cloud_sync_interval_sec"
+        const val KEY_CLOUD_SYNC_WIFI_ONLY = "cloud_sync_wifi_only"
+        const val KEY_CLOUD_SYNC_LAST_OK = "cloud_sync_last_ok"
+        const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
+        const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"
         const val KEY_DATA_SOURCE = "data_source"
         const val KEY_AUTOSERVICE_ENABLED = "autoservice_enabled"
         const val KEY_LAST_MILEAGE_KM = "last_mileage_km"
@@ -61,6 +70,7 @@ open class SettingsRepository @Inject constructor(
         const val DEFAULT_CURRENCY = "BYN"
         const val DEFAULT_CONSUMPTION_GOOD = "20"
         const val DEFAULT_CONSUMPTION_BAD = "30"
+        const val DEFAULT_CLOUD_SYNC_INTERVAL_SEC = "30"
 
         val CURRENCIES = listOf(
             Currency("BYN", "BYN", "Бел. руб."),

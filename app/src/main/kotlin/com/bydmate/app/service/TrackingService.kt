@@ -20,6 +20,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
+import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
@@ -27,6 +28,7 @@ import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.IternioRateLimitException
 import com.bydmate.app.data.remote.IternioServerErrorException
 import com.bydmate.app.data.remote.IternioTelemetryClient
+import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
@@ -77,6 +79,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var iternioTelemetryClient: IternioTelemetryClient
+    @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -147,6 +150,10 @@ class TrackingService : Service(), LocationListener {
     // (exponential backoff). We refuse to send until `now >= iternioCooldownUntilMs`.
     @Volatile private var iternioCooldownUntilMs: Long = 0L
     @Volatile private var iternioConsecutive5xx: Int = 0
+
+    private val cloudTelemetryLock = Any()
+    @Volatile private var lastCloudTelemetryMs: Long = 0L
+    private val cloudInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val TAG = "TrackingService"
@@ -429,7 +436,7 @@ class TrackingService : Service(), LocationListener {
      * отправок забила бы канал и спутала throttle. На 429/5xx взводим
      * [iternioCooldownUntilMs] и тихо пропускаем тики пока не остынет.
      */
-    private fun maybeSendIternioTelemetry(data: DiParsData, nowMs: Long) {
+    private fun maybeSendIternioTelemetry(data: DiParsData, snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
         if (!iternioInFlight.compareAndSet(false, true)) return
         // Capture the snapshot timestamp BEFORE the network round-trip so the
         // `utc` field upstream matches the moment of sampling, not delivery.
@@ -469,39 +476,12 @@ class TrackingService : Service(), LocationListener {
                     ""
                 ).trim().takeIf { it.isNotEmpty() }
 
-                val autoserviceOn = settingsRepository.isAutoserviceEnabled()
-                // Best-effort autoservice enrichment. Snapshots are heavier
-                // (multiple fids) — only read them in CHARGING window where
-                // is_dcfc / kwh_charged actually matter. In DRIVING we still
-                // want ENG_POW every tick.
-                val readSnapshots = autoserviceOn && state == IternioIntervalPolicy.TelemetryState.CHARGING
-                val battery = if (readSnapshots) {
-                    runCatching { autoserviceClient.readBatterySnapshot() }.getOrNull()
-                } else null
-                val charging = if (readSnapshots) {
-                    runCatching { autoserviceClient.readChargingSnapshot() }.getOrNull()
-                } else null
-                // ENG_POW: tight timeout — at 1 Hz drive cadence a 900 ms budget
-                // covers a healthy ADB read but won't pile up if autoservice
-                // stalls. Null on timeout/error → client falls back to DiPars.
-                val enginePowerKw: Int? = if (autoserviceOn) {
-                    runCatching {
-                        kotlinx.coroutines.withTimeoutOrNull(900L) {
-                            autoserviceClient.getEnginePowerKw()
-                        }
-                    }.getOrNull()
-                } else null
-
                 iternioTelemetryClient.send(
                     apiKey = apiKey,
                     userToken = token,
-                    data = data,
+                    snapshot = snapshot,
                     nominalCapacityKwh = settingsRepository.getBatteryCapacity(),
-                    battery = battery,
-                    charging = charging,
                     carModel = carModel,
-                    enginePowerKw = enginePowerKw,
-                    sampleTimeMs = snapshotMs,
                 ).onSuccess {
                     synchronized(iternioTelemetryLock) {
                         lastIternioTelemetryMs = snapshotMs
@@ -536,6 +516,39 @@ class TrackingService : Service(), LocationListener {
                 Log.w(TAG, "Телеметрия Iternio: ${e.message}")
             } finally {
                 iternioInFlight.set(false)
+            }
+        }
+    }
+
+    private fun maybeSendCloudTelemetry(snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
+        if (!cloudInFlight.compareAndSet(false, true)) return
+        serviceScope.launch {
+            try {
+                if (settingsRepository.getString(
+                        com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                        "false"
+                    ) != "true"
+                ) {
+                    return@launch
+                }
+                val intervalSec = settingsRepository.getString(
+                    com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
+                    com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
+                ).toIntOrNull()?.coerceAtLeast(5) ?: 30
+                synchronized(cloudTelemetryLock) {
+                    if (nowMs - lastCloudTelemetryMs < intervalSec * 1000L) return@launch
+                }
+                cloudTelemetrySender.send(snapshot).onSuccess {
+                    synchronized(cloudTelemetryLock) {
+                        lastCloudTelemetryMs = nowMs
+                    }
+                }.onFailure { e ->
+                    Log.w(TAG, "Cloud Sync: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Cloud Sync: ${e.message}")
+            } finally {
+                cloudInFlight.set(false)
             }
         }
     }
@@ -750,7 +763,46 @@ class TrackingService : Service(), LocationListener {
                         automationEngine.evaluate(data, sessionId)
                         updateNotification(data)
                         maybeLogSessionSummary(nowMs, data, sessionId)
-                        maybeSendIternioTelemetry(data, nowMs)
+                        val abrpEnabled = settingsRepository.getString(
+                            com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_ENABLED,
+                            "false"
+                        ) == "true"
+                        val cloudEnabled = settingsRepository.getString(
+                            com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                            "false"
+                        ) == "true"
+                        if (abrpEnabled || cloudEnabled) {
+                            val autoserviceOn = settingsRepository.isAutoserviceEnabled()
+                            val telemetryState = IternioIntervalPolicy.classifyFromDiPars(data)
+                            val readSnapshots = autoserviceOn && telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
+                            val telemetryBattery = if (readSnapshots) {
+                                runCatching { autoserviceClient.readBatterySnapshot() }.getOrNull()
+                            } else null
+                            val telemetryCharging = if (readSnapshots) {
+                                runCatching { autoserviceClient.readChargingSnapshot() }.getOrNull()
+                            } else null
+                            val telemetryEnginePowerKw: Int? = if (autoserviceOn) {
+                                runCatching {
+                                    kotlinx.coroutines.withTimeoutOrNull(900L) {
+                                        autoserviceClient.getEnginePowerKw()
+                                    }
+                                }.getOrNull()
+                            } else null
+                            val locationForCloud = if (hasLocationPermission()) loc else null
+                            val telemetrySnapshot = VehicleTelemetrySnapshot.from(
+                                data = data,
+                                battery = telemetryBattery,
+                                charging = telemetryCharging,
+                                enginePowerKw = telemetryEnginePowerKw,
+                                capturedAtMs = nowMs,
+                                rangeEstKm = rangeKm,
+                                currentTripDistanceKm = tripDistance,
+                                currentTripConsumptionKwh100km = displayValue,
+                                location = locationForCloud,
+                            )
+                            if (abrpEnabled) maybeSendIternioTelemetry(data, telemetrySnapshot, nowMs)
+                            if (cloudEnabled) maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
+                        }
                     } else {
                         consecutiveNullCount++
                         if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
@@ -945,10 +997,12 @@ class TrackingService : Service(), LocationListener {
         }
     }
 
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
     private fun startLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (!hasLocationPermission()) {
             Log.w(TAG, "ACCESS_FINE_LOCATION not granted, skipping location updates")
             return
         }
