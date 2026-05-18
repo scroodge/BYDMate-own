@@ -11,14 +11,14 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.bydmate.app"
+        applicationId = "dev.scroodge.cloudevmate"
         minSdk = 29
         // targetSdk 29 matches TripInfo — grants full legacy file access
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 296
-        versionName = "2.6.1"
+        versionCode = 300
+        versionName = "0.1.0-cloud"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,7 +38,7 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "BYDMate-v${variant.versionName}.apk"
+            output.outputFileName = "CloudEV-Mate-v${variant.versionName}.apk"
         }
     }
 

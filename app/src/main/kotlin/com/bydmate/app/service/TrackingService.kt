@@ -932,7 +932,7 @@ class TrackingService : Service(), LocationListener {
         serviceScope.launch {
             try {
                 if (adbOnDeviceClient.connect().isSuccess) {
-                    val granted = adbOnDeviceClient.grantUsageStatsAppop("com.bydmate.app")
+                    val granted = adbOnDeviceClient.grantUsageStatsAppop(packageName)
                     Log.i(TAG, "GET_USAGE_STATS appop grant: $granted")
                 } else {
                     Log.w(TAG, "ADB connect refused — camera detection may be inactive until appop is granted manually")
@@ -1072,7 +1072,7 @@ class TrackingService : Service(), LocationListener {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "BYDMate Tracking",
+            "CloudEV Mate Tracking",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "Trip and charge tracking"
@@ -1089,7 +1089,7 @@ class TrackingService : Service(), LocationListener {
             PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("BYDMate")
+            .setContentTitle("CloudEV Mate")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)

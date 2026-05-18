@@ -511,7 +511,7 @@ fun SettingsScreen(
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    "Отправка live-снимков BYDMate в ваш HTTPS endpoint. GPS включается только при разрешении локации.",
+                                    "Отправка live-снимков CloudEV Mate в ваш HTTPS endpoint. GPS включается только при разрешении локации.",
                                     color = TextSecondary,
                                     fontSize = 12.sp,
                                 )
@@ -670,9 +670,9 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "• Долгий тап на виджете — скрыть до следующего открытия BYDMate.\n" +
+                                text = "• Долгий тап на виджете — скрыть до следующего открытия CloudEV Mate.\n" +
                                         "• Перетащить в корзину внизу — выключить совсем.\n" +
-                                        "• Обычный тап — открыть BYDMate.",
+                                        "• Обычный тап — открыть CloudEV Mate.",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
@@ -772,7 +772,7 @@ fun SettingsScreen(
                                         fontSize = 13.sp,
                                     )
                                     Text(
-                                        text = "Тап по левой части виджета открывает Навигатор, остальное — BYDMate.",
+                                        text = "Тап по левой части виджета открывает Навигатор, остальное — CloudEV Mate.",
                                         color = TextSecondary,
                                         fontSize = 11.sp,
                                     )
@@ -901,13 +901,13 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            "BYDMate v${state.appVersion}",
+                            "CloudEV Mate v${state.appVersion}",
                             color = TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
                             modifier = Modifier.clickable { viewModel.onVersionTap() }
                         )
-                        Text("\u00A9 2026 AndyShaman", color = TextSecondary, fontSize = 14.sp)
+                        Text("Based on BYDMate by AndyShaman", color = TextSecondary, fontSize = 14.sp)
                         if (state.lastBootInfo != null) {
                             Text(
                                 "Автозапуск: ${state.lastBootInfo}",
@@ -922,13 +922,13 @@ fun SettingsScreen(
                             )
                         }
                         Text(
-                            text = "github.com/AndyShaman/BYDMate",
+                            text = "github.com/scroodge/BYDMate-own",
                             color = AccentBlue,
                             fontSize = 14.sp,
                             textDecoration = TextDecoration.Underline,
                             modifier = Modifier.clickable {
                                 context.startActivity(Intent(Intent.ACTION_VIEW,
-                                    Uri.parse("https://github.com/AndyShaman/BYDMate")))
+                                    Uri.parse("https://github.com/scroodge/BYDMate-own")))
                             }
                         )
 

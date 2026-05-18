@@ -1,19 +1,19 @@
 <div align="center">
 
-<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="120" alt="BYDMate icon">
+<img src="app/src/main/res/drawable/ic_cloudev_mate.xml" width="120" alt="CloudEV Mate icon">
 
-# BYDMate
+# CloudEV Mate
 
-### Trip Logger & Energy Analytics for BYD DiLink 5.0
+### Personal EV telemetry companion for BYD DiLink 5.0
 
 [![Android](https://img.shields.io/badge/Android-10%2B-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.1-7F52FF?style=flat-square&logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Jetpack Compose](https://img.shields.io/badge/Jetpack_Compose-Material3-4285F4?style=flat-square&logo=jetpackcompose&logoColor=white)](https://developer.android.com/jetpack/compose)
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/AndyShaman/BYDMate?style=flat-square)](https://github.com/AndyShaman/BYDMate/releases)
+[![GitHub release](https://img.shields.io/github/v/release/scroodge/BYDMate-own?style=flat-square)](https://github.com/scroodge/BYDMate-own/releases)
 [![Sponsor](https://img.shields.io/badge/Поддержать-FF69B4?style=flat-square&logo=githubsponsors&logoColor=white)](SUPPORT.md)
 
-**Реальный расход, GPS-маршруты, автоматизация, AI-аналитика — локально, без облака.**
+**Личный EV telemetry companion для BYD/DiLink: реальный расход, GPS-маршруты, автоматизация, AI-аналитика и будущая cloud sync интеграция.**
 
 [Возможности](#-возможности) | [Скриншоты](#-скриншоты) | [Автоматизация](#-автоматизация) | [AI Инсайты](#-ai-инсайты) | [ABRP](#-abrp--live-телеметрия) | [Установка](#-установка) | [Сборка](#-сборка-из-исходников) | [Поддержать](SUPPORT.md)
 
@@ -23,7 +23,9 @@
 
 ## Зачем это нужно
 
-Штатный бортовой компьютер BYD **занижает расход на 10-30%**. BYDMate берёт данные напрямую из BMS (energydata) и показывает реальное потребление. Плюс данные, которых нет в штатной системе: расход на стоянке, баланс ячеек, стоимость поездок, AI-аналитика.
+Штатный бортовой компьютер BYD **занижает расход на 10-30%**. CloudEV Mate берёт данные напрямую из BMS (energydata) и показывает реальное потребление. Плюс данные, которых нет в штатной системе: расход на стоянке, баланс ячеек, стоимость поездок, AI-аналитика.
+
+CloudEV Mate основан на BYDMate, но использует отдельный Android `applicationId` — `dev.scroodge.cloudevmate`. Поэтому он может устанавливаться рядом с оригинальным BYDMate (`com.bydmate.app`), а не обновлять или заменять его.
 
 Приложение работает **полностью локально** на головном устройстве DiLink 5.0 — никакие данные не покидают автомобиль (кроме двух опциональных функций, которые включаются вручную: AI-инсайты через OpenRouter и телеметрия в A Better Route Planner).
 
@@ -169,8 +171,8 @@
 
 ### Управление
 
-- **Обычный тап** — открыть BYDMate
-- **Долгий тап (1.5 сек)** — скрыть до следующего открытия BYDMate
+- **Обычный тап** — открыть CloudEV Mate
+- **Долгий тап (1.5 сек)** — скрыть до следующего открытия CloudEV Mate
 - **Перетащить в корзину** — выключить совсем
 - Включение, прозрачность, сброс позиции — в **Настройки → Плавающий виджет**
 
@@ -340,26 +342,26 @@ adb install DiPlus.apk
 
 IP-адрес DiLink можно найти в настройках Wi-Fi на головном устройстве.
 
-### 3. Установка BYDMate
+### 3. Установка CloudEV Mate
 
-1. Скачайте BYDMate APK из [**Releases**](https://github.com/AndyShaman/BYDMate/releases)
-2. Перенесите на DiLink: через USB-флешку, по сети, или через ADB (`adb install BYDMate.apk`)
+1. Скачайте CloudEV Mate APK из [**Releases**](https://github.com/scroodge/BYDMate-own/releases)
+2. Перенесите на DiLink: через USB-флешку, по сети, или через ADB (`adb install CloudEV-Mate-v0.1.0-cloud.apk`)
 3. Разрешите установку из неизвестных источников, если потребуется
 
 ### 4. Первый запуск
 
-1. Откройте BYDMate — появится мастер настройки
+1. Откройте CloudEV Mate — появится мастер настройки
 2. Выдайте разрешения на **локацию** и **хранилище** (для GPS и чтения energydata)
 3. Выберите **источник данных поездок** — `BYD energydata` для Leopard 3, `DiPlus TripInfo` для Song и других моделей без встроенной BMS-базы (см. [секцию выше](#источник-данных-поездок))
 4. Укажите **тарифы** на электроэнергию (для расчёта стоимости поездок)
 
 ### 5. Фоновая работа
 
-**Важно:** отключите "Disable background Apps" для BYDMate, иначе DiLink будет убивать приложение:
+**Важно:** отключите "Disable background Apps" для CloudEV Mate, иначе DiLink будет убивать приложение:
 
-<img src="docs/screenshots/dilink-whitelist.jpg" alt="Disable background apps — toggle OFF for BYDMate" width="600">
+<img src="docs/screenshots/dilink-whitelist.jpg" alt="Disable background apps — toggle OFF for CloudEV Mate" width="600">
 
-*DiLink > Settings > General > Disable background Apps > BYDMate = **OFF***
+*DiLink > Settings > General > Disable background Apps > CloudEV Mate = **OFF***
 
 ### 6. Настройка (опционально)
 
@@ -378,7 +380,7 @@ BYDMate может анализировать вашу статистику во
 
 1. Зарегистрируйтесь на [OpenRouter](https://openrouter.ai/) (бесплатно)
 2. В личном кабинете OpenRouter создайте **API Key** (раздел Keys)
-3. В BYDMate откройте **Настройки** → раздел **AI Инсайты**
+3. В CloudEV Mate откройте **Настройки** → раздел **AI Инсайты**
 4. Вставьте API-ключ в поле "OpenRouter API Key"
 5. Нажмите **"Выбрать модель"** — откроется список доступных LLM (есть бесплатные)
 6. Нажмите **"Сохранить и получить инсайт"**
@@ -396,7 +398,7 @@ AI получает обезличенную статистику за 7 и 30 �
 
 ## ABRP — Live телеметрия
 
-BYDMate может отправлять живые показатели машины в [A Better Route Planner](https://abetterrouteplanner.com/) (ABRP) через официальный Iternio Telemetry API. ABRP использует эти данные, чтобы план маршрута и оценка остатка хода обновлялись по реальному состоянию батареи, а не по средним табличным значениям.
+CloudEV Mate может отправлять живые показатели машины в [A Better Route Planner](https://abetterrouteplanner.com/) (ABRP) через официальный Iternio Telemetry API. ABRP использует эти данные, чтобы план маршрута и оценка остатка хода обновлялись по реальному состоянию батареи, а не по средним табличным значениям.
 
 Функция **опциональная**, выключена по умолчанию и включается вручную в Настройках.
 
@@ -411,7 +413,7 @@ ABRP использует «Generic Live Data Token» — отдельный т�
 
 **Если в списке нет «Generic»**: смените код модели машины в гараже ABRP на любую популярную модель BYD (например, BYD Atto 3 или BYD Seal), сохраните, и Generic появится. После привязки токена код модели можно вернуть обратно.
 
-### Настройка в BYDMate
+### Настройка в CloudEV Mate
 
 1. **Настройки** → раздел **«ABRP — телеметрия»**.
 2. Вставьте полученный токен в поле **«Токен живых данных из ABRP»**.
@@ -449,9 +451,15 @@ ABRP подбирает прогноз на основе модели машин
 
 ```bash
 # Требуется: JDK 17, Android SDK 34
-git clone https://github.com/AndyShaman/BYDMate.git
-cd BYDMate
-./gradlew assembleDebug
+git clone https://github.com/scroodge/BYDMate-own.git
+cd BYDMate-own
+./gradlew clean assembleDebug
+```
+
+APK после сборки:
+
+```text
+app/build/outputs/apk/debug/CloudEV-Mate-v0.1.0-cloud.apk
 ```
 
 ---
@@ -467,6 +475,7 @@ cd BYDMate
 
 ## Благодарности
 
+- **[BYDMate](https://github.com/AndyShaman/BYDMate)** by AndyShaman — оригинальное GPLv3-приложение, на котором основан CloudEV Mate
 - **[BYD Trip Info](https://www.byd-seal-forum.de/forum/thread/1811-byd-trip-info-app/)** (`org.jayb.bydapp`) by jayb — оригинальное приложение для DiLink, вдохновение для BYDMate
 - **[DiPlus](https://www.dilink.cn/)** (迪加) by Van Design — приложение-мост к данным автомобиля
 
@@ -483,6 +492,8 @@ cd BYDMate
 **GPLv3** с дополнительными условиями атрибуции.
 См. [LICENSE](LICENSE) для деталей.
 
+CloudEV Mate is based on BYDMate by [AndyShaman](https://github.com/AndyShaman). See [NOTICE.md](NOTICE.md).
+
 Copyright (C) 2026 [AndyShaman](https://github.com/AndyShaman)
 
 ---
@@ -490,13 +501,15 @@ Copyright (C) 2026 [AndyShaman](https://github.com/AndyShaman)
 <details>
 <summary><b>English version</b></summary>
 
-## What is BYDMate?
+## What is CloudEV Mate?
 
-BYDMate is an Android app for BYD vehicles with DiLink 5.0 head unit (Leopard 3 / Fangchengbao Bao 3). It logs trips, GPS routes, real energy consumption from BMS, and provides AI-powered driving analytics — all locally on the head unit.
+CloudEV Mate is a personal EV telemetry companion for BYD vehicles with DiLink 5.0 head unit (Leopard 3 / Fangchengbao Bao 3). It logs trips, GPS routes, real energy consumption from BMS, and provides AI-powered driving analytics, with future cloud sync integration planned.
+
+CloudEV Mate is based on BYDMate but uses a separate Android `applicationId`: `dev.scroodge.cloudevmate`. It can be installed alongside the original BYDMate package (`com.bydmate.app`) instead of replacing it.
 
 ### Why?
 
-The BYD onboard computer **underestimates consumption by 10-30%**. BYDMate reads real consumption data from the BMS (energydata SQLite database) and shows information not available in the stock system: idle drain, cell balance, trip costs, AI driving insights.
+The BYD onboard computer **underestimates consumption by 10-30%**. CloudEV Mate reads real consumption data from the BMS (energydata SQLite database) and shows information not available in the stock system: idle drain, cell balance, trip costs, AI driving insights.
 
 ### Features
 
@@ -515,7 +528,7 @@ The BYD onboard computer **underestimates consumption by 10-30%**. BYDMate reads
 
 ### How it works
 
-BYDMate reads vehicle data from two sources:
+CloudEV Mate reads vehicle data from two sources:
 - **BYD energydata** (built-in BMS SQLite database) — accurate per-trip consumption
 - **DiPlus** app's local API (`localhost:8988`) — live SOC, speed, temperatures, cell voltages
 
@@ -523,7 +536,7 @@ No OBD adapter needed. No cloud/server — everything stays on the head unit (ex
 
 ### Trip data source (Leopard 3 vs Song)
 
-BYDMate supports two trip data backends, switchable in **Settings → Trip data source** or during the first-run wizard:
+CloudEV Mate supports two trip data backends, switchable in **Settings → Trip data source** or during the first-run wizard:
 
 - **BYD energydata** — for Leopard 3 (Fangchengbao Bao 3) and other models that ship the built-in BMS database. Most accurate per-trip consumption.
 - **DiPlus TripInfo** — for Song and other models **without** built-in energydata. Reads trips from DiPlus database; consumption is computed from SOC delta (~1 kWh/100km coarser than BMS).
@@ -536,7 +549,7 @@ The **Charges** tab automatically logs every real top-up. A record is created on
 
 ### Battery health and SoH
 
-On Leopard 3 BYDMate reads the **real SoH** value computed by the car itself and shows it in the Battery health card. On other BYD models the SoH field is hidden until access is confirmed; everything else (temperature, cell balance, 12V) works as usual.
+On Leopard 3 CloudEV Mate reads the **real SoH** value computed by the car itself and shows it in the Battery health card. On other BYD models the SoH field is hidden until access is confirmed; everything else (temperature, cell balance, 12V) works as usual.
 
 ### Enable SoH and automatic charge logging (Leopard 3)
 
@@ -544,7 +557,7 @@ To get SoH, automatic charge entries and Automation tab, open **Settings** and e
 
 ### If you don't have a Leopard 3
 
-BYDMate is developed and tested on BYD Leopard 3 (Fangchengbao Bao 3). On other BYD models most features still work, but a few things differ:
+CloudEV Mate is developed and tested on BYD Leopard 3 (Fangchengbao Bao 3). On other BYD models most features still work, but a few things differ:
 
 - Switch **Trip data source** to DiPlus TripInfo in Settings (energydata is missing on Song, Yuan, etc.)
 - Set the correct **battery capacity** in Settings → Battery (Leopard 3 default is 72.9 kWh; Atto 3 = 60.5, Seal AWD = 82.5, Han EV = 85.4)
@@ -556,17 +569,17 @@ If something does not work, please open an [Issue](https://github.com/AndyShaman
 
 ### Installation
 
-1. **Enable ADB on your head unit.** Without ADB, BYDMate runs in basic mode — trips, consumption, widget and AI insights work, but SoH, automatic charge logging and the Automation tab require ADB. On DiLink 3/4 you can enable it yourself; on **DiLink 5.0** ADB is locked and must be unlocked remotely from China via TaoBao sellers (~40–80 ¥). See [PDF guide (RU)](docs/guides/dilink5-adb-activation-ru.pdf) included in the repo.
+1. **Enable ADB on your head unit.** Without ADB, CloudEV Mate runs in basic mode — trips, consumption, widget and AI insights work, but SoH, automatic charge logging and the Automation tab require ADB. On DiLink 3/4 you can enable it yourself; on **DiLink 5.0** ADB is locked and must be unlocked remotely from China via TaoBao sellers (~40-80 ¥). See [PDF guide (RU)](docs/guides/dilink5-adb-activation-ru.pdf) included in the repo.
 2. Install **[DiPlus (D+)](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link)** on your DiLink head unit — copy the APK via USB stick and open it in the file manager (no ADB needed).
-3. Download BYDMate APK from [Releases](https://github.com/AndyShaman/BYDMate/releases)
+3. Download CloudEV Mate APK from [Releases](https://github.com/scroodge/BYDMate-own/releases)
 4. Transfer to DiLink via USB and install
 5. Grant location + storage permissions
-6. Disable "Disable background Apps" for BYDMate in DiLink Settings
+6. Disable "Disable background Apps" for CloudEV Mate in DiLink Settings
 
 ### AI Insights
 
 1. Get an API key from [OpenRouter](https://openrouter.ai/) (free models available)
-2. Enter the key in BYDMate Settings and select a model
+2. Enter the key in CloudEV Mate Settings and select a model
 3. Click "Save and get insight"
 
 AI analyzes 7-day and 30-day driving stats. Key metrics (consumption trends, short trips ratio, idle drain) are calculated deterministically. LLM provides correlations, anomalies, and behavioral advice in Russian.
@@ -575,13 +588,20 @@ AI analyzes 7-day and 30-day driving stats. Key metrics (consumption trends, sho
 
 ```bash
 # Requirements: JDK 17, Android SDK 34
-git clone https://github.com/AndyShaman/BYDMate.git
-cd BYDMate
-./gradlew assembleDebug
+git clone https://github.com/scroodge/BYDMate-own.git
+cd BYDMate-own
+./gradlew clean assembleDebug
+```
+
+Debug APK:
+
+```text
+app/build/outputs/apk/debug/CloudEV-Mate-v0.1.0-cloud.apk
 ```
 
 ### Credits
 
+- **[BYDMate](https://github.com/AndyShaman/BYDMate)** by AndyShaman — original GPLv3 app that CloudEV Mate is based on
 - **[BYD Trip Info](https://www.byd-seal-forum.de/forum/thread/1811-byd-trip-info-app/)** by jayb — original DiLink trip app, inspiration for BYDMate
 - **[DiPlus](https://www.dilink.cn/)** by Van Design — local vehicle data API bridge
 

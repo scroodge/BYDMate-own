@@ -466,7 +466,7 @@ object WidgetController {
                         try {
                             android.widget.Toast.makeText(
                                 context,
-                                "Виджет скрыт. Откройте BYDMate — вернётся.",
+                                "Виджет скрыт. Откройте CloudEV Mate — вернётся.",
                                 android.widget.Toast.LENGTH_SHORT,
                             ).show()
                         } catch (_: Exception) {}

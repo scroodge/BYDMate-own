@@ -251,11 +251,11 @@ private fun PostInstallReminderDialog(version: String, onDismiss: () -> Unit) {
                     modifier = Modifier.padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("BYDMate обновлён до v$version", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("CloudEV Mate обновлён до v$version", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text(
                         "Проверьте, что фоновая работа не заблокирована:\n\n" +
-                            "Настройки DiLink → General → Disable background Apps → BYDMate → OFF\n\n" +
-                            "Если переключатель включён (ON), DiLink может прибить сервис BYDMate — тогда поездки и GPS не будут писаться.",
+                            "Настройки DiLink → General → Disable background Apps → CloudEV Mate → OFF\n\n" +
+                            "Если переключатель включён (ON), DiLink может прибить сервис CloudEV Mate — тогда поездки и GPS не будут писаться.",
                         color = TextSecondary, fontSize = 14.sp
                     )
                     Button(

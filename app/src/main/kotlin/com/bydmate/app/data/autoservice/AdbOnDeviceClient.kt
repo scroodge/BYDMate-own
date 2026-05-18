@@ -108,7 +108,7 @@ class AdbOnDeviceClientImpl @Inject constructor(
 
     override suspend fun grantUsageStatsAppop(packageName: String): Boolean = withContext(Dispatchers.IO) {
         // Only permit our own package — never grant appops to anything else.
-        require(packageName.matches(PACKAGE_NAME_REGEX)) {
+        require(packageName == ctx.packageName) {
             "grantUsageStatsAppop: refused package $packageName"
         }
         val cmd = "appops set $packageName GET_USAGE_STATS allow"
@@ -154,9 +154,6 @@ class AdbOnDeviceClientImpl @Inject constructor(
         // Allow only: service call autoservice <5|7|9> i32 <dev> i32 <fid>
         // Rejects tx=6 (setInt), tx=8 (setBuffer), and arbitrary shell.
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
-
-        // Narrow whitelist for grantUsageStatsAppop — only our own package.
-        private val PACKAGE_NAME_REGEX = Regex("""^com\.bydmate\.app$""")
 
         // Hardcoded — no params, so no injection surface.
         private const val LAUNCH_DIPLUS_CMD =

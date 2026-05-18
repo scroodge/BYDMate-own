@@ -22,7 +22,7 @@ class UpdateChecker @Inject constructor(
     private val httpClient: OkHttpClient
 ) {
     companion object {
-        private const val GITHUB_API = "https://api.github.com/repos/AndyShaman/BYDMate/releases/latest"
+        private const val GITHUB_API = "https://api.github.com/repos/scroodge/BYDMate-own/releases/latest"
         private const val PREFS_NAME = "update_prefs"
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_AUTO_CHECK = "auto_check_enabled"
@@ -66,7 +66,7 @@ class UpdateChecker @Inject constructor(
         val request = Request.Builder()
             .url(GITHUB_API)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "BYDMate-UpdateCheck")
+            .header("User-Agent", "CloudEV-Mate-UpdateCheck")
             .build()
         val response = httpClient.newCall(request).execute()
         if (!response.isSuccessful) {
@@ -120,16 +120,16 @@ class UpdateChecker @Inject constructor(
         // Delete old file if exists
         val destFile = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-${update.version}.apk"
+            "CloudEV-Mate-${update.version}.apk"
         )
         if (destFile.exists()) destFile.delete()
 
         val request = DownloadManager.Request(Uri.parse(update.downloadUrl))
-            .setTitle("BYDMate ${update.version}")
-            .setDescription("Обновление BYDMate")
+            .setTitle("CloudEV Mate ${update.version}")
+            .setDescription("Обновление CloudEV Mate")
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "BYDMate-${update.version}.apk"
+                "CloudEV-Mate-${update.version}.apk"
             )
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
@@ -189,7 +189,7 @@ class UpdateChecker @Inject constructor(
     private fun installApk(context: Context, version: String) {
         val file = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "BYDMate-$version.apk"
+            "CloudEV-Mate-$version.apk"
         )
         if (!file.exists()) return
 

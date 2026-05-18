@@ -68,7 +68,7 @@ fun WelcomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            "Welcome to BYDMate!",
+            "Welcome to CloudEV Mate!",
             color = AccentGreen,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
@@ -281,13 +281,13 @@ private fun AutoStartStep(state: WelcomeUiState, viewModel: WelcomeViewModel) {
         ) {
             SectionCard("Автозапуск на DiLink") {
                 Text(
-                    "Чтобы BYDMate запускался автоматически при включении магнитолы:",
+                    "Чтобы CloudEV Mate запускался автоматически при включении магнитолы:",
                     color = TextSecondary,
                     fontSize = 13.sp
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("1. Нажмите кнопку справа", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Text("2. Найдите BYDMate в списке", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text("2. Найдите CloudEV Mate в списке", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Text("3. Переключатель должен быть ВЫКЛЮЧЕН (OFF)", color = AccentGreen, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -311,7 +311,7 @@ private fun AutoStartStep(state: WelcomeUiState, viewModel: WelcomeViewModel) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Di+ → Predefined → Startup tasks", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Spacer(modifier = Modifier.height(2.dp))
-                val dilinkCommand = "打开应用com.bydmate.app"
+                val dilinkCommand = "打开应用dev.scroodge.cloudevmate"
                 Text(
                     dilinkCommand,
                     color = AccentGreen,
@@ -325,7 +325,7 @@ private fun AutoStartStep(state: WelcomeUiState, viewModel: WelcomeViewModel) {
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "打开应用 = \"открыть приложение\" + имя пакета.\nДля двух приложений через точку с запятой:\n打开应用ru.yandex.yandexnavi;打开应用com.bydmate.app",
+                    "打开应用 = \"открыть приложение\" + имя пакета.\nДля двух приложений через точку с запятой:\n打开应用ru.yandex.yandexnavi;打开应用dev.scroodge.cloudevmate",
                     color = TextMuted,
                     fontSize = 10.sp
                 )
@@ -399,7 +399,7 @@ private fun AutoStartStep(state: WelcomeUiState, viewModel: WelcomeViewModel) {
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
                     ) {
-                        Text("Запустить BYDMate", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text("Запустить CloudEV Mate", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "BYDMate"
+rootProject.name = "CloudEV Mate"
 include(":app")

@@ -865,7 +865,7 @@ private fun ServiceStartTriggerControls() {
     )
     Spacer(Modifier.width(6.dp))
     Text(
-        "Запуск BYDMate",
+        "Запуск CloudEV Mate",
         fontSize = 13.sp,
         color = AccentGreen,
         fontWeight = FontWeight.Bold
@@ -1318,7 +1318,7 @@ private fun AddActionButton(
             title = { Text("Нужно разрешение", color = TextPrimary, fontSize = 16.sp) },
             text = {
                 Text(
-                    "Звуковые уведомления показываются как всплывающее окно поверх других приложений. Откройте системные настройки и включите \"Поверх других окон\" для BYDMate.",
+                    "Звуковые уведомления показываются как всплывающее окно поверх других приложений. Откройте системные настройки и включите \"Поверх других окон\" для CloudEV Mate.",
                     fontSize = 13.sp,
                     color = TextPrimary
                 )
@@ -2246,7 +2246,7 @@ private fun AddTriggerButton(
                 }
             )
             DropdownMenuItem(
-                text = { Text("Запуск BYDMate", fontSize = 13.sp) },
+                text = { Text("Запуск CloudEV Mate", fontSize = 13.sp) },
                 onClick = {
                     menuExpanded = false
                     onAddServiceStart()
@@ -2282,7 +2282,7 @@ private fun newServiceStartTrigger(): TriggerDef {
         chineseName = "服务启动",
         operator = "==",
         value = "true",
-        displayName = "Запуск BYDMate",
+        displayName = "Запуск CloudEV Mate",
         kind = "service_start"
     )
 }
