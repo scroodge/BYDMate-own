@@ -791,12 +791,15 @@ class SettingsViewModel @Inject constructor(
         val state = _uiState.value
         viewModelScope.launch {
             val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 3600) ?: 30
-            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, state.cloudSyncUrl.trim())
+            val url = state.cloudSyncUrl.trim()
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
-            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, state.cloudSyncEnabled.toString())
+            val canEnableLiveSync = url.startsWith("https://", ignoreCase = true) &&
+                state.cloudSyncVehicleId.trim().isNotBlank()
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, canEnableLiveSync.toString())
             val snapshot = VehicleTelemetrySnapshot.from(
                 data = TrackingService.lastData.value,
                 battery = null,
@@ -811,11 +814,15 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(cloudSyncStatus = "Отправка теста...") }
             val result = cloudTelemetrySender?.sendTest(snapshot)
                 ?: Result.failure(IllegalStateException("Cloud sender недоступен"))
+            if (result.isFailure && !state.cloudSyncEnabled) {
+                settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false")
+            }
             _uiState.update {
                 it.copy(
+                    cloudSyncEnabled = result.isSuccess && canEnableLiveSync,
                     cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = result.fold(
-                        onSuccess = { "Last sync OK: ${formatTs(System.currentTimeMillis())}" },
+                        onSuccess = { "Last sync OK: ${formatTs(System.currentTimeMillis())}; live sync enabled" },
                         onFailure = { e -> "Last sync failed: ${e.message ?: "ошибка"}" },
                     )
                 )
