@@ -18,7 +18,7 @@ android {
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
         versionCode = 300
-        versionName = "0.1.0-cloud"
+        versionName = "0.2.0-gateway"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -38,7 +38,7 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "CloudEV-Mate-v${variant.versionName}.apk"
+            output.outputFileName = "CloudEV-Gateway-v${variant.versionName}.apk"
         }
     }
 
