@@ -761,7 +761,7 @@ class SettingsViewModel @Inject constructor(
     fun saveCloudSyncSettings() {
         val state = _uiState.value
         viewModelScope.launch {
-            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 3600) ?: 30
+            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
             val url = state.cloudSyncUrl.trim()
             val enabled = state.cloudSyncEnabled && url.startsWith("https://", ignoreCase = true)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
@@ -790,7 +790,7 @@ class SettingsViewModel @Inject constructor(
     fun sendCloudTestPayload() {
         val state = _uiState.value
         viewModelScope.launch {
-            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 3600) ?: 30
+            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
             val url = state.cloudSyncUrl.trim()
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)

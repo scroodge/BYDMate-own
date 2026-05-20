@@ -242,7 +242,7 @@ private fun CloudSyncCard(
         GatewayTextField("Endpoint URL", url, onUrl, KeyboardType.Uri)
         GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
         GatewayTextField("Vehicle ID", vehicleId, onVehicleId, KeyboardType.Text)
-        GatewayTextField("Interval seconds", intervalSec, onInterval, KeyboardType.Number)
+        GatewayTextField("Flush interval seconds", intervalSec, onInterval, KeyboardType.Number)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

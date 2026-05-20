@@ -1,6 +1,7 @@
 package com.bydmate.app.data.cloud
 
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
+import org.json.JSONArray
 import org.json.JSONObject
 
 object CloudTelemetryPayload {
@@ -38,6 +39,16 @@ object CloudTelemetryPayload {
             put("telemetry", telemetry)
             put("location", location)
         }.toString()
+    }
+
+    fun buildBatch(payloads: List<String>): String {
+        val samples = JSONArray()
+        payloads.forEach { payload ->
+            samples.put(JSONObject(payload))
+        }
+        return JSONObject()
+            .put("samples", samples)
+            .toString()
     }
 
     private fun JSONObject.putNullable(name: String, value: Any?) {

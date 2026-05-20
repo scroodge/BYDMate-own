@@ -541,7 +541,7 @@ fun SettingsScreen(
                             keyboardType = KeyboardType.Text
                         )
                         SettingsTextField(
-                            label = "Interval seconds",
+                            label = "Flush interval seconds",
                             value = state.cloudSyncIntervalSec,
                             onValueChange = { viewModel.updateCloudSyncIntervalSec(it) },
                             keyboardType = KeyboardType.Number

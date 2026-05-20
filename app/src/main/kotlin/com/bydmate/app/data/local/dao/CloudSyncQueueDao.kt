@@ -13,6 +13,9 @@ interface CloudSyncQueueDao {
     @Query("SELECT * FROM cloud_sync_queue WHERE sentAt IS NULL ORDER BY createdAt ASC LIMIT :limit")
     suspend fun getUnsent(limit: Int): List<CloudSyncQueueEntity>
 
+    @Query("SELECT COUNT(*) FROM cloud_sync_queue WHERE sentAt IS NULL")
+    suspend fun countUnsent(): Int
+
     @Query("UPDATE cloud_sync_queue SET attempts = attempts + 1, lastError = :error WHERE id = :id")
     suspend fun markAttempt(id: Long, error: String)
 

@@ -151,15 +151,13 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var iternioCooldownUntilMs: Long = 0L
     @Volatile private var iternioConsecutive5xx: Int = 0
 
-    private val cloudTelemetryLock = Any()
-    @Volatile private var lastCloudTelemetryMs: Long = 0L
     private val cloudInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val TAG = "TrackingService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "bydmate_tracking"
-        private const val POLL_INTERVAL_MS = 3000L // 3 seconds for detailed GPS + charging curve
+        private const val POLL_INTERVAL_MS = 1000L // 1 second for local telemetry pooling
         // Throttle autoservice gun-state read so we don't hit Binder/ADB on every
         // 3-second poll. 5 ticks ≈ 15 s — fast enough that the user sees a row
         // appear within ~half a minute of unplugging, gentle enough not to
@@ -531,18 +529,7 @@ class TrackingService : Service(), LocationListener {
                 ) {
                     return@launch
                 }
-                val intervalSec = settingsRepository.getString(
-                    com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
-                    com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
-                ).toIntOrNull()?.coerceIn(2, 300) ?: 5
-                synchronized(cloudTelemetryLock) {
-                    if (nowMs - lastCloudTelemetryMs < intervalSec * 1000L) return@launch
-                }
-                cloudTelemetrySender.send(snapshot).onSuccess {
-                    synchronized(cloudTelemetryLock) {
-                        lastCloudTelemetryMs = nowMs
-                    }
-                }.onFailure { e ->
+                cloudTelemetrySender.send(snapshot).onFailure { e ->
                     Log.w(TAG, "Cloud Sync: ${e.message}")
                 }
             } catch (e: Exception) {
