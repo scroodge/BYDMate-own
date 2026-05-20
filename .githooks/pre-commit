@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+ROOT="$(git rev-parse --show-toplevel)"
+FILE="$ROOT/app/build.gradle.kts"
+
+if [ "${SKIP_VERSION_BUMP:-}" = "1" ]; then
+  echo "Skipping version bump because SKIP_VERSION_BUMP=1"
+  exit 0
+fi
+
+if [ ! -f "$FILE" ]; then
+  echo "Version bump skipped: $FILE not found" >&2
+  exit 1
+fi
+
+OLD_CODE="$(sed -nE 's/^[[:space:]]*versionCode = ([0-9]+).*/\1/p' "$FILE" | head -n 1)"
+OLD_NAME="$(sed -nE 's/^[[:space:]]*versionName = "([^"]+)".*/\1/p' "$FILE" | head -n 1)"
+
+if [ -z "$OLD_CODE" ] || [ -z "$OLD_NAME" ]; then
+  echo "Version bump failed: versionCode/versionName not found in app/build.gradle.kts" >&2
+  exit 1
+fi
+
+SUFFIX=""
+BASE_NAME="$OLD_NAME"
+case "$OLD_NAME" in
+  *-gateway)
+    SUFFIX="-gateway"
+    BASE_NAME="${OLD_NAME%-gateway}"
+    ;;
+esac
+
+IFS=. set -- $BASE_NAME
+MAJOR="${1:-}"
+MINOR="${2:-}"
+PATCH="${3:-}"
+
+case "$MAJOR.$MINOR.$PATCH" in
+  *[!0-9.]* | .*)
+    echo "Version bump failed: unsupported versionName '$OLD_NAME'" >&2
+    exit 1
+    ;;
+esac
+
+NEW_CODE=$((OLD_CODE + 1))
+NEW_PATCH=$((PATCH + 1))
+NEW_NAME="$MAJOR.$MINOR.$NEW_PATCH$SUFFIX"
+
+NEW_CODE="$NEW_CODE" NEW_NAME="$NEW_NAME" perl -0pi -e '
+  s/versionCode = \d+/versionCode = $ENV{NEW_CODE}/;
+  s/versionName = "[^"]+"/versionName = "$ENV{NEW_NAME}"/;
+' "$FILE"
+
+git add "$FILE"
+echo "Version bumped: $OLD_NAME ($OLD_CODE) -> $NEW_NAME ($NEW_CODE)"

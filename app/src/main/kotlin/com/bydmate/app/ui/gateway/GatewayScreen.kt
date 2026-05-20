@@ -66,7 +66,7 @@ fun GatewayScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Header()
+        Header(appVersion = state.appVersion)
 
         StatusCard(
             isRunning = isRunning,
@@ -118,7 +118,7 @@ fun GatewayScreen(
 }
 
 @Composable
-private fun Header() {
+private fun Header(appVersion: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
             "CloudEV Gateway",
@@ -127,7 +127,7 @@ private fun Header() {
             fontWeight = FontWeight.Bold,
         )
         Text(
-            "VoltFlow telemetry bridge",
+            "VoltFlow telemetry bridge • v$appVersion",
             color = TextSecondary,
             fontSize = 14.sp,
         )
