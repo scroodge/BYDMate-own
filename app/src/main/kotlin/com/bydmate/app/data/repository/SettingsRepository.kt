@@ -70,7 +70,7 @@ open class SettingsRepository @Inject constructor(
         const val DEFAULT_CURRENCY = "BYN"
         const val DEFAULT_CONSUMPTION_GOOD = "20"
         const val DEFAULT_CONSUMPTION_BAD = "30"
-        const val DEFAULT_CLOUD_SYNC_INTERVAL_SEC = "30"
+        const val DEFAULT_CLOUD_SYNC_INTERVAL_SEC = "5"
 
         val CURRENCIES = listOf(
             Currency("BYN", "BYN", "Бел. руб."),

@@ -534,7 +534,7 @@ class TrackingService : Service(), LocationListener {
                 val intervalSec = settingsRepository.getString(
                     com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
                     com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
-                ).toIntOrNull()?.coerceAtLeast(5) ?: 30
+                ).toIntOrNull()?.coerceIn(2, 300) ?: 5
                 synchronized(cloudTelemetryLock) {
                     if (nowMs - lastCloudTelemetryMs < intervalSec * 1000L) return@launch
                 }
