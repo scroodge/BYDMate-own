@@ -14,6 +14,9 @@
 # osmdroid
 -keep class org.osmdroid.** { *; }
 
+# commons-suncalc references this optional annotation in signatures only.
+-dontwarn edu.umd.cs.findbugs.annotations.Nullable
+
 # Strip debug/verbose logs in release
 -assumenosideeffects class android.util.Log {
     public static *** d(...);
