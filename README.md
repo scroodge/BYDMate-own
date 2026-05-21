@@ -24,14 +24,8 @@
 
 | Иконка | Раздел | Что делает |
 |---|---|---|
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Реальный расход | Берёт данные из BYD `energydata` или DiPlus TripInfo, а не из заниженного штатного БК |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Поездки | История поездок, GPS-треки, дистанция, скорость, стоимость |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Зарядки | Автоматический журнал AC/DC, статистика за период, ручное добавление и редактирование |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Виджет | Плавающий overlay поверх карт и медиа: SOC, запас хода, расход, температуры, 12V |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Автоматизация | Правила `КОГДА -> ТОГДА`: параметры машины, геозоны, время, D+ команды |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Батарея | Температура, 12V, баланс ячеек, SoH на Leopard 3 при включённых системных данных |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Экспорт | CSV для поездок и зарядок |
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Интеграции | OpenRouter для AI-инсайтов, ABRP live telemetry, облачная отправка телеметрии при ручном включении |
+| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> |Передает данные с DI+ в облако | Берёт данные из BYD `energydata` или DiPlus TripInfo, а не из заниженного штатного БК 
+
 
 Приложение использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`. Поэтому оно может стоять рядом с оригинальным BYDMate (`com.bydmate.app`) и не заменяет его.
 
@@ -43,7 +37,7 @@
 
 1. Откройте [последний релиз](https://github.com/scroodge/BYDMate-own/releases/latest).
 2. В блоке **Assets** скачайте файл `VoltFlow-Mate-v...apk`.
-3. Перенесите APK на головное устройство DiLink через USB-флешку, браузер, файловый менеджер или ADB.
+3. Перенесите APK на головное устройство DiLink через USB-флешку, браузер, файловый менеджер web телеграмм, или ADB.
 4. Откройте APK на DiLink и разрешите установку из неизвестных источников.
 5. После запуска выдайте разрешения на геолокацию, хранилище и отображение поверх других приложений.
 6. В DiLink выключите ограничение фоновой работы для VoltFlow Mate: **Settings -> General -> Disable background Apps -> VoltFlow Mate = OFF**.
@@ -52,35 +46,21 @@
 
 ### Что ещё нужно установить
 
-VoltFlow Mate читает live-данные машины через **DiPlus (D+)**.
+VoltFlow Mate читает live-данные машины через **DiPlus (D+)** и BYDMATE.
 
-1. Скачайте APK DiPlus: [Google Drive](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link).
+1. Следуйте инструкции установки: (https://github.com/AndyShaman/BYDMate).
 2. Перенесите файл на DiLink.
 3. Установите через файловый менеджер.
-4. Запустите DiPlus хотя бы один раз.
+4. Запустите  BYDMATE хотя бы один раз и настройте его под вашу машину.
 
-Если ADB на DiLink уже активирован, можно установить через компьютер:
-
-```bash
-adb connect <IP-адрес-DiLink>:5555
-adb install DiPlus.apk
-adb install VoltFlow-Mate-v<version>.apk
-```
-
----
 
 ## Первый запуск
 
 1. Откройте VoltFlow Mate.
 2. Выдайте разрешения на локацию и хранилище.
-3. Выберите источник данных поездок:
-   - `BYD energydata` — для Leopard 3 / Fangchengbao Bao 3 и машин, где есть база BMS.
-   - `DiPlus TripInfo` — для Song, Yuan и других моделей без `energydata`.
-4. Укажите ёмкость батареи и тарифы на электричество.
-5. Включите плавающий виджет, если хотите видеть данные поверх навигации или медиа.
-
-Если после нескольких поездок история пустая, смените источник данных в настройках.
-
+3. Нажмите кнопку "Запустить" и убедитесь что данные запускаются.
+4. Зарегестрируйтесь в VoltFlow по этой ссылке (https://github.com/scroodge/VoltFlow/blob/main/INSTALL.md)
+5. В приложении VoltFlow зайдите в меню настроек и перейдите в раздел 
 ---
 
 ## ADB и системные данные

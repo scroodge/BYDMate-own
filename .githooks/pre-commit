@@ -9,6 +9,20 @@ if [ "${SKIP_VERSION_BUMP:-}" = "1" ]; then
   exit 0
 fi
 
+BUMP_KIND="${BUMP_VERSION:-}"
+if [ -z "$BUMP_KIND" ]; then
+  exit 0
+fi
+
+case "$BUMP_KIND" in
+  major|minor|patch|code)
+    ;;
+  *)
+    echo "Version bump failed: BUMP_VERSION must be one of: major, minor, patch, code" >&2
+    exit 1
+    ;;
+esac
+
 if [ ! -f "$FILE" ]; then
   echo "Version bump skipped: $FILE not found" >&2
   exit 1
@@ -24,28 +38,60 @@ fi
 
 SUFFIX=""
 BASE_NAME="$OLD_NAME"
-case "$OLD_NAME" in
-  *-gateway)
-    SUFFIX="-gateway"
-    BASE_NAME="${OLD_NAME%-gateway}"
+case "$BASE_NAME" in
+  *-*)
+    SUFFIX="-${BASE_NAME#*-}"
+    BASE_NAME="${BASE_NAME%%-*}"
     ;;
 esac
 
-IFS=. set -- $BASE_NAME
+OLD_IFS="$IFS"
+IFS=.
+set -- $BASE_NAME
+IFS="$OLD_IFS"
+
+if [ "$#" -ne 3 ]; then
+  echo "Version bump failed: unsupported versionName '$OLD_NAME'" >&2
+  exit 1
+fi
+
 MAJOR="${1:-}"
 MINOR="${2:-}"
 PATCH="${3:-}"
 
-case "$MAJOR.$MINOR.$PATCH" in
-  *[!0-9.]* | .*)
+case "$MAJOR$MINOR$PATCH" in
+  "" | *[!0-9]*)
     echo "Version bump failed: unsupported versionName '$OLD_NAME'" >&2
     exit 1
     ;;
 esac
 
 NEW_CODE=$((OLD_CODE + 1))
-NEW_PATCH=$((PATCH + 1))
+NEW_MAJOR="$MAJOR"
+NEW_MINOR="$MINOR"
+NEW_PATCH="$PATCH"
+
+case "$BUMP_KIND" in
+  major)
+    NEW_MAJOR=$((MAJOR + 1))
+    NEW_MINOR=0
+    NEW_PATCH=0
+    ;;
+  minor)
+    NEW_MINOR=$((MINOR + 1))
+    NEW_PATCH=0
+    ;;
+  patch)
+    NEW_PATCH=$((PATCH + 1))
+    ;;
+  code)
+    ;;
+esac
+
 NEW_NAME="$MAJOR.$MINOR.$NEW_PATCH$SUFFIX"
+if [ "$BUMP_KIND" = "major" ] || [ "$BUMP_KIND" = "minor" ]; then
+  NEW_NAME="$NEW_MAJOR.$NEW_MINOR.$NEW_PATCH$SUFFIX"
+fi
 
 NEW_CODE="$NEW_CODE" NEW_NAME="$NEW_NAME" perl -0pi -e '
   s/versionCode = \d+/versionCode = $ENV{NEW_CODE}/;
