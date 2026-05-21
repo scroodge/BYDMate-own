@@ -140,6 +140,20 @@
       gap: 16px;
     }
 
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .gallery img {
+      width: 100%;
+      display: block;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
     .step,
     .note {
       background: var(--panel);
@@ -186,6 +200,10 @@
       .steps {
         grid-template-columns: 1fr;
       }
+
+      .gallery {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -222,6 +240,16 @@
           <b>3. Разрешите фон</b>
           <p>После установки выключите ограничение фоновой работы: Disable background Apps = OFF.</p>
         </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Скриншоты</h2>
+      <div class="gallery">
+        <img src="screenshots/voltflow-gateway-status.png" alt="VoltFlow Mate: статус шлюза">
+        <img src="screenshots/voltflow-sync-settings.png" alt="VoltFlow Mate: настройки синхронизации">
       </div>
     </div>
   </section>

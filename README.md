@@ -100,6 +100,12 @@ adb install VoltFlow-Mate-v<version>.apk
 
 ## Скриншоты
 
+### VoltFlow Mate на планшетном экране
+
+<img src="docs/screenshots/voltflow-gateway-status.png" alt="VoltFlow Mate: статус шлюза" width="900">
+
+<img src="docs/screenshots/voltflow-sync-settings.png" alt="VoltFlow Mate: настройки синхронизации VoltFlow" width="900">
+
 ### Главный экран
 
 <img src="docs/screenshots/dashboard.jpg" alt="Главный экран" width="820">

@@ -526,26 +526,31 @@ fun SettingsScreen(
                             label = "Endpoint URL",
                             value = state.cloudSyncUrl,
                             onValueChange = { viewModel.updateCloudSyncUrl(it) },
-                            keyboardType = KeyboardType.Uri
+                            keyboardType = KeyboardType.Uri,
+                            placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER
                         )
+                        CloudSyncHint("Endpoint уже указан по умолчанию. Его можно заменить своим HTTPS URL.")
                         SettingsTextField(
                             label = "API Key",
                             value = state.cloudSyncApiKey,
                             onValueChange = { viewModel.updateCloudSyncApiKey(it) },
                             keyboardType = KeyboardType.Password
                         )
+                        CloudSyncHint("API Key берется в VoltFlow: Настройки -> CloudSync.")
                         SettingsTextField(
-                            label = "Vehicle ID",
+                            label = "Ваше имя авто",
                             value = state.cloudSyncVehicleId,
                             onValueChange = { viewModel.updateCloudSyncVehicleId(it) },
                             keyboardType = KeyboardType.Text
                         )
+                        CloudSyncHint("Например: Tang, Seal, Leopard 3 или любое удобное имя машины.")
                         SettingsTextField(
-                            label = "Flush interval seconds",
+                            label = "Интервал отправки, сек",
                             value = state.cloudSyncIntervalSec,
                             onValueChange = { viewModel.updateCloudSyncIntervalSec(it) },
                             keyboardType = KeyboardType.Number
                         )
+                        CloudSyncHint("Оставьте 60 секунд, если не нужна более частая отправка.")
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1124,16 +1129,23 @@ private fun StatusRow(
 }
 
 @Composable
+private fun CloudSyncHint(text: String) {
+    Text(text, color = TextSecondary, fontSize = 11.sp)
+}
+
+@Composable
 private fun SettingsTextField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
-    keyboardType: KeyboardType
+    keyboardType: KeyboardType,
+    placeholder: String? = null,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
+        placeholder = placeholder?.let { { Text(it) } },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         modifier = Modifier.fillMaxWidth(),

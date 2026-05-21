@@ -125,12 +125,13 @@ data class SettingsUiState(
     val abrpCarModel: String = "",
     val abrpSaveStatus: String? = null,
     val cloudSyncEnabled: Boolean = false,
-    val cloudSyncUrl: String = "",
+    val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
     val cloudSyncVehicleId: String = "",
     val cloudSyncIntervalSec: String = SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
     val cloudSyncWifiOnly: Boolean = false,
     val cloudSyncStatus: String? = null,
+    val appLanguage: String = SettingsRepository.DEFAULT_APP_LANGUAGE,
 )
 
 @HiltViewModel
@@ -216,7 +217,10 @@ class SettingsViewModel @Inject constructor(
             val abrpUserToken = settingsRepository.getString(SettingsRepository.KEY_ABRP_USER_TOKEN, "")
             val abrpCarModel = settingsRepository.getString(SettingsRepository.KEY_ABRP_CAR_MODEL, "")
             val cloudSyncEnabled = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") == "true"
-            val cloudSyncUrl = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_URL, "")
+            val cloudSyncUrl = settingsRepository.getString(
+                SettingsRepository.KEY_CLOUD_SYNC_URL,
+                SettingsRepository.DEFAULT_CLOUD_SYNC_URL
+            ).ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             val cloudSyncApiKey = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, "")
             val cloudSyncVehicleId = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "")
             val cloudSyncIntervalSec = settingsRepository.getString(
@@ -225,6 +229,15 @@ class SettingsViewModel @Inject constructor(
             )
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
             val cloudSyncStatus = formatCloudSyncStatus()
+            val appLanguage = settingsRepository.getString(
+                SettingsRepository.KEY_APP_LANGUAGE,
+                SettingsRepository.DEFAULT_APP_LANGUAGE,
+            ).takeIf {
+                it == SettingsRepository.LANGUAGE_BE ||
+                    it == SettingsRepository.LANGUAGE_RU ||
+                    it == SettingsRepository.LANGUAGE_EN
+            }
+                ?: SettingsRepository.DEFAULT_APP_LANGUAGE
 
             _uiState.update {
                 it.copy(
@@ -258,6 +271,7 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncIntervalSec = cloudSyncIntervalSec,
                     cloudSyncWifiOnly = cloudSyncWifiOnly,
                     cloudSyncStatus = cloudSyncStatus,
+                    appLanguage = appLanguage,
                 )
             }
 
@@ -751,6 +765,18 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(cloudSyncIntervalSec = value.filter { ch -> ch.isDigit() }.take(4)) }
     }
 
+    fun updateAppLanguage(value: String) {
+        val language = when (value) {
+            SettingsRepository.LANGUAGE_RU -> SettingsRepository.LANGUAGE_RU
+            SettingsRepository.LANGUAGE_EN -> SettingsRepository.LANGUAGE_EN
+            else -> SettingsRepository.LANGUAGE_BE
+        }
+        _uiState.update { it.copy(appLanguage = language) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_APP_LANGUAGE, language)
+        }
+    }
+
     fun toggleCloudSyncWifiOnly(enabled: Boolean) {
         _uiState.update { it.copy(cloudSyncWifiOnly = enabled) }
         viewModelScope.launch {
@@ -762,7 +788,7 @@ class SettingsViewModel @Inject constructor(
         val state = _uiState.value
         viewModelScope.launch {
             val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
-            val url = state.cloudSyncUrl.trim()
+            val url = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             val enabled = state.cloudSyncEnabled && url.startsWith("https://", ignoreCase = true)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
@@ -771,15 +797,16 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
             val status = if (url.isBlank()) {
-                "Endpoint URL пустой"
+                cloudText("Endpoint URL пустой", "Endpoint URL пусты", "Endpoint URL is empty")
             } else if (!url.startsWith("https://", ignoreCase = true)) {
-                "Endpoint должен начинаться с https://"
+                cloudText("Endpoint должен начинаться с https://", "Endpoint мусіць пачынацца з https://", "Endpoint must start with https://")
             } else {
-                "Сохранено"
+                cloudText("Сохранено", "Захавана", "Saved")
             }
             _uiState.update {
                 it.copy(
                     cloudSyncEnabled = enabled,
+                    cloudSyncUrl = url,
                     cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = status,
                 )
@@ -791,7 +818,7 @@ class SettingsViewModel @Inject constructor(
         val state = _uiState.value
         viewModelScope.launch {
             val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
-            val url = state.cloudSyncUrl.trim()
+            val url = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
@@ -811,19 +838,32 @@ class SettingsViewModel @Inject constructor(
                 currentTripConsumptionKwh100km = null,
                 location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null,
             )
-            _uiState.update { it.copy(cloudSyncStatus = "Отправка теста...") }
+            _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test...")) }
             val result = cloudTelemetrySender?.sendTest(snapshot)
-                ?: Result.failure(IllegalStateException("Cloud sender недоступен"))
+                ?: Result.failure(IllegalStateException(cloudText("Cloud sender недоступен", "Cloud sender недаступны", "Cloud sender is unavailable")))
             if (result.isFailure && !state.cloudSyncEnabled) {
                 settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false")
             }
             _uiState.update {
                 it.copy(
                     cloudSyncEnabled = result.isSuccess && canEnableLiveSync,
+                    cloudSyncUrl = url,
                     cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = result.fold(
-                        onSuccess = { "Last sync OK: ${formatTs(System.currentTimeMillis())}; live sync enabled" },
-                        onFailure = { e -> "Last sync failed: ${e.message ?: "ошибка"}" },
+                        onSuccess = {
+                            cloudText(
+                                "Синхронизация OK: ${formatTs(System.currentTimeMillis())}; live sync включен",
+                                "Сінхранізацыя OK: ${formatTs(System.currentTimeMillis())}; live sync уключаны",
+                                "Sync OK: ${formatTs(System.currentTimeMillis())}; live sync enabled",
+                            )
+                        },
+                        onFailure = { e ->
+                            cloudText(
+                                "Ошибка синхронизации: ${e.message ?: "ошибка"}",
+                                "Памылка сінхранізацыі: ${e.message ?: "памылка"}",
+                                "Sync failed: ${e.message ?: "error"}",
+                            )
+                        },
                     )
                 )
             }
@@ -835,9 +875,25 @@ class SettingsViewModel @Inject constructor(
         if (ts <= 0L) return null
         val ok = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, "false") == "true"
         val message = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ERROR, "")
-        return "${if (ok) "Last sync OK" else "Last sync failed"}: ${formatTs(ts)}" +
+        val language = settingsRepository.getString(
+            SettingsRepository.KEY_APP_LANGUAGE,
+            SettingsRepository.DEFAULT_APP_LANGUAGE,
+        )
+        val prefix = when (language) {
+            SettingsRepository.LANGUAGE_RU -> if (ok) "Синхронизация OK" else "Ошибка синхронизации"
+            SettingsRepository.LANGUAGE_EN -> if (ok) "Sync OK" else "Sync failed"
+            else -> if (ok) "Сінхранізацыя OK" else "Памылка сінхранізацыі"
+        }
+        return "$prefix: ${formatTs(ts)}" +
             if (!ok && message.isNotBlank()) " ($message)" else ""
     }
+
+    private fun cloudText(ru: String, be: String, en: String): String =
+        when (_uiState.value.appLanguage) {
+            SettingsRepository.LANGUAGE_RU -> ru
+            SettingsRepository.LANGUAGE_EN -> en
+            else -> be
+        }
 
     private fun formatTs(ts: Long): String =
         SimpleDateFormat("dd.MM.yy HH:mm:ss", Locale.US).format(Date(ts))

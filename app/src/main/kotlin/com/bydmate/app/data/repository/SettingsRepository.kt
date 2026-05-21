@@ -51,6 +51,7 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_LAST_OK = "cloud_sync_last_ok"
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"
+        const val KEY_APP_LANGUAGE = "app_language"
         const val KEY_DATA_SOURCE = "data_source"
         const val KEY_AUTOSERVICE_ENABLED = "autoservice_enabled"
         const val KEY_LAST_MILEAGE_KM = "last_mileage_km"
@@ -71,6 +72,13 @@ open class SettingsRepository @Inject constructor(
         const val DEFAULT_CONSUMPTION_GOOD = "20"
         const val DEFAULT_CONSUMPTION_BAD = "30"
         const val DEFAULT_CLOUD_SYNC_INTERVAL_SEC = "60"
+        const val DEFAULT_CLOUD_SYNC_URL =
+            "https://volt-flow-beige.vercel.app/api/bydmate/telemetry"
+        const val CLOUD_SYNC_ENDPOINT_PLACEHOLDER = DEFAULT_CLOUD_SYNC_URL
+        const val LANGUAGE_BE = "be"
+        const val LANGUAGE_RU = "ru"
+        const val LANGUAGE_EN = "en"
+        const val DEFAULT_APP_LANGUAGE = LANGUAGE_BE
 
         val CURRENCIES = listOf(
             Currency("BYN", "BYN", "Бел. руб."),

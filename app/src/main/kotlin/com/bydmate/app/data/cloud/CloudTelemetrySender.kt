@@ -140,13 +140,16 @@ class CloudTelemetrySender @Inject constructor(
     }
 
     private suspend fun readConfig(): Result<Config> {
-        val url = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_URL, "").trim()
+        val url = settingsRepository.getString(
+            SettingsRepository.KEY_CLOUD_SYNC_URL,
+            SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
+        ).trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
         if (url.isBlank()) return Result.failure(IllegalArgumentException("Endpoint URL пустой"))
         if (!url.startsWith("https://", ignoreCase = true)) {
             return Result.failure(IllegalArgumentException("Endpoint должен начинаться с https://"))
         }
         val vehicleId = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "").trim()
-        if (vehicleId.isBlank()) return Result.failure(IllegalArgumentException("Vehicle ID пустой"))
+        if (vehicleId.isBlank()) return Result.failure(IllegalArgumentException("Укажите имя авто"))
         return Result.success(
             Config(
                 url = url,

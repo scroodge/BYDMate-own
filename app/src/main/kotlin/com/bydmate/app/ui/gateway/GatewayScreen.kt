@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -26,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -34,7 +37,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bydmate.app.R
 import com.bydmate.app.service.TrackingService
+import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.settings.SettingsViewModel
 import com.bydmate.app.ui.theme.AccentGreen
@@ -58,6 +63,7 @@ fun GatewayScreen(
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
     val location by TrackingService.lastLocation.collectAsStateWithLifecycle()
+    val strings = gatewayStrings(state.appLanguage)
 
     Column(
         modifier = Modifier
@@ -66,13 +72,18 @@ fun GatewayScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Header(appVersion = state.appVersion)
+        LanguageSwitcher(
+            language = state.appLanguage,
+            onLanguageChange = viewModel::updateAppLanguage,
+        )
+        Header(appVersion = state.appVersion, strings = strings)
 
         StatusCard(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
             onStart = { TrackingService.start(context) },
-            onStop = { TrackingService.stop(context) }
+            onStop = { TrackingService.stop(context) },
+            strings = strings,
         )
 
         LiveDataCard(
@@ -87,6 +98,7 @@ fun GatewayScreen(
             rangeKm = rangeKm,
             tripDistanceKm = tripDistanceKm,
             hasLocation = location != null,
+            strings = strings,
         )
 
         CloudSyncCard(
@@ -105,10 +117,11 @@ fun GatewayScreen(
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onSave = viewModel::saveCloudSyncSettings,
             onTest = viewModel::sendCloudTestPayload,
+            strings = strings,
         )
 
         Text(
-            "Режим шлюза: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, ABRP, автоматизация и локальная аналитика скрыты из интерфейса.",
+            strings.gatewayMode,
             color = TextMuted,
             fontSize = 12.sp,
             lineHeight = 17.sp,
@@ -118,16 +131,74 @@ fun GatewayScreen(
 }
 
 @Composable
-private fun Header(appVersion: String) {
+private fun LanguageSwitcher(
+    language: String,
+    onLanguageChange: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LanguageButton(
+                text = "BE",
+                selected = language == SettingsRepository.LANGUAGE_BE,
+                onClick = { onLanguageChange(SettingsRepository.LANGUAGE_BE) },
+            )
+            LanguageButton(
+                text = "RU",
+                selected = language == SettingsRepository.LANGUAGE_RU,
+                onClick = { onLanguageChange(SettingsRepository.LANGUAGE_RU) },
+            )
+            LanguageButton(
+                text = "EN",
+                selected = language == SettingsRepository.LANGUAGE_EN,
+                onClick = { onLanguageChange(SettingsRepository.LANGUAGE_EN) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun LanguageButton(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) AccentGreen else CardSurfaceElevated,
+            contentColor = if (selected) NavyDark else TextPrimary,
+        ),
+    ) {
+        Text(text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun Header(appVersion: String, strings: GatewayStrings) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.voltflow_cloud_release),
+                contentDescription = null,
+                modifier = Modifier.size(40.dp),
+            )
+            Text(
+                "VoltFlow Mate",
+                color = TextPrimary,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         Text(
-            "VoltFlow Mate",
-            color = TextPrimary,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            "VoltFlow telemetry bridge • v$appVersion",
+            "${strings.bridge} • v$appVersion",
             color = TextSecondary,
             fontSize = 14.sp,
         )
@@ -140,12 +211,13 @@ private fun StatusCard(
     diPlusConnected: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    strings: GatewayStrings,
 ) {
     GatewayCard {
-        Text("Статус шлюза", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(strings.gatewayStatus, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(10.dp))
-        StatusRow("Service", if (isRunning) "Running" else "Stopped", isRunning)
-        StatusRow("DiPlus", if (diPlusConnected) "Connected" else "Waiting", diPlusConnected)
+        StatusRow(strings.service, if (isRunning) strings.running else strings.stopped, isRunning)
+        StatusRow("DiPlus", if (diPlusConnected) strings.connected else strings.waiting, diPlusConnected)
         Spacer(modifier = Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -154,7 +226,7 @@ private fun StatusCard(
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
             ) {
-                Text("Start", fontWeight = FontWeight.Bold)
+                Text(strings.start, fontWeight = FontWeight.Bold)
             }
             Button(
                 onClick = onStop,
@@ -162,7 +234,7 @@ private fun StatusCard(
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
             ) {
-                Text("Stop")
+                Text(strings.stop)
             }
         }
     }
@@ -181,30 +253,31 @@ private fun LiveDataCard(
     rangeKm: Double?,
     tripDistanceKm: Double?,
     hasLocation: Boolean,
+    strings: GatewayStrings,
 ) {
     GatewayCard {
-        Text("Latest vehicle data", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(strings.latestData, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric("SOC", fmt(soc?.toDouble(), 0, "%"), Modifier.weight(1f))
-            Metric("Speed", fmt(speed?.toDouble(), 0, " km/h"), Modifier.weight(1f))
-            Metric("Power", fmt(power, 1, " kW"), Modifier.weight(1f))
+            Metric(strings.speed, fmt(speed?.toDouble(), 0, " km/h"), Modifier.weight(1f))
+            Metric(strings.power, fmt(power, 1, " kW"), Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Metric("Range", fmt(rangeKm, 0, " km"), Modifier.weight(1f))
-            Metric("Trip", fmt(tripDistanceKm, 1, " km"), Modifier.weight(1f))
+            Metric(strings.range, fmt(rangeKm, 0, " km"), Modifier.weight(1f))
+            Metric(strings.trip, fmt(tripDistanceKm, 1, " km"), Modifier.weight(1f))
             Metric("12V", fmt(auxVoltage, 1, " V"), Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Metric("Battery", fmtTemp(batteryTemp), Modifier.weight(1f))
-            Metric("Cabin", fmtTemp(cabinTemp), Modifier.weight(1f))
-            Metric("Outside", fmtTemp(outsideTemp), Modifier.weight(1f))
+            Metric(strings.battery, fmtTemp(batteryTemp), Modifier.weight(1f))
+            Metric(strings.cabin, fmtTemp(cabinTemp), Modifier.weight(1f))
+            Metric(strings.outside, fmtTemp(outsideTemp), Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(8.dp))
-        StatusRow("Odometer", fmt(odometer, 1, " km"), odometer != null)
-        StatusRow("GPS", if (hasLocation) "Available" else "No permission/data", hasLocation)
+        StatusRow(strings.odometer, fmt(odometer, 1, " km"), odometer != null)
+        StatusRow("GPS", if (hasLocation) strings.available else strings.noPermissionData, hasLocation)
     }
 }
 
@@ -225,6 +298,7 @@ private fun CloudSyncCard(
     onWifiOnly: (Boolean) -> Unit,
     onSave: () -> Unit,
     onTest: () -> Unit,
+    strings: GatewayStrings,
 ) {
     GatewayCard {
         Row(
@@ -233,22 +307,32 @@ private fun CloudSyncCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("VoltFlow sync", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Text("POST telemetry to your HTTPS endpoint", color = TextSecondary, fontSize = 12.sp)
+                Text(strings.voltFlowSync, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(strings.postTelemetry, color = TextSecondary, fontSize = 12.sp)
             }
             Switch(checked = enabled, onCheckedChange = onEnabled, colors = bydSwitchColors())
         }
         Spacer(modifier = Modifier.height(10.dp))
-        GatewayTextField("Endpoint URL", url, onUrl, KeyboardType.Uri)
+        GatewayTextField(
+            label = strings.endpointUrl,
+            value = url,
+            onValueChange = onUrl,
+            keyboardType = KeyboardType.Uri,
+            placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
+        )
+        GatewayHint(strings.endpointHint)
         GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
-        GatewayTextField("Vehicle ID", vehicleId, onVehicleId, KeyboardType.Text)
-        GatewayTextField("Flush interval seconds", intervalSec, onInterval, KeyboardType.Number)
+        GatewayHint(strings.apiKeyHint)
+        GatewayTextField(strings.carName, vehicleId, onVehicleId, KeyboardType.Text)
+        GatewayHint(strings.carNameHint)
+        GatewayTextField(strings.interval, intervalSec, onInterval, KeyboardType.Number)
+        GatewayHint(strings.intervalHint)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Wi-Fi only", color = TextPrimary, fontSize = 14.sp)
+            Text(strings.wifiOnly, color = TextPrimary, fontSize = 14.sp)
             Switch(checked = wifiOnly, onCheckedChange = onWifiOnly, colors = bydSwitchColors())
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -258,7 +342,7 @@ private fun CloudSyncCard(
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
             ) {
-                Text("Save", fontWeight = FontWeight.Bold)
+                Text(strings.save, fontWeight = FontWeight.Bold)
             }
             Button(
                 onClick = onTest,
@@ -266,18 +350,23 @@ private fun CloudSyncCard(
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
             ) {
-                Text("Send test")
+                Text(strings.sendTest)
             }
         }
         status?.let {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 it,
-                color = if (it.contains("failed", ignoreCase = true) || it.contains("ошиб", ignoreCase = true)) AccentOrange else AccentGreen,
+                color = if (it.isErrorStatus()) AccentOrange else AccentGreen,
                 fontSize = 12.sp,
             )
         }
     }
+}
+
+@Composable
+private fun GatewayHint(text: String) {
+    Text(text, color = TextSecondary, fontSize = 11.sp)
 }
 
 @Composable
@@ -287,11 +376,13 @@ private fun GatewayTextField(
     onValueChange: (String) -> Unit,
     keyboardType: KeyboardType,
     password: Boolean = false,
+    placeholder: String? = null,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
+        placeholder = placeholder?.let { { Text(it) } },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
@@ -345,6 +436,156 @@ private fun Metric(label: String, value: String, modifier: Modifier = Modifier) 
         Text(value, color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
     }
 }
+
+private data class GatewayStrings(
+    val bridge: String,
+    val gatewayMode: String,
+    val gatewayStatus: String,
+    val service: String,
+    val running: String,
+    val stopped: String,
+    val connected: String,
+    val waiting: String,
+    val start: String,
+    val stop: String,
+    val latestData: String,
+    val speed: String,
+    val power: String,
+    val range: String,
+    val trip: String,
+    val battery: String,
+    val cabin: String,
+    val outside: String,
+    val odometer: String,
+    val available: String,
+    val noPermissionData: String,
+    val voltFlowSync: String,
+    val postTelemetry: String,
+    val endpointUrl: String,
+    val endpointHint: String,
+    val apiKeyHint: String,
+    val carName: String,
+    val carNameHint: String,
+    val interval: String,
+    val intervalHint: String,
+    val wifiOnly: String,
+    val save: String,
+    val sendTest: String,
+)
+
+private fun gatewayStrings(language: String): GatewayStrings =
+    when (language) {
+        SettingsRepository.LANGUAGE_RU -> GatewayStrings(
+            bridge = "Мост телеметрии VoltFlow",
+            gatewayMode = "Режим шлюза: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, ABRP, автоматизация и локальная аналитика скрыты из интерфейса.",
+            gatewayStatus = "Статус шлюза",
+            service = "Сервис",
+            running = "Запущен",
+            stopped = "Остановлен",
+            connected = "Подключен",
+            waiting = "Ожидание",
+            start = "Запустить",
+            stop = "Остановить",
+            latestData = "Последние данные авто",
+            speed = "Скорость",
+            power = "Мощность",
+            range = "Запас",
+            trip = "Поездка",
+            battery = "Батарея",
+            cabin = "Салон",
+            outside = "Снаружи",
+            odometer = "Одометр",
+            available = "Доступен",
+            noPermissionData = "Нет разрешения/данных",
+            voltFlowSync = "Синхронизация VoltFlow",
+            postTelemetry = "POST телеметрии на ваш HTTPS endpoint",
+            endpointUrl = "Endpoint URL",
+            endpointHint = "Endpoint уже указан по умолчанию. Его можно заменить своим HTTPS URL.",
+            apiKeyHint = "API Key берется в VoltFlow: Настройки -> CloudSync.",
+            carName = "Ваше имя авто",
+            carNameHint = "Например: Tang, Seal, Leopard 3 или любое удобное имя машины.",
+            interval = "Интервал отправки, сек",
+            intervalHint = "Оставьте 60 секунд, если не нужна более частая отправка.",
+            wifiOnly = "Только Wi-Fi",
+            save = "Сохранить",
+            sendTest = "Отправить тест",
+        )
+        SettingsRepository.LANGUAGE_EN -> GatewayStrings(
+            bridge = "VoltFlow telemetry bridge",
+            gatewayMode = "Gateway mode: the app reads live DiPlus/BYD data and sends it to VoltFlow. Trips, AI, ABRP, automation, and local analytics are hidden from this interface.",
+            gatewayStatus = "Gateway status",
+            service = "Service",
+            running = "Running",
+            stopped = "Stopped",
+            connected = "Connected",
+            waiting = "Waiting",
+            start = "Start",
+            stop = "Stop",
+            latestData = "Latest vehicle data",
+            speed = "Speed",
+            power = "Power",
+            range = "Range",
+            trip = "Trip",
+            battery = "Battery",
+            cabin = "Cabin",
+            outside = "Outside",
+            odometer = "Odometer",
+            available = "Available",
+            noPermissionData = "No permission/data",
+            voltFlowSync = "VoltFlow sync",
+            postTelemetry = "POST telemetry to your HTTPS endpoint",
+            endpointUrl = "Endpoint URL",
+            endpointHint = "Endpoint is filled in by default. You can replace it with your own HTTPS URL.",
+            apiKeyHint = "API Key is in VoltFlow: Settings -> CloudSync.",
+            carName = "Your car name",
+            carNameHint = "For example: Tang, Seal, Leopard 3, or any convenient car name.",
+            interval = "Send interval, sec",
+            intervalHint = "Leave 60 seconds unless you need more frequent sending.",
+            wifiOnly = "Wi-Fi only",
+            save = "Save",
+            sendTest = "Send test",
+        )
+        else -> GatewayStrings(
+            bridge = "Мост тэлеметрыі VoltFlow",
+            gatewayMode = "Рэжым шлюза: праграма чытае live-даныя DiPlus/BYD і адпраўляе іх у VoltFlow. Паездкі, AI, ABRP, аўтаматызацыя і лакальная аналітыка схаваныя з інтэрфейсу.",
+            gatewayStatus = "Статус шлюза",
+            service = "Сэрвіс",
+            running = "Запушчаны",
+            stopped = "Спынены",
+            connected = "Падключаны",
+            waiting = "Чаканне",
+            start = "Запусціць",
+            stop = "Спыніць",
+            latestData = "Апошнія даныя аўто",
+            speed = "Хуткасць",
+            power = "Магутнасць",
+            range = "Запас",
+            trip = "Паездка",
+            battery = "Батарэя",
+            cabin = "Салон",
+            outside = "Звонку",
+            odometer = "Адаметр",
+            available = "Даступны",
+            noPermissionData = "Няма дазволу/даных",
+            voltFlowSync = "Сінхранізацыя VoltFlow",
+            postTelemetry = "POST тэлеметрыі на ваш HTTPS endpoint",
+            endpointUrl = "Endpoint URL",
+            endpointHint = "Endpoint ужо пазначаны па змаўчанні. Яго можна замяніць сваім HTTPS URL.",
+            apiKeyHint = "API Key бярэцца ў VoltFlow: Налады -> CloudSync.",
+            carName = "Ваша імя аўто",
+            carNameHint = "Напрыклад: Tang, Seal, Leopard 3 або любое зручнае імя машыны.",
+            interval = "Інтэрвал адпраўкі, сек",
+            intervalHint = "Пакіньце 60 секунд, калі не патрэбная больш частая адпраўка.",
+            wifiOnly = "Толькі Wi-Fi",
+            save = "Захаваць",
+            sendTest = "Адправіць тэст",
+        )
+    }
+
+private fun String.isErrorStatus(): Boolean =
+    contains("failed", ignoreCase = true) ||
+        contains("ошиб", ignoreCase = true) ||
+        contains("памыл", ignoreCase = true)
 
 private fun fmt(value: Double?, digits: Int, suffix: String): String =
     if (value != null && value.isFinite()) "%.${digits}f%s".format(value, suffix) else "--"
