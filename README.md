@@ -12,9 +12,9 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/scroodge/BYDMate-own?style=flat-square&label=APK)](https://github.com/scroodge/BYDMate-own/releases/latest)
 
-**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение показывает реальный расход, поездки, зарядки, состояние батареи, плавающий виджет и правила автоматизации. Данные хранятся локально в машине; сеть нужна только для опциональных функций вроде AI-инсайтов, ABRP и проверки обновлений.
+**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение является шлюзом для передачи данных с BYDMATE в облако VoltFlow. 
 
-[Скачать APK](https://github.com/scroodge/BYDMate-own/releases/latest) · [Страница релиза](docs/release.html) · [Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
+[Скачать APK](https://github.com/scroodge/BYDMate-own/releases/latest) · [Страница релиза](https://scroodge.github.io/BYDMate-own/release.html) ·[Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
 
 </div>
 
