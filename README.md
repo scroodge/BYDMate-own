@@ -2,7 +2,7 @@
 
 <img src="docs/assets/voltflow-cloud-release.svg" width="128" alt="VoltFlow Mate">
 
-# BYDMate-own / VoltFlow Mate
+# VoltFlow Mate
 
 ### Локальная телеметрия, поездки, зарядки и автоматизация для BYD DiLink
 
@@ -42,7 +42,6 @@
 5. После запуска выдайте разрешения на геолокацию, хранилище и отображение поверх других приложений.
 6. В DiLink выключите ограничение фоновой работы для VoltFlow Mate: **Settings -> General -> Disable background Apps -> VoltFlow Mate = OFF**.
 
-Для пользователей, которым нужна отдельная красивая инструкция с крупной кнопкой скачивания, добавлена локальная страница: [docs/release.html](docs/release.html). Её можно открыть как файл, положить в GitHub Pages или прикрепить к релизу.
 
 ### Что ещё нужно установить
 
