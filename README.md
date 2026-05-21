@@ -14,7 +14,7 @@
 
 **VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение является шлюзом для передачи данных с BYDMATE в облако VoltFlow. 
 
-[Скачать APK](https://github.com/scroodge/BYDMate-own/releases/latest) · [Страница релиза](https://scroodge.github.io/BYDMate-own/release.html) ·[Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
+[Скачать APK](https://github.com/scroodge/BYDMate-own/releases) ·[Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
 
 </div>
 
@@ -24,19 +24,19 @@
 
 | Иконка | Раздел | Что делает |
 |---|---|---|
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> |Передает данные с DI+ в облако | Берёт данные из BYD `energydata` или DiPlus TripInfo, а не из заниженного штатного БК 
+| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> |Передает данные с BYDMATE в облако | Берёт данные из BYDMATE `energydata` или DiPlus TripInfo. 
 
 
 Приложение использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`. Поэтому оно может стоять рядом с оригинальным BYDMate (`com.bydmate.app`) и не заменяет его.
 
 ---
 
-## Быстрое скачивание для обычного пользователя
+## Быстрая установка
 
 Самый простой путь — поставить готовый APK из GitHub Releases.
 
 1. Откройте [последний релиз](https://github.com/scroodge/BYDMate-own/releases/latest).
-2. В блоке **Assets** скачайте файл `VoltFlow-Mate-v...apk`.
+2. Скачайте файл `VoltFlow-Mate-v...apk`.
 3. Перенесите APK на головное устройство DiLink через USB-флешку, браузер, файловый менеджер web телеграмм, или ADB.
 4. Откройте APK на DiLink и разрешите установку из неизвестных источников.
 5. После запуска выдайте разрешения на геолокацию, хранилище и отображение поверх других приложений.
@@ -45,7 +45,7 @@
 
 ### Что ещё нужно установить
 
-VoltFlow Mate читает live-данные машины через **DiPlus (D+)** и BYDMATE.
+VoltFlow Mate читает live-данные машины через **BYDMATE.**
 
 1. Следуйте инструкции установки: (https://github.com/AndyShaman/BYDMate).
 2. Перенесите файл на DiLink.
@@ -121,27 +121,56 @@ app/build/outputs/apk/release/VoltFlow-Mate-v<version>.apk
 
 ## Как оформить релиз
 
-1. Соберите APK:
+1. Обновите `CHANGELOG.md` из git-коммитов:
+
+```bash
+./gradlew releaseChangelog
+```
+
+Для предварительного просмотра без изменения файла:
+
+```bash
+./gradlew releaseChangelog -PdryRun=true
+```
+
+Если нужно указать версию вручную:
+
+```bash
+./gradlew releaseChangelog -PreleaseVersion=0.2.3
+```
+
+Авто-версия считается по SemVer от последнего тега `v*`: `fix:` и обычные сообщения дают patch, `feat:` даёт minor, `feat!:` или `BREAKING CHANGE:` дают major. Для аккуратного changelog пишите коммиты в формате Conventional Commits:
+
+```text
+feat: добавить интеграцию ABRP
+fix: исправить расчёт зарядной сессии
+refactor: упростить обработку телеметрии
+```
+
+2. Проверьте и при необходимости отредактируйте текст изменений в `CHANGELOG.md`.
+3. Соберите APK:
 
 ```bash
 ./gradlew clean assembleRelease
 ```
 
-2. Создайте тег версии, например:
+4. Создайте коммит релиза и тег версии:
 
 ```bash
-git tag v0.2.2
-git push origin v0.2.2
+git add CHANGELOG.md
+git commit -m "chore(release): v0.2.3"
+git tag v0.2.3
+git push origin main v0.2.3
 ```
 
-3. На GitHub откройте **Releases -> Draft a new release**.
-4. Выберите созданный тег.
-5. В название релиза поставьте `VoltFlow Mate v0.2.2`.
-6. В описание добавьте краткий список изменений на русском.
-7. Прикрепите `VoltFlow-Mate-v0.2.2.apk`.
-8. Опубликуйте релиз.
+5. На GitHub откройте **Releases -> Draft a new release**.
+6. Выберите созданный тег.
+7. В название релиза поставьте `VoltFlow Mate v0.2.3`.
+8. В описание добавьте краткий список изменений на русском.
+9. Прикрепите `VoltFlow-Mate-v0.2.3.apk`.
+10. Опубликуйте релиз.
 
-Обычным пользователям после этого достаточно открыть [страницу последнего релиза](https://github.com/scroodge/BYDMate-own/releases/latest) и скачать APK.
+Обычным пользователям после этого достаточно открыть [страницу последнего релиза](https://github.com/scroodge/BYDMate-own/releases) и скачать APK.
 
 ---
 
