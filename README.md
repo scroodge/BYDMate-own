@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/assets/voltflow-cloud-release.svg" width="128" alt="CloudEV Gateway">
+<img src="docs/assets/voltflow-cloud-release.svg" width="128" alt="VoltFlow Mate">
 
-# BYDMate-own / CloudEV Gateway
+# BYDMate-own / VoltFlow Mate
 
 ### Локальная телеметрия, поездки, зарядки и автоматизация для BYD DiLink
 
@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/scroodge/BYDMate-own?style=flat-square&label=APK)](https://github.com/scroodge/BYDMate-own/releases/latest)
 
-**CloudEV Gateway** — форк BYDMate для головных устройств BYD DiLink. Приложение показывает реальный расход, поездки, зарядки, состояние батареи, плавающий виджет и правила автоматизации. Данные хранятся локально в машине; сеть нужна только для опциональных функций вроде AI-инсайтов, ABRP и проверки обновлений.
+**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение показывает реальный расход, поездки, зарядки, состояние батареи, плавающий виджет и правила автоматизации. Данные хранятся локально в машине; сеть нужна только для опциональных функций вроде AI-инсайтов, ABRP и проверки обновлений.
 
 [Скачать APK](https://github.com/scroodge/BYDMate-own/releases/latest) · [Страница релиза](docs/release.html) · [Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
 
@@ -42,17 +42,17 @@
 Самый простой путь — поставить готовый APK из GitHub Releases.
 
 1. Откройте [последний релиз](https://github.com/scroodge/BYDMate-own/releases/latest).
-2. В блоке **Assets** скачайте файл `CloudEV-Gateway-v...apk`.
+2. В блоке **Assets** скачайте файл `VoltFlow-Mate-v...apk`.
 3. Перенесите APK на головное устройство DiLink через USB-флешку, браузер, файловый менеджер или ADB.
 4. Откройте APK на DiLink и разрешите установку из неизвестных источников.
 5. После запуска выдайте разрешения на геолокацию, хранилище и отображение поверх других приложений.
-6. В DiLink выключите ограничение фоновой работы для CloudEV Gateway: **Settings -> General -> Disable background Apps -> CloudEV Gateway = OFF**.
+6. В DiLink выключите ограничение фоновой работы для VoltFlow Mate: **Settings -> General -> Disable background Apps -> VoltFlow Mate = OFF**.
 
 Для пользователей, которым нужна отдельная красивая инструкция с крупной кнопкой скачивания, добавлена локальная страница: [docs/release.html](docs/release.html). Её можно открыть как файл, положить в GitHub Pages или прикрепить к релизу.
 
 ### Что ещё нужно установить
 
-CloudEV Gateway читает live-данные машины через **DiPlus (D+)**.
+VoltFlow Mate читает live-данные машины через **DiPlus (D+)**.
 
 1. Скачайте APK DiPlus: [Google Drive](https://drive.google.com/file/d/1ndKgzh-HWRPrPw2eTbKh9pwhdDwYJ0Ug/view?usp=drive_link).
 2. Перенесите файл на DiLink.
@@ -64,14 +64,14 @@ CloudEV Gateway читает live-данные машины через **DiPlus 
 ```bash
 adb connect <IP-адрес-DiLink>:5555
 adb install DiPlus.apk
-adb install CloudEV-Gateway-v<version>.apk
+adb install VoltFlow-Mate-v<version>.apk
 ```
 
 ---
 
 ## Первый запуск
 
-1. Откройте CloudEV Gateway.
+1. Откройте VoltFlow Mate.
 2. Выдайте разрешения на локацию и хранилище.
 3. Выберите источник данных поездок:
    - `BYD energydata` — для Leopard 3 / Fangchengbao Bao 3 и машин, где есть база BMS.
@@ -145,7 +145,7 @@ cd BYDMate-own
 Готовый debug APK появится здесь:
 
 ```text
-app/build/outputs/apk/debug/CloudEV-Gateway-v<version>.apk
+app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk
 ```
 
 Debug-сборка подписывается стандартным debug-ключом Android и подходит для личной установки через ADB или файловый менеджер DiLink.
@@ -159,7 +159,7 @@ Debug-сборка подписывается стандартным debug-кл�
 APK будет в:
 
 ```text
-app/build/outputs/apk/release/CloudEV-Gateway-v<version>.apk
+app/build/outputs/apk/release/VoltFlow-Mate-v<version>.apk
 ```
 
 Для публичного релиза используйте свой keystore и подпишите APK перед публикацией. Готовый файл прикрепляйте к GitHub Release в блок **Assets**. Автопроверка обновлений в приложении смотрит на `https://api.github.com/repos/scroodge/BYDMate-own/releases/latest` и ищет первый `.apk` в assets последнего релиза.
@@ -183,9 +183,9 @@ git push origin v0.2.2
 
 3. На GitHub откройте **Releases -> Draft a new release**.
 4. Выберите созданный тег.
-5. В название релиза поставьте `CloudEV Gateway v0.2.2`.
+5. В название релиза поставьте `VoltFlow Mate v0.2.2`.
 6. В описание добавьте краткий список изменений на русском.
-7. Прикрепите `CloudEV-Gateway-v0.2.2.apk`.
+7. Прикрепите `VoltFlow-Mate-v0.2.2.apk`.
 8. Опубликуйте релиз.
 
 Обычным пользователям после этого достаточно открыть [страницу последнего релиза](https://github.com/scroodge/BYDMate-own/releases/latest) и скачать APK.
@@ -194,12 +194,12 @@ git push origin v0.2.2
 
 ## Настройка ABRP
 
-CloudEV Gateway может отправлять live-телеметрию в [A Better Route Planner](https://abetterrouteplanner.com/) через Iternio Telemetry API. Функция выключена по умолчанию.
+VoltFlow Mate может отправлять live-телеметрию в [A Better Route Planner](https://abetterrouteplanner.com/) через Iternio Telemetry API. Функция выключена по умолчанию.
 
 1. В ABRP откройте гараж и настройки автомобиля.
 2. В разделе данных подключите провайдера **Generic**.
 3. Скопируйте `User Token`.
-4. В CloudEV Gateway откройте **Настройки -> ABRP — телеметрия**.
+4. В VoltFlow Mate откройте **Настройки -> ABRP — телеметрия**.
 5. Вставьте токен, сохраните и включите отправку.
 
 GPS-координаты через этот канал не отправляются. ABRP на DiLink или телефоне берёт геопозицию из своей ОС.

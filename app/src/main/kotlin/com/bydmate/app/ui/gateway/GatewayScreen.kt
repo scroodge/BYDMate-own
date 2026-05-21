@@ -108,7 +108,7 @@ fun GatewayScreen(
         )
 
         Text(
-            "Gateway mode: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, ABRP, автоматизация и локальная аналитика скрыты из интерфейса.",
+            "Режим шлюза: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, ABRP, автоматизация и локальная аналитика скрыты из интерфейса.",
             color = TextMuted,
             fontSize = 12.sp,
             lineHeight = 17.sp,
@@ -121,7 +121,7 @@ fun GatewayScreen(
 private fun Header(appVersion: String) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "CloudEV Gateway",
+            "VoltFlow Mate",
             color = TextPrimary,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
@@ -142,7 +142,7 @@ private fun StatusCard(
     onStop: () -> Unit,
 ) {
     GatewayCard {
-        Text("Gateway status", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text("Статус шлюза", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(10.dp))
         StatusRow("Service", if (isRunning) "Running" else "Stopped", isRunning)
         StatusRow("DiPlus", if (diPlusConnected) "Connected" else "Waiting", diPlusConnected)

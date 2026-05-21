@@ -82,7 +82,7 @@ class OpenRouterClient @Inject constructor(
                 .url("$BASE_URL/chat/completions")
                 .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("HTTP-Referer", "https://github.com/scroodge/BYDMate-own")
-                .addHeader("X-Title", "CloudEV Mate")
+                .addHeader("X-Title", "VoltFlow Mate")
                 .post(payload.toString().toRequestBody(JSON_MEDIA))
                 .build()
 

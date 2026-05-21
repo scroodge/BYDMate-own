@@ -516,7 +516,7 @@ private fun TopBar(isServiceRunning: Boolean, diPlusConnected: Boolean, adbConne
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "CloudEV Mate",
+            text = "VoltFlow Mate",
             color = TextPrimary,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold

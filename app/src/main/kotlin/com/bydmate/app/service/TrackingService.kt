@@ -1059,7 +1059,7 @@ class TrackingService : Service(), LocationListener {
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "CloudEV Gateway",
+            "VoltFlow Mate",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
             description = "VoltFlow telemetry gateway"
@@ -1076,7 +1076,7 @@ class TrackingService : Service(), LocationListener {
             PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("CloudEV Gateway")
+            .setContentTitle("VoltFlow Mate")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentIntent(pendingIntent)

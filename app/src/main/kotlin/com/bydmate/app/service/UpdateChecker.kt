@@ -66,7 +66,7 @@ class UpdateChecker @Inject constructor(
         val request = Request.Builder()
             .url(GITHUB_API)
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "CloudEV-Mate-UpdateCheck")
+            .header("User-Agent", "VoltFlow-Mate-UpdateCheck")
             .build()
         val response = httpClient.newCall(request).execute()
         if (!response.isSuccessful) {
@@ -120,16 +120,16 @@ class UpdateChecker @Inject constructor(
         // Delete old file if exists
         val destFile = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "CloudEV-Mate-${update.version}.apk"
+            "VoltFlow-Mate-${update.version}.apk"
         )
         if (destFile.exists()) destFile.delete()
 
         val request = DownloadManager.Request(Uri.parse(update.downloadUrl))
-            .setTitle("CloudEV Mate ${update.version}")
-            .setDescription("Обновление CloudEV Mate")
+            .setTitle("VoltFlow Mate ${update.version}")
+            .setDescription("Обновление VoltFlow Mate")
             .setDestinationInExternalPublicDir(
                 Environment.DIRECTORY_DOWNLOADS,
-                "CloudEV-Mate-${update.version}.apk"
+                "VoltFlow-Mate-${update.version}.apk"
             )
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
@@ -189,7 +189,7 @@ class UpdateChecker @Inject constructor(
     private fun installApk(context: Context, version: String) {
         val file = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "CloudEV-Mate-$version.apk"
+            "VoltFlow-Mate-$version.apk"
         )
         if (!file.exists()) return
 

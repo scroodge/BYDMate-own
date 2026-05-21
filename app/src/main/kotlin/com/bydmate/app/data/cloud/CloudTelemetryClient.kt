@@ -38,7 +38,7 @@ class CloudTelemetryClient @Inject constructor(
                 .header("Content-Type", JSON.toString())
                 .header("X-API-Key", apiKey)
                 .header("X-Vehicle-Id", vehicleId)
-                .header("X-App", "CloudEV-Gateway")
+                .header("X-App", "VoltFlow-Mate")
                 .post(payloadJson.toRequestBody(JSON))
                 .build()
 

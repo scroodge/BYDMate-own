@@ -17,8 +17,8 @@ android {
         // on DiLink Android 12 (requestLegacyExternalStorage works).
         // targetSdk 30+ would break listFiles() on /storage/emulated/0/energydata/
         targetSdk = 29
-        versionCode = 303
-        versionName = "0.2.1..1..1-gateway"
+        versionCode = 304
+        versionName = "0.2.2..1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -47,7 +47,7 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "CloudEV-Gateway-v${variant.versionName}.apk"
+            output.outputFileName = "VoltFlow-Mate-v${variant.versionName}.apk"
         }
     }
 

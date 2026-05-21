@@ -511,7 +511,7 @@ fun SettingsScreen(
                                     fontWeight = FontWeight.Medium
                                 )
                                 Text(
-                                    "Отправка live-снимков CloudEV Mate в ваш HTTPS endpoint. GPS включается только при разрешении локации.",
+                                    "Отправка live-снимков VoltFlow Mate в ваш HTTPS endpoint. GPS включается только при разрешении локации.",
                                     color = TextSecondary,
                                     fontSize = 12.sp,
                                 )
@@ -670,9 +670,9 @@ fun SettingsScreen(
                                 )
                             }
                             Text(
-                                text = "• Долгий тап на виджете — скрыть до следующего открытия CloudEV Mate.\n" +
+                                text = "• Долгий тап на виджете — скрыть до следующего открытия VoltFlow Mate.\n" +
                                         "• Перетащить в корзину внизу — выключить совсем.\n" +
-                                        "• Обычный тап — открыть CloudEV Mate.",
+                                        "• Обычный тап — открыть VoltFlow Mate.",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
@@ -772,7 +772,7 @@ fun SettingsScreen(
                                         fontSize = 13.sp,
                                     )
                                     Text(
-                                        text = "Тап по левой части виджета открывает Навигатор, остальное — CloudEV Mate.",
+                                        text = "Тап по левой части виджета открывает Навигатор, остальное — VoltFlow Mate.",
                                         color = TextSecondary,
                                         fontSize = 11.sp,
                                     )
@@ -901,7 +901,7 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            "CloudEV Mate v${state.appVersion}",
+                            "VoltFlow Mate v${state.appVersion}",
                             color = TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
