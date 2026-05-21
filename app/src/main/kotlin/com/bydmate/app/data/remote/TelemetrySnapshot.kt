@@ -8,6 +8,7 @@ import java.time.Instant
 data class VehicleTelemetrySnapshot(
     val capturedAtMs: Long,
     val deviceTimeIso: String,
+    val diPlusData: DiParsData?,
     val soc: Int?,
     val speedKmh: Double?,
     val powerKw: Double?,
@@ -16,6 +17,9 @@ data class VehicleTelemetrySnapshot(
     val outsideTempC: Double?,
     val batteryVoltageV: Double?,
     val auxVoltageV: Double?,
+    val cellVoltageMinV: Double?,
+    val cellVoltageMaxV: Double?,
+    val cellDeltaV: Double?,
     val odometerKm: Double?,
     val sohPercent: Double?,
     val isCharging: Boolean?,
@@ -61,6 +65,7 @@ data class VehicleTelemetrySnapshot(
             return VehicleTelemetrySnapshot(
                 capturedAtMs = capturedAtMs,
                 deviceTimeIso = Instant.ofEpochMilli(capturedAtMs).toString(),
+                diPlusData = data,
                 soc = data?.soc,
                 speedKmh = data?.speed?.toDouble(),
                 powerKw = powerKw,
@@ -69,6 +74,13 @@ data class VehicleTelemetrySnapshot(
                 outsideTempC = data?.exteriorTemp?.toDouble(),
                 batteryVoltageV = charging?.chargeBatteryVoltV?.toDouble(),
                 auxVoltageV = battery?.voltage12v?.toDouble() ?: data?.voltage12v,
+                cellVoltageMinV = data?.minCellVoltage,
+                cellVoltageMaxV = data?.maxCellVoltage,
+                cellDeltaV = if (data?.maxCellVoltage != null && data.minCellVoltage != null) {
+                    data.maxCellVoltage - data.minCellVoltage
+                } else {
+                    null
+                },
                 odometerKm = data?.mileage,
                 sohPercent = battery?.sohPercent?.takeIf { it in 0f..100f }?.toDouble(),
                 isCharging = isCharging,
