@@ -60,21 +60,10 @@ VoltFlow Mate читает live-данные машины через **DiPlus (D
 2. Выдайте разрешения на локацию и хранилище.
 3. Нажмите кнопку "Запустить" и убедитесь что данные запускаются.
 4. Зарегестрируйтесь в VoltFlow по этой ссылке (https://github.com/scroodge/VoltFlow/blob/main/INSTALL.md)
-5. В приложении VoltFlow зайдите в меню настроек и перейдите в раздел 
----
-
-## ADB и системные данные
-
-Без ADB приложение работает в базовом режиме: поездки, расход, виджет, настройки, ручные зарядки и AI-инсайты. ADB нужен для расширенных функций:
-
-- точный SoH и часть BMS-показателей;
-- автоматическое определение зарядных сессий;
-- вкладка автоматизации и команды через D+;
-- устойчивый доступ к системным данным DiLink.
-
-На DiLink 3/4 ADB часто можно включить самостоятельно через инженерные настройки. На DiLink 5.0 ADB обычно заблокирован и открывается удалённо через продавцов на TaoBao. Подробный русский гайд лежит здесь: [docs/guides/dilink5-adb-activation-ru.pdf](docs/guides/dilink5-adb-activation-ru.pdf).
-
-После активации откройте в приложении **Настройки -> Системные данные (экспериментально)**. DiLink покажет системный диалог ADB-отладки: нажмите **Allow** и включите **Always allow from this computer**.
+5. В приложении VoltFlow зайдите в меню настроек и перейдите в раздел VoltFlow Mate и нажмите кнопку "Generate key"
+6. Скопируйте ключ и вставьте его в приложении BYDMATE в поле "API Key"
+7. Нажмите кнопку "TEST" и при положительном результате нажмите кнопку "Save" и переключатель Синхронизация VoltFlow Mate в положение "Вкл"
+9. Убедитесь что при включеной машине в приложении VoltFlow Mate в разделе "Авто" отображаются данные о машине.
 
 ---
 
@@ -86,27 +75,6 @@ VoltFlow Mate читает live-данные машины через **DiPlus (D
 
 <img src="docs/screenshots/voltflow-sync-settings.png" alt="VoltFlow Mate: настройки синхронизации VoltFlow" width="900">
 
-### Главный экран
-
-<img src="docs/screenshots/dashboard.jpg" alt="Главный экран" width="820">
-
-### Поездки
-
-<img src="docs/screenshots/trips.jpg" alt="Поездки" width="820">
-
-### Зарядки и настройки
-
-<img src="docs/screenshots/settings.jpg" alt="Настройки" width="820">
-
-### Автоматизация
-
-<img src="docs/screenshots/automation.jpg" alt="Автоматизация" width="820">
-
-### Плавающий виджет
-
-<img src="docs/screenshots/widget-infographic.jpg" alt="Плавающий виджет" width="900">
-
----
 
 ## Сборка из исходников
 
@@ -178,33 +146,6 @@ git push origin v0.2.2
 
 ---
 
-## Настройка ABRP
-
-VoltFlow Mate может отправлять live-телеметрию в [A Better Route Planner](https://abetterrouteplanner.com/) через Iternio Telemetry API. Функция выключена по умолчанию.
-
-1. В ABRP откройте гараж и настройки автомобиля.
-2. В разделе данных подключите провайдера **Generic**.
-3. Скопируйте `User Token`.
-4. В VoltFlow Mate откройте **Настройки -> ABRP — телеметрия**.
-5. Вставьте токен, сохраните и включите отправку.
-
-GPS-координаты через этот канал не отправляются. ABRP на DiLink или телефоне берёт геопозицию из своей ОС.
-
----
-
-## AI-инсайты
-
-AI-инсайты работают через OpenRouter и включаются вручную.
-
-1. Создайте ключ на [OpenRouter](https://openrouter.ai/).
-2. Вставьте ключ в **Настройки -> AI Инсайты**.
-3. Выберите модель.
-4. Нажмите **Сохранить и получить инсайт**.
-
-В запрос уходит агрегированная статистика за 7 и 30 дней. GPS-маршруты, VIN и история поездок по точкам не отправляются.
-
----
-
 ## Стек
 
 - Kotlin, Jetpack Compose, Material 3.
@@ -228,7 +169,6 @@ AI-инсайты работают через OpenRouter и включаются
 ## Благодарности
 
 - [BYDMate](https://github.com/AndyShaman/BYDMate) — оригинальное GPLv3-приложение, на котором основан проект.
-- [BYD Trip Info](https://www.byd-seal-forum.de/forum/thread/1811-byd-trip-info-app/) — приложение и идея чтения trip-данных на DiLink.
 - DiPlus / D+ — локальный мост к данным автомобиля.
 
 ---
@@ -237,4 +177,4 @@ AI-инсайты работают через OpenRouter и включаются
 
 GPLv3 с условиями атрибуции. Подробности: [LICENSE](LICENSE) и [NOTICE.md](NOTICE.md).
 
-Copyright (C) 2026 [AndyShaman](https://github.com/AndyShaman)
+Copyright (C) 2026 [Scroodge](https://github.com/scroodge/)
