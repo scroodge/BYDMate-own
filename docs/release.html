@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CloudEV Gateway — скачать APK</title>
+  <meta name="description" content="Страница скачивания CloudEV Gateway для BYD DiLink">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1117;
+      --panel: #151a22;
+      --panel-2: #1b2230;
+      --text: #f5f7fb;
+      --muted: #aab4c4;
+      --line: #2a3445;
+      --green: #00e676;
+      --cyan: #00d1ff;
+      --warn: #ffd166;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .hero {
+      min-height: 88vh;
+      display: grid;
+      align-items: center;
+      padding: 44px 20px 72px;
+      background: linear-gradient(180deg, #111722 0%, var(--bg) 92%);
+    }
+
+    .wrap {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      font-size: 13px;
+    }
+
+    .brand img {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+    }
+
+    h1 {
+      margin: 28px auto 18px;
+      max-width: 900px;
+      font-size: clamp(42px, 8vw, 88px);
+      line-height: .94;
+      letter-spacing: 0;
+      text-align: center;
+    }
+
+    .lead {
+      max-width: 720px;
+      margin: 0 auto;
+      color: var(--muted);
+      font-size: 20px;
+      text-align: center;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-top: 34px;
+      justify-content: center;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 20px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 800;
+      border: 1px solid transparent;
+    }
+
+    .primary {
+      background: linear-gradient(135deg, var(--green), var(--cyan));
+      color: #071017;
+    }
+
+    .secondary {
+      border-color: var(--line);
+      background: rgba(255, 255, 255, .04);
+      color: var(--text);
+    }
+
+    .release-mark {
+      width: min(220px, 46vw);
+      aspect-ratio: 1;
+      display: block;
+      margin: 0 auto 28px;
+      filter: drop-shadow(0 30px 70px rgba(0, 209, 255, .18));
+    }
+
+    section {
+      padding: 56px 20px;
+      border-top: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 22px;
+      font-size: 30px;
+      letter-spacing: 0;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .step,
+    .note {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 18px;
+    }
+
+    .step p,
+    .note p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .note {
+      border-color: rgba(255, 209, 102, .35);
+      background: rgba(255, 209, 102, .08);
+    }
+
+    code {
+      color: #d9f99d;
+      background: rgba(255, 255, 255, .06);
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+
+    footer {
+      padding: 32px 20px 48px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    @media (max-width: 860px) {
+      .hero {
+        min-height: auto;
+      }
+
+      .steps {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="hero">
+    <div class="wrap">
+      <img class="release-mark" src="assets/voltflow-cloud-release.svg" alt="CloudEV Gateway">
+      <div class="brand">
+        <img src="assets/voltflow-cloud-release.svg" alt="">
+        <span>BYDMate-own · Android APK</span>
+      </div>
+      <h1>CloudEV Gateway</h1>
+      <p class="lead">Готовая сборка для BYD DiLink: поездки, зарядки, реальный расход, состояние батареи, плавающий виджет и автоматизация через DiPlus. Скачайте файл <code>CloudEV-Gateway-v...apk</code> в блоке Assets последнего релиза.</p>
+      <div class="actions">
+        <a class="button primary" href="https://github.com/scroodge/BYDMate-own/releases/latest">Скачать последний APK</a>
+        <a class="button secondary" href="../README.md">Открыть README</a>
+      </div>
+    </div>
+  </main>
+
+  <section>
+    <div class="wrap">
+      <h2>Как установить</h2>
+      <div class="steps">
+        <article class="step">
+          <b>1. Скачайте APK</b>
+          <p>Откройте последний релиз и скачайте файл <code>CloudEV-Gateway-v...apk</code> из блока Assets.</p>
+        </article>
+        <article class="step">
+          <b>2. Перенесите на DiLink</b>
+          <p>Используйте USB-флешку, браузер DiLink, файловый менеджер или команду <code>adb install</code>.</p>
+        </article>
+        <article class="step">
+          <b>3. Разрешите фон</b>
+          <p>После установки выключите ограничение фоновой работы: Disable background Apps = OFF.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Перед первым запуском</h2>
+      <div class="steps">
+        <article class="step">
+          <b>DiPlus обязателен</b>
+          <p>Установите DiPlus (D+), потому что CloudEV Gateway берёт live-данные машины через локальный D+ API.</p>
+        </article>
+        <article class="step">
+          <b>ADB расширяет функции</b>
+          <p>Без ADB работают поездки, расход и виджет. Для SoH, автозарядок и автоматизации включите системные данные.</p>
+        </article>
+        <article class="step">
+          <b>Выберите источник</b>
+          <p>Leopard 3 обычно использует BYD energydata. Song, Yuan и другие модели чаще используют DiPlus TripInfo.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="note">
+        <p><strong>Важно.</strong> Устанавливайте APK только из релизов этого репозитория или из собственной сборки. Если браузер DiLink не скачивает файл напрямую, скачайте APK на компьютер и перенесите его на USB-флешке.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    CloudEV Gateway основан на BYDMate и распространяется по GPLv3.
+  </footer>
+</body>
+</html>
