@@ -24,10 +24,6 @@ import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
-import com.bydmate.app.data.remote.IternioIntervalPolicy
-import com.bydmate.app.data.remote.IternioRateLimitException
-import com.bydmate.app.data.remote.IternioServerErrorException
-import com.bydmate.app.data.remote.IternioTelemetryClient
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
@@ -78,7 +74,6 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var autoserviceClient: com.bydmate.app.data.autoservice.AutoserviceClient
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
-    @Inject lateinit var iternioTelemetryClient: IternioTelemetryClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -140,17 +135,6 @@ class TrackingService : Service(), LocationListener {
     // gives visibility, not atomicity).
     private val pollGunInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val iternioTelemetryLock = Any()
-    @Volatile private var lastIternioTelemetryMs: Long = 0L
-    // Prevents two telemetry sends from overlapping: a slow ADB read can take
-    // hundreds of ms, and stacking sends would burn the same in-flight ENG_POW
-    // read across two parallel coroutines.
-    private val iternioInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
-    // Upstream cooldown: bumped when Iternio returns 429 (Retry-After) or 5xx
-    // (exponential backoff). We refuse to send until `now >= iternioCooldownUntilMs`.
-    @Volatile private var iternioCooldownUntilMs: Long = 0L
-    @Volatile private var iternioConsecutive5xx: Int = 0
-
     private val cloudInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
@@ -174,6 +158,7 @@ class TrackingService : Service(), LocationListener {
         private const val SESSION_IDLE_CLOSE_MS = 10_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
+        private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
@@ -422,102 +407,6 @@ class TrackingService : Service(), LocationListener {
             "samples=${liveTripBuffer.sampleCount()}")
     }
 
-    /**
-     * Отправка в [IternioTelemetryClient] с адаптивной частотой (см.
-     * [IternioIntervalPolicy]): 1 с в движении, 8 с при зарядке, 30 с на
-     * парковке. Бессмысленно слать с одинаковым ритмом — ABRP калибрует
-     * точность по плотности сэмплов за 10 секунд, и единственное окно где
-     * нам нужен 1 Гц — это движение.
-     *
-     * Single-flight на [iternioInFlight] не даёт двум tick'ам пересекаться:
-     * ADB-чтение ENG_POW может занять несколько сотен мс, а очередь параллельных
-     * отправок забила бы канал и спутала throttle. На 429/5xx взводим
-     * [iternioCooldownUntilMs] и тихо пропускаем тики пока не остынет.
-     */
-    private fun maybeSendIternioTelemetry(data: DiParsData, snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
-        if (!iternioInFlight.compareAndSet(false, true)) return
-        // Capture the snapshot timestamp BEFORE the network round-trip so the
-        // `utc` field upstream matches the moment of sampling, not delivery.
-        val snapshotMs = nowMs
-        serviceScope.launch {
-            try {
-                if (settingsRepository.getString(
-                        com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_ENABLED,
-                        "false"
-                    ) != "true"
-                ) {
-                    return@launch
-                }
-                val token = settingsRepository.getString(
-                    com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_USER_TOKEN,
-                    ""
-                ).trim()
-                if (token.isEmpty()) return@launch
-
-                if (snapshotMs < iternioCooldownUntilMs) {
-                    Log.d(TAG, "Iternio cooldown active, skip (until ${iternioCooldownUntilMs - snapshotMs}ms)")
-                    return@launch
-                }
-
-                val state = IternioIntervalPolicy.classifyFromDiPars(data)
-                val intervalMs = IternioIntervalPolicy.intervalSec(state) * 1000L
-                synchronized(iternioTelemetryLock) {
-                    if (snapshotMs - lastIternioTelemetryMs < intervalMs) return@launch
-                }
-
-                val apiKey = settingsRepository.getString(
-                    com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_API_KEY,
-                    ""
-                )
-                val carModel = settingsRepository.getString(
-                    com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_CAR_MODEL,
-                    ""
-                ).trim().takeIf { it.isNotEmpty() }
-
-                iternioTelemetryClient.send(
-                    apiKey = apiKey,
-                    userToken = token,
-                    snapshot = snapshot,
-                    nominalCapacityKwh = settingsRepository.getBatteryCapacity(),
-                    carModel = carModel,
-                ).onSuccess {
-                    synchronized(iternioTelemetryLock) {
-                        lastIternioTelemetryMs = snapshotMs
-                    }
-                    iternioConsecutive5xx = 0
-                }.onFailure { e ->
-                    when (e) {
-                        is IternioRateLimitException -> {
-                            // Upstream said wait. Honor Retry-After if present;
-                            // fall back to 5 min when the header was missing —
-                            // long enough that we're not part of the storm,
-                            // short enough that the user gets data back once
-                            // the burst clears.
-                            val backoffSec = e.retryAfterSec ?: 300
-                            iternioCooldownUntilMs = snapshotMs + backoffSec * 1000L
-                            Log.w(TAG, "Iternio 429, cooldown ${backoffSec}s")
-                        }
-                        is IternioServerErrorException -> {
-                            // 5xx exponential backoff: 8 → 16 → 32 → 64 → 128 → 256 s
-                            // (capped at 300 s). We don't bump throttle on success
-                            // failures the user can't influence — wait for the
-                            // CDN to recover.
-                            iternioConsecutive5xx = (iternioConsecutive5xx + 1).coerceAtMost(6)
-                            val backoffSec = (8 shl (iternioConsecutive5xx - 1)).coerceAtMost(300)
-                            iternioCooldownUntilMs = snapshotMs + backoffSec * 1000L
-                            Log.w(TAG, "Iternio ${e.httpStatus}, cooldown ${backoffSec}s (n=$iternioConsecutive5xx)")
-                        }
-                        else -> Log.w(TAG, "Телеметрия Iternio: ${e.message}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Телеметрия Iternio: ${e.message}")
-            } finally {
-                iternioInFlight.set(false)
-            }
-        }
-    }
-
     private fun maybeSendCloudTelemetry(snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
         if (!cloudInFlight.compareAndSet(false, true)) return
         serviceScope.launch {
@@ -539,6 +428,9 @@ class TrackingService : Service(), LocationListener {
             }
         }
     }
+
+    private fun isChargingFromDiPars(data: DiParsData): Boolean =
+        data.chargeGunState in CHARGING_GUN_STATES
 
     override fun onDestroy() {
         Log.i(TAG, "onDestroy: stopping TrackingService")
@@ -750,18 +642,13 @@ class TrackingService : Service(), LocationListener {
                         automationEngine.evaluate(data, sessionId)
                         updateNotification(data)
                         maybeLogSessionSummary(nowMs, data, sessionId)
-                        val abrpEnabled = settingsRepository.getString(
-                            com.bydmate.app.data.repository.SettingsRepository.KEY_ABRP_ENABLED,
-                            "false"
-                        ) == "true"
                         val cloudEnabled = settingsRepository.getString(
                             com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
                             "false"
                         ) == "true"
-                        if (abrpEnabled || cloudEnabled) {
+                        if (cloudEnabled) {
                             val autoserviceOn = settingsRepository.isAutoserviceEnabled()
-                            val telemetryState = IternioIntervalPolicy.classifyFromDiPars(data)
-                            val readSnapshots = autoserviceOn && telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
+                            val readSnapshots = autoserviceOn && isChargingFromDiPars(data)
                             val telemetryBattery = if (readSnapshots) {
                                 runCatching { autoserviceClient.readBatterySnapshot() }.getOrNull()
                             } else null
@@ -787,8 +674,7 @@ class TrackingService : Service(), LocationListener {
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
                             )
-                            if (abrpEnabled) maybeSendIternioTelemetry(data, telemetrySnapshot, nowMs)
-                            if (cloudEnabled) maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
+                            maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
                         }
                     } else {
                         consecutiveNullCount++

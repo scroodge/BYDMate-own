@@ -200,7 +200,7 @@ class CloudTelemetrySender @Inject constructor(
         const val MAX_BATCH_SIZE = 60
         const val MOVING_SPEED_THRESHOLD_KMH = 0.5
         const val CHARGING_POWER_THRESHOLD_KW = 0.1
-        const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
+        const val MOVING_SAMPLE_INTERVAL_MS = 60_000L
         const val CHARGING_SAMPLE_INTERVAL_MS = 30_000L
         const val STOPPED_HEARTBEAT_INTERVAL_MS = 5L * 60_000L
     }

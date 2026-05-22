@@ -477,7 +477,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
     when (language) {
         SettingsRepository.LANGUAGE_RU -> GatewayStrings(
             bridge = "Мост телеметрии VoltFlow",
-            gatewayMode = "Режим шлюза: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, ABRP, автоматизация и локальная аналитика скрыты из интерфейса.",
+            gatewayMode = "Режим шлюза: приложение читает live-данные DiPlus/BYD и отправляет их в VoltFlow. Поездки, AI, автоматизация и локальная аналитика скрыты из интерфейса.",
             gatewayStatus = "Статус шлюза",
             service = "Сервис",
             running = "Запущен",
@@ -512,7 +512,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
-            gatewayMode = "Gateway mode: the app reads live DiPlus/BYD data and sends it to VoltFlow. Trips, AI, ABRP, automation, and local analytics are hidden from this interface.",
+            gatewayMode = "Gateway mode: the app reads live DiPlus/BYD data and sends it to VoltFlow. Trips, AI, automation, and local analytics are hidden from this interface.",
             gatewayStatus = "Gateway status",
             service = "Service",
             running = "Running",
@@ -547,7 +547,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
-            gatewayMode = "Рэжым шлюза: праграма чытае live-даныя DiPlus/BYD і адпраўляе іх у VoltFlow. Паездкі, AI, ABRP, аўтаматызацыя і лакальная аналітыка схаваныя з інтэрфейсу.",
+            gatewayMode = "Рэжым шлюза: праграма чытае live-даныя DiPlus/BYD і адпраўляе іх у VoltFlow. Паездкі, AI, аўтаматызацыя і лакальная аналітыка схаваныя з інтэрфейсу.",
             gatewayStatus = "Статус шлюза",
             service = "Сэрвіс",
             running = "Запушчаны",

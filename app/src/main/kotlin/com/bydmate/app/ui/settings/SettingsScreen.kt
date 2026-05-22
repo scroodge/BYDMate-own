@@ -431,63 +431,6 @@ fun SettingsScreen(
                     }
                 }
 
-                SectionHeader(text = "ABRP — телеметрия")
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = CardSurface),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(
-                                    "Живые данные → A Better Route Planner",
-                                    color = TextPrimary,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    "Живые данные (SOC, мощность, температуры, одометр, давление шин) отправляются в Iternio Telemetry API для актуального плана в ABRP. GPS не передаётся — ABRP читает координаты сам.",
-                                    color = TextSecondary,
-                                    fontSize = 12.sp,
-                                )
-                            }
-                            Switch(
-                                checked = state.abrpTelemetryEnabled,
-                                onCheckedChange = { viewModel.toggleAbrpTelemetry(it) },
-                                colors = bydSwitchColors(),
-                            )
-                        }
-                        SettingsTextField(
-                            label = "Токен живых данных из ABRP",
-                            value = state.abrpUserToken,
-                            onValueChange = { viewModel.updateAbrpUserToken(it) },
-                            keyboardType = KeyboardType.Password
-                        )
-                        Button(
-                            onClick = { viewModel.saveAbrpSettings() },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = AccentGreen,
-                                contentColor = NavyDark
-                            )
-                        ) {
-                            Text("Сохранить ABRP", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        }
-                        state.abrpSaveStatus?.let {
-                            Text(it, color = AccentGreen, fontSize = 12.sp)
-                        }
-                    }
-                }
-
                 SectionHeader(text = "Cloud Sync")
                 Card(
                     shape = RoundedCornerShape(12.dp),

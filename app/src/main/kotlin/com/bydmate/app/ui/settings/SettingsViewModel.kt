@@ -121,11 +121,6 @@ data class SettingsUiState(
     val dataSourceStatus: String? = null,
     val autoserviceEnabled: Boolean = false,
     val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled,
-    val abrpTelemetryEnabled: Boolean = false,
-    val abrpApiKey: String = "",
-    val abrpUserToken: String = "",
-    val abrpCarModel: String = "",
-    val abrpSaveStatus: String? = null,
     val cloudSyncEnabled: Boolean = false,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
@@ -214,10 +209,6 @@ class SettingsViewModel @Inject constructor(
 
             val autoserviceEnabled = settingsRepository.isAutoserviceEnabled()
 
-            val abrpEnabled = settingsRepository.getString(SettingsRepository.KEY_ABRP_ENABLED, "false") == "true"
-            val abrpApiKey = settingsRepository.getString(SettingsRepository.KEY_ABRP_API_KEY, "")
-            val abrpUserToken = settingsRepository.getString(SettingsRepository.KEY_ABRP_USER_TOKEN, "")
-            val abrpCarModel = settingsRepository.getString(SettingsRepository.KEY_ABRP_CAR_MODEL, "")
             val cloudSyncEnabled = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") == "true"
             val cloudSyncUrl = settingsRepository.getString(
                 SettingsRepository.KEY_CLOUD_SYNC_URL,
@@ -262,10 +253,6 @@ class SettingsViewModel @Inject constructor(
                     aliceEnabled = aliceEnabled,
                     dataSource = dataSource,
                     autoserviceEnabled = autoserviceEnabled,
-                    abrpTelemetryEnabled = abrpEnabled,
-                    abrpApiKey = abrpApiKey,
-                    abrpUserToken = abrpUserToken,
-                    abrpCarModel = abrpCarModel,
                     cloudSyncEnabled = cloudSyncEnabled,
                     cloudSyncUrl = cloudSyncUrl,
                     cloudSyncApiKey = cloudSyncApiKey,
@@ -699,48 +686,6 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(aliceEnabled = enabled) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_ALICE_ENABLED, enabled.toString())
-        }
-    }
-
-    fun toggleAbrpTelemetry(enabled: Boolean) {
-        // Switching ON without a user token is meaningless — Iternio rejects the
-        // call and we'd just spam failed requests. UI also gates on this flag,
-        // but enforce here so programmatic callers can't bypass it.
-        val effective = enabled && _uiState.value.abrpUserToken.isNotBlank()
-        _uiState.update { it.copy(abrpTelemetryEnabled = effective) }
-        viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_ABRP_ENABLED, effective.toString())
-        }
-    }
-
-    fun updateAbrpApiKey(value: String) {
-        _uiState.update { it.copy(abrpApiKey = value) }
-    }
-
-    fun updateAbrpUserToken(value: String) {
-        _uiState.update { it.copy(abrpUserToken = value) }
-    }
-
-    fun updateAbrpCarModel(value: String) {
-        _uiState.update { it.copy(abrpCarModel = value) }
-    }
-
-    fun saveAbrpSettings() {
-        val state = _uiState.value
-        viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_ABRP_API_KEY, state.abrpApiKey.trim())
-            settingsRepository.setString(SettingsRepository.KEY_ABRP_USER_TOKEN, state.abrpUserToken.trim())
-            settingsRepository.setString(SettingsRepository.KEY_ABRP_CAR_MODEL, state.abrpCarModel.trim())
-            val enabled = state.abrpTelemetryEnabled && state.abrpUserToken.isNotBlank()
-            settingsRepository.setString(SettingsRepository.KEY_ABRP_ENABLED, enabled.toString())
-            _uiState.update {
-                it.copy(
-                    abrpTelemetryEnabled = enabled,
-                    abrpSaveStatus = "Сохранено",
-                )
-            }
-            delay(2000)
-            _uiState.update { it.copy(abrpSaveStatus = null) }
         }
     }
 
