@@ -599,7 +599,11 @@ fun SettingsScreen(
                         state.cloudSyncStatus?.let {
                             Text(
                                 it,
-                                color = if (it.contains("failed", ignoreCase = true) || it.contains("ошиб", ignoreCase = true)) AccentOrange else AccentGreen,
+                                color = if (
+                                    it.contains("failed", ignoreCase = true) ||
+                                    it.contains("ошиб", ignoreCase = true) ||
+                                    it.contains("missing", ignoreCase = true)
+                                ) AccentOrange else AccentGreen,
                                 fontSize = 12.sp
                             )
                         }

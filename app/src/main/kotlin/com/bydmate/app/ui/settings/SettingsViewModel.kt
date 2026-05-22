@@ -33,6 +33,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.withContext
 import com.bydmate.app.service.BootReceiver
 import com.bydmate.app.service.TrackingService
@@ -851,10 +853,12 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = result.fold(
                         onSuccess = {
+                            val diagnostics = cloudTestDiagnostics(snapshot)
+                            val backend = backendAckDiagnostics(it)
                             cloudText(
-                                "Синхронизация OK: ${formatTs(System.currentTimeMillis())}; live sync включен",
-                                "Сінхранізацыя OK: ${formatTs(System.currentTimeMillis())}; live sync уключаны",
-                                "Sync OK: ${formatTs(System.currentTimeMillis())}; live sync enabled",
+                                "Тест OK: ${formatTs(System.currentTimeMillis())}; live sync включен; sent: $diagnostics; backend: $backend",
+                                "Тэст OK: ${formatTs(System.currentTimeMillis())}; live sync уключаны; sent: $diagnostics; backend: $backend",
+                                "Test OK: ${formatTs(System.currentTimeMillis())}; live sync enabled; sent: $diagnostics; backend: $backend",
                             )
                         },
                         onFailure = { e ->
@@ -867,6 +871,111 @@ class SettingsViewModel @Inject constructor(
                     )
                 )
             }
+        }
+    }
+
+    private fun cloudTestDiagnostics(snapshot: VehicleTelemetrySnapshot): String {
+        val data = snapshot.diPlusData
+        val hasDiPlus = data != null
+        val hasCells = snapshot.cellVoltageMinV != null &&
+            snapshot.cellVoltageMaxV != null &&
+            snapshot.cellDeltaV != null
+        val hasTpms = listOf(
+            data?.tirePressFL,
+            data?.tirePressFR,
+            data?.tirePressRL,
+            data?.tirePressRR,
+        ).any { it != null }
+        val hasDoorsWindows = listOf(
+            data?.doorFL,
+            data?.doorFR,
+            data?.doorRL,
+            data?.doorRR,
+            data?.windowFL,
+            data?.windowFR,
+            data?.windowRL,
+            data?.windowRR,
+            data?.trunk,
+            data?.hood,
+        ).any { it != null }
+        val hasClimate = listOf(
+            data?.insideTemp,
+            data?.acStatus,
+            data?.acTemp,
+            data?.fanLevel,
+            data?.acCirc,
+            data?.exteriorTemp,
+        ).any { it != null }
+        val hasLocation = snapshot.location != null
+        val hasCore = snapshot.soc != null || snapshot.speedKmh != null || snapshot.odometerKm != null
+        val cellText = if (hasCells) {
+            "cells ${"%.3f".format(snapshot.cellDeltaV ?: 0.0)}V"
+        } else {
+            "cells missing"
+        }
+        return listOf(
+            "core ${if (hasCore) "OK" else "missing"}",
+            "diplus ${if (hasDiPlus) "OK" else "missing"}",
+            cellText,
+            "tpms ${if (hasTpms) "OK" else "missing"}",
+            "doors/windows ${if (hasDoorsWindows) "OK" else "missing"}",
+            "climate ${if (hasClimate) "OK" else "missing"}",
+            "gps ${if (hasLocation) "OK" else "missing"}",
+        ).joinToString(", ")
+    }
+
+    private fun backendAckDiagnostics(responseBody: String?): String {
+        val body = responseBody?.trim().orEmpty()
+        if (body.isBlank()) return "empty ack"
+        return runCatching {
+            val json = JSONObject(body)
+            val ok = json.optBoolean("ok", json.optBoolean("success", true))
+            val persisted = json.optJSONObject("persisted")
+                ?: json.optJSONObject("saved")
+                ?: json.optJSONObject("sample")
+                ?: json.optJSONObject("data")
+                ?: json
+            val hasDiPlus = findNonEmptyObject(persisted, "diplus")
+            val hasCellDelta = findNonNull(persisted, "diplus_cell_delta_v") ||
+                findNonNull(persisted, "cell_delta_v")
+            val hasCellMin = findNonNull(persisted, "diplus_min_cell_voltage_v") ||
+                findNonNull(persisted, "cell_voltage_min_v") ||
+                findNonNull(persisted, "min_cell_voltage_v")
+            val hasCellMax = findNonNull(persisted, "diplus_max_cell_voltage_v") ||
+                findNonNull(persisted, "cell_voltage_max_v") ||
+                findNonNull(persisted, "max_cell_voltage_v")
+            "ok=$ok, db diplus ${if (hasDiPlus) "OK" else "missing"}, db cells ${if (hasCellMin && hasCellMax && hasCellDelta) "OK" else "missing"}"
+        }.getOrElse {
+            "raw ${body.take(160)}"
+        }
+    }
+
+    private fun findNonNull(value: Any?, key: String): Boolean {
+        return when (value) {
+            is JSONObject -> {
+                if (value.has(key) && !value.isNull(key)) {
+                    true
+                } else {
+                    value.keys().asSequence().any { findNonNull(value.opt(it), key) }
+                }
+            }
+            is JSONArray -> (0 until value.length()).any { findNonNull(value.opt(it), key) }
+            else -> false
+        }
+    }
+
+    private fun findNonEmptyObject(value: Any?, key: String): Boolean {
+        return when (value) {
+            is JSONObject -> {
+                val direct = value.opt(key)
+                if (direct is JSONObject && direct.length() > 0) {
+                    true
+                } else {
+                    value.keys().asSequence().any { findNonEmptyObject(value.opt(it), key) }
+                }
+            }
+            is JSONArray -> (0 until value.length()).any { findNonEmptyObject(value.opt(it), key) }
+            else -> false
         }
     }
 

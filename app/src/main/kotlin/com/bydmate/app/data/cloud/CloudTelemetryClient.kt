@@ -11,7 +11,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 sealed class CloudSendResult {
-    object Success : CloudSendResult()
+    data class Success(val responseBody: String?) : CloudSendResult()
     data class RetryableFailure(val message: String) : CloudSendResult()
     data class NonRetryableFailure(val message: String) : CloudSendResult()
 }
@@ -43,8 +43,9 @@ class CloudTelemetryClient @Inject constructor(
                 .build()
 
             httpClient.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string()
                 when (response.code) {
-                    in 200..299 -> CloudSendResult.Success
+                    in 200..299 -> CloudSendResult.Success(responseBody)
                     in 400..499 -> CloudSendResult.NonRetryableFailure("HTTP ${response.code}")
                     else -> CloudSendResult.RetryableFailure("HTTP ${response.code}")
                 }

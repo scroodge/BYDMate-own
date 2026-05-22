@@ -74,16 +74,16 @@ class CloudTelemetrySender @Inject constructor(
         }
     }
 
-    suspend fun sendTest(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
+    suspend fun sendTest(snapshot: VehicleTelemetrySnapshot): Result<String?> {
         val config = readConfig().getOrElse { error ->
             saveStatus(ok = false, message = error.message ?: "Ошибка настроек")
             return Result.failure(error)
         }
         val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot)
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
-            CloudSendResult.Success -> {
+            is CloudSendResult.Success -> {
                 saveStatus(ok = true, message = "Test OK")
-                Result.success(Unit)
+                Result.success(result.responseBody)
             }
             is CloudSendResult.NonRetryableFailure -> {
                 saveStatus(ok = false, message = result.message)
@@ -108,7 +108,7 @@ class CloudTelemetrySender @Inject constructor(
             }
 
             when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
-                CloudSendResult.Success -> {
+                is CloudSendResult.Success -> {
                     items.forEach { queueDao.markFinished(it.id, null, now) }
                 }
                 is CloudSendResult.NonRetryableFailure -> {

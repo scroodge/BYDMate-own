@@ -27,6 +27,9 @@ class CloudTelemetryPayloadTest {
         assertEquals(3.30, telemetry.getDouble("cell_voltage_min_v"), 0.0001)
         assertEquals(3.31, telemetry.getDouble("cell_voltage_max_v"), 0.0001)
         assertEquals(0.01, telemetry.getDouble("cell_delta_v"), 0.0001)
+        assertEquals(3.30, telemetry.getDouble("diplus_min_cell_voltage_v"), 0.0001)
+        assertEquals(3.31, telemetry.getDouble("diplus_max_cell_voltage_v"), 0.0001)
+        assertEquals(0.01, telemetry.getDouble("diplus_cell_delta_v"), 0.0001)
     }
 
     @Test
