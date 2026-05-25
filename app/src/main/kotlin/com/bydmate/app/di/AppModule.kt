@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.bydmate.app.data.cloud.CloudTelemetryClient
+import com.bydmate.app.data.cloud.CloudTelemetryClientApi
 import com.bydmate.app.data.local.dao.BatterySnapshotDao
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.ChargePointDao
@@ -265,6 +267,7 @@ object AppModule {
     @Provides fun providePlaceDao(db: AppDatabase): PlaceDao = db.placeDao()
     @Provides fun provideOdometerSampleDao(db: AppDatabase): OdometerSampleDao = db.odometerSampleDao()
     @Provides fun provideCloudSyncQueueDao(db: AppDatabase): CloudSyncQueueDao = db.cloudSyncQueueDao()
+    @Provides fun provideCloudTelemetryClientApi(client: CloudTelemetryClient): CloudTelemetryClientApi = client
 
     @Provides
     @Singleton

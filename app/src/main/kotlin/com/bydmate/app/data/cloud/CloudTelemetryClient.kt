@@ -16,17 +16,26 @@ sealed class CloudSendResult {
     data class NonRetryableFailure(val message: String) : CloudSendResult()
 }
 
+interface CloudTelemetryClientApi {
+    suspend fun send(
+        url: String,
+        apiKey: String,
+        vehicleId: String,
+        payloadJson: String,
+    ): CloudSendResult
+}
+
 @Singleton
 class CloudTelemetryClient @Inject constructor(
     baseClient: OkHttpClient,
-) {
+) : CloudTelemetryClientApi {
     private val httpClient = baseClient.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    suspend fun send(
+    override suspend fun send(
         url: String,
         apiKey: String,
         vehicleId: String,
