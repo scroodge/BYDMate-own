@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Cloud Sync batch-запросы стали устойчивее на медленном backend: таймауты чтения и записи увеличены до 45 секунд, charging flush отправляет по одной минутной пачке до 60 samples за тик, а HTTP-ошибки теперь сохраняют короткое тело ответа сервера для диагностики.
+
+## [0.2.5] - 2026-05-26
+
 ### Added
 - Автоматическая генерация changelog из git-коммитов: `release/generate-changelog.js` собирает изменения после последнего тега `v*`, группирует их по секциям Keep a Changelog и умеет считать следующую SemVer-версию.
 - Gradle-задача `releaseChangelog` для релизного процесса:
@@ -37,5 +42,6 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/scroodge/BYDMate-own/compare/v0.2.2...v0.2.5
 [0.2.2]: https://github.com/scroodge/BYDMate-own/releases/tag/v0.2.2
