@@ -31,8 +31,8 @@ class CloudTelemetryClient @Inject constructor(
 ) : CloudTelemetryClientApi {
     private val httpClient = baseClient.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
         .build()
 
     override suspend fun send(
@@ -55,12 +55,21 @@ class CloudTelemetryClient @Inject constructor(
                 val responseBody = response.body?.string()
                 when (response.code) {
                     in 200..299 -> CloudSendResult.Success(responseBody)
-                    in 400..499 -> CloudSendResult.NonRetryableFailure("HTTP ${response.code}")
-                    else -> CloudSendResult.RetryableFailure("HTTP ${response.code}")
+                    in 400..499 -> CloudSendResult.NonRetryableFailure(response.messageWithBody(responseBody))
+                    else -> CloudSendResult.RetryableFailure(response.messageWithBody(responseBody))
                 }
             }
         } catch (e: Exception) {
             CloudSendResult.RetryableFailure(e.javaClass.simpleName + ": " + (e.message ?: "network error"))
+        }
+    }
+
+    private fun okhttp3.Response.messageWithBody(responseBody: String?): String {
+        val body = responseBody?.take(300)?.trim()
+        return if (body.isNullOrBlank()) {
+            "HTTP $code"
+        } else {
+            "HTTP $code: $body"
         }
     }
 

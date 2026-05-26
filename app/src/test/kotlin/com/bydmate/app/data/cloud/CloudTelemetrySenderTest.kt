@@ -95,8 +95,8 @@ class CloudTelemetrySenderTest {
 
         assertEquals(2, setup.client.payloads.size)
         val retrySamples = JSONObject(setup.client.payloads.last()).getJSONArray("samples")
-        assertEquals(61, retrySamples.length())
-        assertEquals(0, setup.queue.items.count { it.sentAt == null })
+        assertEquals(60, retrySamples.length())
+        assertEquals(1, setup.queue.items.count { it.sentAt == null })
     }
 
     private fun setup(

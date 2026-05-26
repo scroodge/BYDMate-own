@@ -75,7 +75,8 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         lastFlushAttemptMs = now
-        return if (flushQueue(config, now)) {
+        val batchSize = if (chargingBatchMode) CHARGING_BATCH_SIZE else MAX_BATCH_SIZE
+        return if (flushQueue(config, now, batchSize, drainAll = !chargingBatchMode)) {
             if (chargingBatchMode) chargingBatchStartedMs = 0L
             val remaining = queueDao.countUnsent()
             saveStatus(ok = true, message = "OK; queued $remaining")
@@ -113,9 +114,9 @@ class CloudTelemetrySender @Inject constructor(
         }
     }
 
-    private suspend fun flushQueue(config: Config, now: Long): Boolean {
+    private suspend fun flushQueue(config: Config, now: Long, batchSize: Int, drainAll: Boolean): Boolean {
         while (true) {
-            val items = queueDao.getUnsent(MAX_BATCH_SIZE)
+            val items = queueDao.getUnsent(batchSize)
             if (items.isEmpty()) return true
 
             val payload = if (items.size == 1) {
@@ -127,9 +128,11 @@ class CloudTelemetrySender @Inject constructor(
             when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
                 is CloudSendResult.Success -> {
                     items.forEach { queueDao.markFinished(it.id, null, now) }
+                    if (!drainAll) return true
                 }
                 is CloudSendResult.NonRetryableFailure -> {
                     items.forEach { queueDao.markFinished(it.id, result.message, now) }
+                    if (!drainAll) return true
                 }
                 is CloudSendResult.RetryableFailure -> {
                     items.forEach { queueDao.markAttempt(it.id, result.message) }
@@ -224,6 +227,7 @@ class CloudTelemetrySender @Inject constructor(
     private companion object {
         const val MAX_QUEUE_ROWS = 1000
         const val MAX_BATCH_SIZE = 120
+        const val CHARGING_BATCH_SIZE = 60
         const val MOVING_SPEED_THRESHOLD_KMH = 0.5
         const val CHARGING_POWER_THRESHOLD_KW = 0.1
         const val MOVING_SAMPLE_INTERVAL_MS = 60_000L
