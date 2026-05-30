@@ -2,6 +2,7 @@ package com.bydmate.app.data.cloud
 
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.remote.DiParsData
+import org.json.JSONArray
 import org.json.JSONObject
 
 object CloudTelemetryPayload {

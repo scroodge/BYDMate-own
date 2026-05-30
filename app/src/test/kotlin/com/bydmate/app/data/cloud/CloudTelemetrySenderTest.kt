@@ -58,6 +58,22 @@ class CloudTelemetrySenderTest {
         setup.now = BASE_TIME_MS + 299_000L
         setup.sender.send(snapshot())
         setup.now = BASE_TIME_MS + 301_000L
+        setup.sender.send(snapshot(soc = 51))
+
+        assertEquals(2, setup.queue.items.size)
+    }
+
+    @Test
+    fun `stopped unchanged idle skips scheduled heartbeats for two cycles`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot())
+        setup.now = BASE_TIME_MS + 301_000L
+        setup.sender.send(snapshot())
+        setup.now = BASE_TIME_MS + 601_000L
+        setup.sender.send(snapshot())
+        setup.now = BASE_TIME_MS + 901_000L
         setup.sender.send(snapshot())
 
         assertEquals(2, setup.queue.items.size)
@@ -116,11 +132,12 @@ class CloudTelemetrySenderTest {
     private fun snapshot(
         charging: Boolean = false,
         speedKmh: Double = 0.0,
+        soc: Int = 50,
     ) = VehicleTelemetrySnapshot(
         capturedAtMs = 1_700_000_000_000L,
         deviceTimeIso = "2023-11-14T22:13:20Z",
         diPlusData = null,
-        soc = 50,
+        soc = soc,
         speedKmh = speedKmh,
         powerKw = if (charging) -7.0 else 0.0,
         batteryTempC = null,
