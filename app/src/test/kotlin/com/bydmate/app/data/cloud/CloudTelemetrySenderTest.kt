@@ -21,42 +21,29 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class CloudTelemetrySenderTest {
     @Test
-    fun `charging samples enqueue about every second without flushing before one minute`() = runTest {
+    fun `active samples enqueue every second and flush every fifteen seconds`() = runTest {
         val setup = setup()
 
-        for (second in 1..59) {
-            setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.send(snapshot(charging = true))
-        }
-
-        assertEquals(59, setup.queue.items.count { it.sentAt == null })
-        assertEquals(0, setup.client.payloads.size)
-    }
-
-    @Test
-    fun `charging samples flush as one batch each minute`() = runTest {
-        val setup = setup()
-
-        for (second in 1..60) {
+        for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
             setup.sender.send(snapshot(charging = true))
         }
 
         assertEquals(1, setup.client.payloads.size)
         val samples = JSONObject(setup.client.payloads.single()).getJSONArray("samples")
-        assertEquals(60, samples.length())
+        assertEquals(15, samples.length())
         assertEquals(0, setup.queue.items.count { it.sentAt == null })
     }
 
     @Test
-    fun `moving samples still enqueue about every 60 seconds`() = runTest {
+    fun `moving samples enqueue every second`() = runTest {
         val setup = setup()
 
         setup.now = BASE_TIME_MS + 1_000L
         setup.sender.send(snapshot(speedKmh = 10.0))
-        setup.now = BASE_TIME_MS + 60_000L
+        setup.now = BASE_TIME_MS + 1_500L
         setup.sender.send(snapshot(speedKmh = 10.0))
-        setup.now = BASE_TIME_MS + 61_000L
+        setup.now = BASE_TIME_MS + 2_000L
         setup.sender.send(snapshot(speedKmh = 10.0))
 
         assertEquals(2, setup.queue.items.size)
@@ -77,25 +64,25 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
-    fun `retry keeps accumulated charging samples for later batch`() = runTest {
+    fun `retry keeps accumulated active samples for later batch`() = runTest {
         val setup = setup(results = ArrayDeque(listOf(CloudSendResult.RetryableFailure("offline"))))
 
-        for (second in 1..60) {
+        for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
             setup.sender.send(snapshot(charging = true))
         }
 
         assertEquals(1, setup.client.payloads.size)
-        assertEquals(60, setup.queue.items.count { it.sentAt == null })
+        assertEquals(15, setup.queue.items.count { it.sentAt == null })
         assertTrue(setup.queue.items.all { it.attempts == 1 })
 
         setup.client.results.add(CloudSendResult.Success("{}"))
-        setup.now = BASE_TIME_MS + 120_000L
+        setup.now = BASE_TIME_MS + 30_000L
         setup.sender.send(snapshot(charging = true))
 
         assertEquals(2, setup.client.payloads.size)
         val retrySamples = JSONObject(setup.client.payloads.last()).getJSONArray("samples")
-        assertEquals(60, retrySamples.length())
+        assertEquals(15, retrySamples.length())
         assertEquals(1, setup.queue.items.count { it.sentAt == null })
     }
 
@@ -109,6 +96,7 @@ class CloudTelemetrySenderTest {
                 SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID to "way",
                 SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC to "60",
                 SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY to "false",
+                SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS to "false",
             )
         )
         val queue = FakeCloudSyncQueueDao()

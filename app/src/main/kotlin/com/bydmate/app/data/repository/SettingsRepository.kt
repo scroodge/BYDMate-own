@@ -48,6 +48,8 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_VEHICLE_ID = "cloud_sync_vehicle_id"
         const val KEY_CLOUD_SYNC_INTERVAL_SEC = "cloud_sync_interval_sec"
         const val KEY_CLOUD_SYNC_WIFI_ONLY = "cloud_sync_wifi_only"
+        /** When true, cloud payloads send location {} even if GPS is available. */
+        const val KEY_CLOUD_SYNC_OMIT_GPS = "cloud_sync_omit_gps"
         const val KEY_CLOUD_SYNC_LAST_OK = "cloud_sync_last_ok"
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"

@@ -662,7 +662,15 @@ class TrackingService : Service(), LocationListener {
                                     }
                                 }.getOrNull()
                             } else null
-                            val locationForCloud = if (hasLocationPermission()) loc else null
+                            val omitGps = settingsRepository.getString(
+                                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS,
+                                "false",
+                            ) == "true"
+                            val locationForCloud = when {
+                                omitGps -> null
+                                !hasLocationPermission() -> null
+                                else -> loc
+                            }
                             val telemetrySnapshot = VehicleTelemetrySnapshot.from(
                                 data = data,
                                 battery = telemetryBattery,

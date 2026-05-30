@@ -1,5 +1,65 @@
 # Project Notes
 
+## 2026-05-29: Смена имени машины в APK ломает очередь и разрывает историю телеметрии
+
+### Диагноз
+
+Баг воспроизводится по следующей цепочке:
+
+1. `CloudTelemetryPayload.build(vehicleId, snapshot)` запекает `vehicle_id` **в JSON payload** в момент постановки в очередь (`CloudSyncQueueDao`).
+2. При flush `CloudTelemetrySender.flushQueue()` читает **актуальный** `config.vehicleId` из `SettingsRepository` и ставит его в заголовок `X-Vehicle-Id`.
+3. Если между enqueue и flush пользователь изменил `cloud_sync_vehicle_id` в настройках:
+   - header: `X-Vehicle-Id: new_name`
+   - body payload: `"vehicle_id": "old_name"`
+   - Backend: `400 Vehicle ID mismatch` (non-retryable).
+4. APK помечает **все items текущего batch** как `finished + error` и удаляет из очереди.
+5. В переходный период новые samples тоже оказываются в mixed batch вместе со старыми — они тоже теряются.
+
+Дополнительно: все таблицы телеметрии в Supabase (`bydmate_telemetry_samples`,
+`bydmate_live_snapshots`, `bydmate_trips`) хранят `vehicle_id` как часть ключа,
+поэтому история до/после переименования оказывается разорвана.
+
+### Затронутые файлы (APK)
+
+- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetrySender.kt`:
+  `flushQueue()` — именно здесь несоответствие header vs payload
+- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetryPayload.kt`:
+  `build()` — запекает `vehicleId` в JSON
+
+### Статус
+
+Задокументировано. План исправления — см. ниже.
+Воркэраунд для пользователей: обновлять `cars.vehicle_alias` в VoltFlow перед сменой
+имени в APK, после смены — дождаться очистки очереди (или переустановить APK).
+
+
+
+## 2026-05-30: Database architecture + Cloud Sync cadence update
+
+### VoltFlow (cloud)
+
+Applied migrations and app features — full reference in EvAcChargeTimer
+`supabase/TELEMETRY.md`:
+
+- 90-day raw sample retention, 3-year hourly retention
+- Trip `regen_energy_kwh` / `traction_energy_kwh` at trip close
+- Hourly `regen_kwh_sum` / `traction_kwh_sum`
+- Realtime on `bydmate_live_snapshots`
+- Home charger geofence on `cars` + auto home tariff on session start
+- Vehicle analytics UI + export APIs
+- Charge finish projection on active session screen
+
+### APK Cloud Sync (new behavior)
+
+- **Moving + charging:** enqueue every **1 s**; HTTP flush every **15 s** (batch up to 15 samples).
+- **Idle:** heartbeat every **5 min**; skip up to **2** consecutive unchanged samples (SOC/charging/power).
+- **Payload:** idle = slim JSON; moving/charging include `power_kw`; null fields omitted; bad GPS (>30 m accuracy) dropped before enqueue.
+- **GPS privacy:** Settings → Cloud Sync → **Don't send GPS to cloud** (`cloud_sync_omit_gps`). Sends `location: {}`; no server track points.
+
+Contract: `docs/cloud-telemetry-contract-ru.md`.
+
+---
+
 ## 2026-05-22: С какой частотой данные отправляются на сервер?
 
 Короткий ответ: локальная телеметрия читается раз в 1 секунду. На сервер сейчас отправляется только VoltFlow Cloud Sync; ABRP/Iternio отключён из runtime-пути и скрыт из настроек.
@@ -15,25 +75,23 @@
 
 ### VoltFlow Cloud Sync
 
-Cloud Sync включается настройкой `cloud_sync_enabled`. `TrackingService` пробует вызвать `maybeSendCloudTelemetry()` на каждом успешном 1-секундном тике, но `CloudTelemetrySender` сам решает, надо ли класть новый снимок в очередь. Это сделано, чтобы внутри авто данные обновлялись часто, а облако и база не получали лишние записи:
+Cloud Sync включается настройкой `cloud_sync_enabled`. `TrackingService` пробует вызвать `maybeSendCloudTelemetry()` на каждом успешном 1-секундном тике, но `CloudTelemetrySender` сам решает, надо ли класть новый снимок в очередь:
 
-- машина движется (`speed > 0.5 km/h`): новый sample раз в 60 секунд;
-- зарядка (`isCharging == true` или мощность зарядки больше `0.1 kW`): локально новый sample примерно раз в 1 секунду;
-- стоим/парковка: heartbeat раз в 5 минут;
-- при смене состояния движение/зарядка sample кладется сразу.
+- **движение или зарядка:** новый sample раз в **1 секунду**;
+- **стоянка:** heartbeat раз в **5 минут**;
+- **idle skip:** до **2** подряд неизменённых idle-сэмплов (SOC, charging, power) могут не ставиться в очередь;
+- при смене состояния движение/зарядка sample кладётся сразу.
 
-Отдельно от частоты samples есть flush очереди на сервер:
+Flush очереди на сервер:
 
-- сразу, если накопилось 120 samples;
-- сразу при смене состояния, кроме charging-переходов;
-- во время зарядки раз в минуту одной пачкой накопленных charging samples за прошлую минуту;
-- иначе по настройке `cloud_sync_interval_sec`, по умолчанию 60 секунд, допустимый диапазон 5-300 секунд.
+- **движение/зарядка:** batch до **15** samples каждые **15 секунд**;
+- **idle:** по настройке `cloud_sync_interval_sec` (default 60 с, диапазон 5–300), batch до 120 samples;
+- сразу при смене состояния (кроме charging-переходов);
+- если Wi-Fi only и Wi-Fi нет — samples копятся локально.
 
-В нормальном режиме движения это означает примерно 1 HTTP-запрос в минуту с 1 свежим sample. Во время зарядки приложение пишет около 60 локальных samples за минуту и отправляет их одним batch payload раз в минуту. Если связи нет или включен Wi-Fi only без Wi-Fi, samples копятся локально и потом уходят батчем.
-
-Если включен режим Wi-Fi only и Wi-Fi нет, samples остаются в локальной очереди и не отправляются до появления Wi-Fi.
+GPS privacy: при включённом `cloud_sync_omit_gps` location не передаётся (`location: {}`).
 
 Код:
-- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetrySender.kt`: `decide()`, `MOVING_SAMPLE_INTERVAL_MS`, `CHARGING_SAMPLE_INTERVAL_MS`, `STOPPED_HEARTBEAT_INTERVAL_MS`.
-- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetrySender.kt`: `flushIntervalSec`, `MAX_BATCH_SIZE`.
-- `app/src/main/kotlin/com/bydmate/app/service/TrackingService.kt`: `maybeSendCloudTelemetry()`.
+- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetrySender.kt`
+- `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetryPayload.kt`
+- `docs/cloud-telemetry-contract-ru.md`

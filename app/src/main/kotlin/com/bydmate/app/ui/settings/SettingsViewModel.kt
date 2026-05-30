@@ -127,6 +127,7 @@ data class SettingsUiState(
     val cloudSyncVehicleId: String = "",
     val cloudSyncIntervalSec: String = SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
     val cloudSyncWifiOnly: Boolean = false,
+    val cloudSyncOmitGps: Boolean = false,
     val cloudSyncStatus: String? = null,
     val appLanguage: String = SettingsRepository.DEFAULT_APP_LANGUAGE,
 )
@@ -221,6 +222,7 @@ class SettingsViewModel @Inject constructor(
                 SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC
             )
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
+            val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncStatus = formatCloudSyncStatus()
             val appLanguage = settingsRepository.getString(
                 SettingsRepository.KEY_APP_LANGUAGE,
@@ -259,6 +261,7 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncVehicleId = cloudSyncVehicleId,
                     cloudSyncIntervalSec = cloudSyncIntervalSec,
                     cloudSyncWifiOnly = cloudSyncWifiOnly,
+                    cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncStatus = cloudSyncStatus,
                     appLanguage = appLanguage,
                 )
@@ -731,6 +734,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleCloudSyncOmitGps(enabled: Boolean) {
+        _uiState.update { it.copy(cloudSyncOmitGps = enabled) }
+        viewModelScope.launch {
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, enabled.toString())
+        }
+    }
+
     fun saveCloudSyncSettings() {
         val state = _uiState.value
         viewModelScope.launch {
@@ -742,6 +752,7 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, state.cloudSyncOmitGps.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
             val status = if (url.isBlank()) {
                 cloudText("Endpoint URL пустой", "Endpoint URL пусты", "Endpoint URL is empty")
@@ -771,6 +782,7 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, state.cloudSyncOmitGps.toString())
             val canEnableLiveSync = url.startsWith("https://", ignoreCase = true) &&
                 state.cloudSyncVehicleId.trim().isNotBlank()
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, canEnableLiveSync.toString())

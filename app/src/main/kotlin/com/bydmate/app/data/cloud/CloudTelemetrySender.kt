@@ -10,6 +10,7 @@ import com.bydmate.app.data.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.abs
 
 @Singleton
 class CloudTelemetrySender @Inject constructor(
@@ -22,7 +23,11 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastFlushAttemptMs: Long = 0L
     @Volatile private var lastMoving: Boolean? = null
     @Volatile private var lastCharging: Boolean? = null
-    @Volatile private var chargingBatchStartedMs: Long = 0L
+    @Volatile private var activeBatchStartedMs: Long = 0L
+    @Volatile private var idleUnchangedCycles: Int = 0
+    @Volatile private var lastIdleSoc: Int? = null
+    @Volatile private var lastIdleCharging: Boolean? = null
+    @Volatile private var lastIdlePowerKw: Double? = null
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
 
     suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
@@ -37,13 +42,14 @@ class CloudTelemetrySender @Inject constructor(
         val now = nowProvider()
         queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
 
-        val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot)
+        val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
         val decision = decide(snapshot, now)
         if (decision.enqueue) {
+            val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
             queueDao.insert(pendingQueueEntity(payload, now))
             lastQueuedSampleMs = now
-            if (decision.chargingSample && chargingBatchStartedMs == 0L) {
-                chargingBatchStartedMs = now - CHARGING_SAMPLE_INTERVAL_MS
+            if (decision.activeSample && activeBatchStartedMs == 0L) {
+                activeBatchStartedMs = now
             }
         }
 
@@ -54,18 +60,19 @@ class CloudTelemetrySender @Inject constructor(
             return Result.success(Unit)
         }
 
-        val chargingBatchMode = decision.chargingBatchMode || chargingBatchStartedMs != 0L
-        val flushIntervalMs = if (chargingBatchMode) {
-            CHARGING_FLUSH_INTERVAL_MS
+        val activeBatchMode = decision.activeBatchMode || activeBatchStartedMs != 0L
+        val flushIntervalMs = if (activeBatchMode) {
+            ACTIVE_FLUSH_INTERVAL_MS
         } else {
             config.flushIntervalSec * 1000L
         }
-        val intervalElapsed = if (chargingBatchMode) {
-            chargingBatchStartedMs != 0L && now - chargingBatchStartedMs >= flushIntervalMs
+        val intervalElapsed = if (activeBatchMode) {
+            activeBatchStartedMs != 0L && now - activeBatchStartedMs >= flushIntervalMs
         } else {
             now - lastFlushAttemptMs >= flushIntervalMs
         }
-        val shouldFlush = unsentCount >= MAX_BATCH_SIZE ||
+        val batchSize = if (activeBatchMode) ACTIVE_BATCH_SIZE else MAX_BATCH_SIZE
+        val shouldFlush = unsentCount >= batchSize ||
             decision.flushNow ||
             (unsentCount > 0 && intervalElapsed)
 
@@ -75,15 +82,14 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         lastFlushAttemptMs = now
-        val batchSize = if (chargingBatchMode) CHARGING_BATCH_SIZE else MAX_BATCH_SIZE
-        return if (flushQueue(config, now, batchSize, drainAll = !chargingBatchMode)) {
-            if (chargingBatchMode) chargingBatchStartedMs = 0L
+        return if (flushQueue(config, now, batchSize, drainAll = !activeBatchMode)) {
+            if (activeBatchMode) activeBatchStartedMs = 0L
             val remaining = queueDao.countUnsent()
             saveStatus(ok = true, message = "OK; queued $remaining")
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.success(Unit)
         } else {
-            if (chargingBatchMode) chargingBatchStartedMs = now
+            if (activeBatchMode) activeBatchStartedMs = now
             val remaining = queueDao.countUnsent()
             val message = "queued $remaining; waiting for retry"
             saveStatus(ok = false, message = message)
@@ -97,7 +103,8 @@ class CloudTelemetrySender @Inject constructor(
             saveStatus(ok = false, message = error.message ?: "Ошибка настроек")
             return Result.failure(error)
         }
-        val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot)
+        val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
+        val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
             is CloudSendResult.Success -> {
                 saveStatus(ok = true, message = "Test OK")
@@ -144,9 +151,12 @@ class CloudTelemetrySender @Inject constructor(
 
     private fun decide(snapshot: VehicleTelemetrySnapshot, now: Long): QueueDecision {
         val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
-        val charging = snapshot.isCharging == true || kotlin.math.abs(snapshot.chargePowerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        val charging = snapshot.isCharging == true ||
+            abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        val active = moving || charging
+        val previousMoving = lastMoving
         val previousCharging = lastCharging
-        val stateChanged = lastMoving?.let { it != moving } == true ||
+        val stateChanged = previousMoving?.let { it != moving } == true ||
             previousCharging?.let { it != charging } == true
         lastMoving = moving
         lastCharging = charging
@@ -156,13 +166,40 @@ class CloudTelemetrySender @Inject constructor(
             charging -> CHARGING_SAMPLE_INTERVAL_MS
             else -> STOPPED_HEARTBEAT_INTERVAL_MS
         }
-        val enqueue = stateChanged || lastQueuedSampleMs == 0L || now - lastQueuedSampleMs >= minSampleIntervalMs
-        val chargingTransition = stateChanged && (charging || previousCharging == true)
+
+        var enqueue = stateChanged || lastQueuedSampleMs == 0L || now - lastQueuedSampleMs >= minSampleIntervalMs
+
+        if (!active && enqueue && !stateChanged) {
+            val soc = snapshot.soc?.toInt()
+            val power = snapshot.powerKw ?: 0.0
+            val unchanged = soc != null &&
+                soc == lastIdleSoc &&
+                charging == (lastIdleCharging ?: false) &&
+                abs(power - (lastIdlePowerKw ?: 0.0)) < 0.05
+            if (unchanged) {
+                idleUnchangedCycles += 1
+                if (idleUnchangedCycles <= IDLE_UNCHANGED_SKIP_CYCLES) {
+                    enqueue = false
+                }
+            } else {
+                idleUnchangedCycles = 0
+                lastIdleSoc = soc
+                lastIdleCharging = charging
+                lastIdlePowerKw = power
+            }
+        } else if (active || stateChanged) {
+            idleUnchangedCycles = 0
+            lastIdleSoc = snapshot.soc?.toInt()
+            lastIdleCharging = charging
+            lastIdlePowerKw = snapshot.powerKw ?: 0.0
+        }
+
+        val activeTransition = stateChanged && (active || previousCharging == true || previousMoving == true)
         return QueueDecision(
             enqueue = enqueue,
-            flushNow = stateChanged && !chargingTransition,
-            chargingBatchMode = charging || previousCharging == true,
-            chargingSample = charging,
+            flushNow = stateChanged && !activeTransition,
+            activeBatchMode = active || previousCharging == true || previousMoving == true,
+            activeSample = active,
         )
     }
 
@@ -220,19 +257,20 @@ class CloudTelemetrySender @Inject constructor(
     private data class QueueDecision(
         val enqueue: Boolean,
         val flushNow: Boolean,
-        val chargingBatchMode: Boolean,
-        val chargingSample: Boolean,
+        val activeBatchMode: Boolean,
+        val activeSample: Boolean,
     )
 
     private companion object {
         const val MAX_QUEUE_ROWS = 1000
         const val MAX_BATCH_SIZE = 120
-        const val CHARGING_BATCH_SIZE = 60
+        const val ACTIVE_BATCH_SIZE = 15
         const val MOVING_SPEED_THRESHOLD_KMH = 0.5
         const val CHARGING_POWER_THRESHOLD_KW = 0.1
-        const val MOVING_SAMPLE_INTERVAL_MS = 60_000L
+        const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
         const val CHARGING_SAMPLE_INTERVAL_MS = 1_000L
-        const val CHARGING_FLUSH_INTERVAL_MS = 60_000L
+        const val ACTIVE_FLUSH_INTERVAL_MS = 15_000L
         const val STOPPED_HEARTBEAT_INTERVAL_MS = 5L * 60_000L
+        const val IDLE_UNCHANGED_SKIP_CYCLES = 2
     }
 }

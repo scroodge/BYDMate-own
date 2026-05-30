@@ -513,6 +513,29 @@ fun SettingsScreen(
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Don't send GPS to cloud",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                )
+                                Text(
+                                    "Live SOC and charging still sync; route maps stay empty on the server.",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Switch(
+                                checked = state.cloudSyncOmitGps,
+                                onCheckedChange = { viewModel.toggleCloudSyncOmitGps(it) },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
