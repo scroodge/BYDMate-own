@@ -59,10 +59,20 @@ VoltFlow Mate читает live-данные машины через **BYDMATE.*
 2. Выдайте разрешения на локацию и хранилище.
 3. Нажмите кнопку "Запустить" и убедитесь что данные запускаются.
 4. Зарегестрируйтесь в VoltFlow по этой ссылке (https://github.com/scroodge/VoltFlow/blob/main/INSTALL.md)
-5. В приложении VoltFlow зайдите в меню настроек и перейдите в раздел VoltFlow Mate и нажмите кнопку "Generate key"
-6. Скопируйте ключ и вставьте его в приложении BYDMATE в поле "API Key"
-7. Нажмите кнопку "TEST" и при положительном результате нажмите кнопку "Save" и переключатель Синхронизация VoltFlow Mate в положение "Вкл"
-9. Убедитесь что при включеной машине в приложении VoltFlow Mate в разделе "Авто" отображаются данные о машине.
+5. В VoltFlow откройте **Настройки → VoltFlow Mate** и нажмите **Подключить BYDMate** — появится 6-значный код (действует 10 минут).
+6. В **VoltFlow Mate** (экран шлюза или Настройки → Cloud Sync) введите код и нажмите **Подключить**. Полный API key не нужен; в **Дополнительно** — ручная вставка ключа для отладки.
+7. Укажите имя авто (должно совпадать с `vehicle_id` в облаке, например `way`), нажмите **Send test**, затем **Save** и включите синхронизацию.
+8. Убедитесь, что в веб-приложении VoltFlow в разделе **Авто** появляются live-данные при включённой машине.
+
+### Подключение к VoltFlow (кратко)
+
+| Где | Действие |
+|-----|----------|
+| VoltFlow (телефон/браузер) | **Настройки → VoltFlow Mate → Подключить BYDMate** → 6 цифр, 10 минут |
+| VoltFlow Mate (DiLink) | **Код из VoltFlow** → **Подключить** → имя авто → **Send test** → **Save** |
+| Уже настроенные установки | Старый вставленный API key продолжает работать; переподключение нужно только после **Generate key** в VoltFlow или очистки данных приложения |
+
+Контракт API: [VoltFlow `supabase/BYDMATE_APK_API.md`](https://github.com/scroodge/VoltFlow/blob/main/supabase/BYDMATE_APK_API.md) (или ваш fork EvAcChargeTimer). Детали wire format: [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md).
 
 ---
 
@@ -181,6 +191,17 @@ git push origin main v0.2.3
 - osmdroid / OpenStreetMap.
 - WorkManager для фоновой работы.
 - Min SDK 29, Target SDK 29, Compile SDK 34.
+
+---
+
+## Документация
+
+| Файл | Содержание |
+|------|------------|
+| [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md) | HTTPS ingest, заголовки, cadence, GPS privacy, **6-значное подключение** |
+| [docs/project-notes.md](docs/project-notes.md) | Заметки разработчика (vehicle_id, VoltFlow, Cloud Sync) |
+| VoltFlow `supabase/BYDMATE_APK_API.md` | Серверный контракт: telemetry, `link-code`, `redeem` |
+| VoltFlow `supabase/TELEMETRY.md` | Схема БД и pairing на стороне облака |
 
 ---
 

@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.cloud.CloudTelemetrySender
+import com.bydmate.app.data.cloud.VoltflowLinkClient
+import com.bydmate.app.data.cloud.VoltflowLinkResult
 import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.dao.IdleDrainDao
@@ -129,6 +131,9 @@ data class SettingsUiState(
     val cloudSyncWifiOnly: Boolean = false,
     val cloudSyncOmitGps: Boolean = false,
     val cloudSyncStatus: String? = null,
+    val cloudSyncLinkCode: String = "",
+    val cloudSyncAdvancedOpen: Boolean = false,
+    val cloudSyncLinking: Boolean = false,
     val appLanguage: String = SettingsRepository.DEFAULT_APP_LANGUAGE,
 )
 
@@ -146,7 +151,8 @@ class SettingsViewModel @Inject constructor(
     private val insightsManager: InsightsManager,
     private val adbOnDeviceClient: AdbOnDeviceClient,
     private val batteryStateRepository: BatteryStateRepository,
-    private val cloudTelemetrySender: CloudTelemetrySender? = null
+    private val cloudTelemetrySender: CloudTelemetrySender? = null,
+    private val voltflowLinkClient: VoltflowLinkClient,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState(
@@ -705,6 +711,79 @@ class SettingsViewModel @Inject constructor(
 
     fun updateCloudSyncApiKey(value: String) {
         _uiState.update { it.copy(cloudSyncApiKey = value) }
+    }
+
+    fun updateCloudSyncLinkCode(value: String) {
+        _uiState.update { it.copy(cloudSyncLinkCode = value.filter { ch -> ch.isDigit() }.take(6)) }
+    }
+
+    fun toggleCloudSyncAdvanced() {
+        _uiState.update { it.copy(cloudSyncAdvancedOpen = !it.cloudSyncAdvancedOpen) }
+    }
+
+    fun redeemVoltflowLinkCode() {
+        val state = _uiState.value
+        if (state.cloudSyncLinkCode.length != 6) {
+            _uiState.update {
+                it.copy(
+                    cloudSyncStatus = cloudText(
+                        "Введите 6-значный код из VoltFlow",
+                        "Увядзіце 6-значны код з VoltFlow",
+                        "Enter the 6-digit code from VoltFlow",
+                    ),
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    cloudSyncLinking = true,
+                    cloudSyncStatus = cloudText(
+                        "Подключение к VoltFlow…",
+                        "Падключэнне да VoltFlow…",
+                        "Connecting to VoltFlow…",
+                    ),
+                )
+            }
+
+            val telemetryUrl = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
+            when (val result = voltflowLinkClient.redeem(telemetryUrl, state.cloudSyncLinkCode)) {
+                is VoltflowLinkResult.Success -> {
+                    settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, result.apiKey)
+                    settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, result.endpointUrl)
+                    _uiState.update {
+                        it.copy(
+                            cloudSyncApiKey = result.apiKey,
+                            cloudSyncUrl = result.endpointUrl,
+                            cloudSyncLinkCode = "",
+                            cloudSyncLinking = false,
+                            cloudSyncStatus = cloudText(
+                                "VoltFlow подключен. Сохраните настройки или отправьте тест.",
+                                "VoltFlow падключаны. Захавайце налады або адправіць тэст.",
+                                "VoltFlow linked. Save settings or send a test.",
+                            ),
+                        )
+                    }
+                    if (state.cloudSyncVehicleId.trim().isNotBlank()) {
+                        sendCloudTestPayload()
+                    }
+                }
+                is VoltflowLinkResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            cloudSyncLinking = false,
+                            cloudSyncStatus = cloudText(
+                                "Ошибка подключения: ${result.message}",
+                                "Памылка падключэння: ${result.message}",
+                                "Link failed: ${result.message}",
+                            ),
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun updateCloudSyncVehicleId(value: String) {

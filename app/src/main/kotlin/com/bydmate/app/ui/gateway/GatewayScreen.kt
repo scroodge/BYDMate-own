@@ -105,12 +105,18 @@ fun GatewayScreen(
             enabled = state.cloudSyncEnabled,
             url = state.cloudSyncUrl,
             apiKey = state.cloudSyncApiKey,
+            linkCode = state.cloudSyncLinkCode,
+            advancedOpen = state.cloudSyncAdvancedOpen,
+            linking = state.cloudSyncLinking,
             vehicleId = state.cloudSyncVehicleId,
             intervalSec = state.cloudSyncIntervalSec,
             wifiOnly = state.cloudSyncWifiOnly,
             status = state.cloudSyncStatus,
             onEnabled = viewModel::toggleCloudSync,
             onUrl = viewModel::updateCloudSyncUrl,
+            onLinkCode = viewModel::updateCloudSyncLinkCode,
+            onConnect = viewModel::redeemVoltflowLinkCode,
+            onToggleAdvanced = viewModel::toggleCloudSyncAdvanced,
             onApiKey = viewModel::updateCloudSyncApiKey,
             onVehicleId = viewModel::updateCloudSyncVehicleId,
             onInterval = viewModel::updateCloudSyncIntervalSec,
@@ -286,12 +292,18 @@ private fun CloudSyncCard(
     enabled: Boolean,
     url: String,
     apiKey: String,
+    linkCode: String,
+    advancedOpen: Boolean,
+    linking: Boolean,
     vehicleId: String,
     intervalSec: String,
     wifiOnly: Boolean,
     status: String?,
     onEnabled: (Boolean) -> Unit,
     onUrl: (String) -> Unit,
+    onLinkCode: (String) -> Unit,
+    onConnect: () -> Unit,
+    onToggleAdvanced: () -> Unit,
     onApiKey: (String) -> Unit,
     onVehicleId: (String) -> Unit,
     onInterval: (String) -> Unit,
@@ -321,8 +333,34 @@ private fun CloudSyncCard(
             placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
         )
         GatewayHint(strings.endpointHint)
-        GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
-        GatewayHint(strings.apiKeyHint)
+        GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
+        GatewayHint(strings.linkCodeHint)
+        Button(
+            onClick = onConnect,
+            enabled = !linking && linkCode.length == 6,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+        ) {
+            Text(
+                if (linking) strings.connecting else strings.connect,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Button(
+            onClick = onToggleAdvanced,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+        ) {
+            Text(strings.advanced, fontWeight = FontWeight.Medium)
+        }
+        if (advancedOpen) {
+            Spacer(modifier = Modifier.height(8.dp))
+            GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
+            GatewayHint(strings.apiKeyHint)
+        }
         GatewayTextField(strings.carName, vehicleId, onVehicleId, KeyboardType.Text)
         GatewayHint(strings.carNameHint)
         GatewayTextField(strings.interval, intervalSec, onInterval, KeyboardType.Number)
@@ -464,6 +502,11 @@ private data class GatewayStrings(
     val endpointUrl: String,
     val endpointHint: String,
     val apiKeyHint: String,
+    val linkCode: String,
+    val linkCodeHint: String,
+    val connect: String,
+    val connecting: String,
+    val advanced: String,
     val carName: String,
     val carNameHint: String,
     val interval: String,
@@ -502,6 +545,11 @@ private fun gatewayStrings(language: String): GatewayStrings =
             endpointUrl = "Endpoint URL",
             endpointHint = "Endpoint уже указан по умолчанию. Его можно заменить своим HTTPS URL.",
             apiKeyHint = "API Key берется в VoltFlow: Настройки -> CloudSync.",
+            linkCode = "Код из VoltFlow",
+            linkCodeHint = "6 цифр из VoltFlow: Настройки → VoltFlow Mate → Подключить BYDMate.",
+            connect = "Подключить",
+            connecting = "Подключение…",
+            advanced = "Дополнительно",
             carName = "Ваше имя авто",
             carNameHint = "Например: Tang, Seal, Leopard 3 или любое удобное имя машины.",
             interval = "Интервал отправки, сек",
@@ -537,6 +585,11 @@ private fun gatewayStrings(language: String): GatewayStrings =
             endpointUrl = "Endpoint URL",
             endpointHint = "Endpoint is filled in by default. You can replace it with your own HTTPS URL.",
             apiKeyHint = "API Key is in VoltFlow: Settings -> CloudSync.",
+            linkCode = "Code from VoltFlow",
+            linkCodeHint = "6 digits from VoltFlow: Settings → VoltFlow Mate → Link BYDMate.",
+            connect = "Connect",
+            connecting = "Connecting…",
+            advanced = "Advanced",
             carName = "Your car name",
             carNameHint = "For example: Tang, Seal, Leopard 3, or any convenient car name.",
             interval = "Send interval, sec",
@@ -572,6 +625,11 @@ private fun gatewayStrings(language: String): GatewayStrings =
             endpointUrl = "Endpoint URL",
             endpointHint = "Endpoint ужо пазначаны па змаўчанні. Яго можна замяніць сваім HTTPS URL.",
             apiKeyHint = "API Key бярэцца ў VoltFlow: Налады -> CloudSync.",
+            linkCode = "Код з VoltFlow",
+            linkCodeHint = "6 лічбаў з VoltFlow: Налады → VoltFlow Mate → Злучыць BYDMate.",
+            connect = "Злучыць",
+            connecting = "Падключэнне…",
+            advanced = "Дадаткова",
             carName = "Ваша імя аўто",
             carNameHint = "Напрыклад: Tang, Seal, Leopard 3 або любое зручнае імя машыны.",
             interval = "Інтэрвал адпраўкі, сек",

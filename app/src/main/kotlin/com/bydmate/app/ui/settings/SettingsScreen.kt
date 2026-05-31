@@ -474,12 +474,48 @@ fun SettingsScreen(
                         )
                         CloudSyncHint("Endpoint уже указан по умолчанию. Его можно заменить своим HTTPS URL.")
                         SettingsTextField(
-                            label = "API Key",
-                            value = state.cloudSyncApiKey,
-                            onValueChange = { viewModel.updateCloudSyncApiKey(it) },
-                            keyboardType = KeyboardType.Password
+                            label = "Код из VoltFlow",
+                            value = state.cloudSyncLinkCode,
+                            onValueChange = { viewModel.updateCloudSyncLinkCode(it) },
+                            keyboardType = KeyboardType.Number
                         )
-                        CloudSyncHint("API Key берется в VoltFlow: Настройки -> CloudSync.")
+                        CloudSyncHint("6 цифр из VoltFlow: Настройки → VoltFlow Mate → Подключить BYDMate.")
+                        Button(
+                            onClick = { viewModel.redeemVoltflowLinkCode() },
+                            enabled = !state.cloudSyncLinking && state.cloudSyncLinkCode.length == 6,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = AccentGreen,
+                                contentColor = NavyDark
+                            )
+                        ) {
+                            Text(
+                                if (state.cloudSyncLinking) "Подключение…" else "Подключить",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Button(
+                            onClick = { viewModel.toggleCloudSyncAdvanced() },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CardSurfaceElevated,
+                                contentColor = TextPrimary
+                            )
+                        ) {
+                            Text("Дополнительно", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                        if (state.cloudSyncAdvancedOpen) {
+                            SettingsTextField(
+                                label = "API Key",
+                                value = state.cloudSyncApiKey,
+                                onValueChange = { viewModel.updateCloudSyncApiKey(it) },
+                                keyboardType = KeyboardType.Password
+                            )
+                            CloudSyncHint("API Key берется в VoltFlow: Настройки -> CloudSync.")
+                        }
                         SettingsTextField(
                             label = "Ваше имя авто",
                             value = state.cloudSyncVehicleId,

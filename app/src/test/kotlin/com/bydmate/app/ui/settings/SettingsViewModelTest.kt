@@ -3,6 +3,7 @@ package com.bydmate.app.ui.settings
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.cloud.VoltflowLinkClient
 import com.bydmate.app.data.autoservice.AutoserviceClient
 import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.autoservice.ChargingReading
@@ -236,7 +237,8 @@ class SettingsViewModelTest {
             idleDrainDao = idleDrainDao,
             insightsManager = insightsManager,
             adbOnDeviceClient = FakeAdbClient(),
-            batteryStateRepository = batteryStateRepo
+            batteryStateRepository = batteryStateRepo,
+            voltflowLinkClient = VoltflowLinkClient(httpClient),
         )
     }
 

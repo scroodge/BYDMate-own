@@ -8,6 +8,9 @@
 
 ## [Unreleased]
 
+### Added
+- Подключение к VoltFlow по **6-значному коду** из веб-настроек (`VoltflowLinkClient`, redeem URL от telemetry endpoint). Ручной API key — в **Дополнительно** на экране шлюза и в Cloud Sync.
+
 ## [0.3.1] - 2026-05-31
 
 ### Fixed

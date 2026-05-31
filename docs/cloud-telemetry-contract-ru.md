@@ -5,21 +5,74 @@
 
 - `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetryPayload.kt`
 - `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetryClient.kt`
+- `app/src/main/kotlin/com/bydmate/app/data/cloud/VoltflowLinkClient.kt`
 - `app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetrySender.kt`
 - `app/src/main/kotlin/com/bydmate/app/data/remote/TelemetrySnapshot.kt`
 - `app/src/main/kotlin/com/bydmate/app/data/remote/DiParsClient.kt`
 
+## Подключение к VoltFlow (6-значный код)
+
+Предпочтительный способ получить `cloud_sync_api_key` — без копирования длинного
+ключа с телефона.
+
+### Шаги для пользователя
+
+1. В веб-приложении VoltFlow: **Настройки → VoltFlow Mate → Подключить BYDMate**.
+2. Запомните **6 цифр** (код действует **10 минут**, одноразовый).
+3. В VoltFlow Mate: экран **шлюза** или **Настройки → Cloud Sync** → поле **Код из VoltFlow** → **Подключить**.
+4. Укажите **имя авто** (`cloud_sync_vehicle_id`), совпадающее с `vehicle_id` в облаке.
+5. **Send test** → **Save** → включите Cloud Sync.
+
+Раздел **Дополнительно** — ручной ввод API key (отладка, свой хост VoltFlow).
+
+Уже настроенные установки с вставленным ключом **не требуют** переподключения,
+пока в VoltFlow не нажали **Generate key** (старый ключ перестаёт действовать).
+
+### Redeem (APK → сервер)
+
+Клиент: `VoltflowLinkClient.redeem(telemetryEndpointUrl, code)`.
+
+URL redeem выводится из endpoint телеметрии:
+
+```text
+https://<host>/api/bydmate/telemetry
+  → https://<host>/api/bydmate/link-code/redeem
+```
+
+Запрос:
+
+```http
+POST /api/bydmate/link-code/redeem
+Content-Type: application/json
+
+{ "code": "482913" }
+```
+
+Успех (`200`):
+
+```json
+{
+  "ok": true,
+  "api_key": "<64-char hex>",
+  "endpoint_url": "https://<host>/api/bydmate/telemetry"
+}
+```
+
+APK сохраняет `api_key` в `cloud_sync_api_key` и `endpoint_url` в `cloud_sync_url`.
+
+Ошибки: `401` неверный/истёкший код; `429` слишком много попыток (rate limit на сервере).
+
+Полный контракт: `supabase/BYDMATE_APK_API.md` в репозитории VoltFlow (EvAcChargeTimer).
+
 ## Transport
 
-APK отправляет `POST` на настроенный HTTPS endpoint.
+APK отправляет `POST` на настроенный HTTPS endpoint. URL должен начинаться с `https://`.
 
 Default endpoint:
 
 ```text
 https://volt-flow-beige.vercel.app/api/bydmate/telemetry
 ```
-
-Обязательное условие на стороне APK: URL должен начинаться с `https://`.
 
 Headers:
 

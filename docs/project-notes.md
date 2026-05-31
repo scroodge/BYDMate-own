@@ -34,9 +34,22 @@
 
 
 
+## 2026-05-31: 6-digit VoltFlow pairing
+
+- VoltFlow Settings: **Подключить BYDMate** → `POST /api/bydmate/link-code` → код 6 цифр, TTL 10 мин.
+- APK: `VoltflowLinkClient` → `POST …/link-code/redeem` → локально `cloud_sync_api_key` + URL.
+- UI: код + **Подключить** по умолчанию; API key в **Дополнительно** (Gateway + Settings).
+- Supabase: `bydmate_link_codes`, `bydmate_link_redeem_attempts` (см. VoltFlow migration `20260531120000_bydmate_link_codes.sql`).
+- Старые установки с вставленным ключом без изменений.
+
+---
+
 ## 2026-05-30: Database architecture + Cloud Sync cadence update
 
 ### VoltFlow (cloud)
+
+Pairing (2026-05-31): `bydmate_link_codes`, `link-code` / `redeem` API — see
+EvAcChargeTimer `supabase/BYDMATE_APK_API.md` and `supabase/TELEMETRY.md`.
 
 Applied migrations and app features — full reference in EvAcChargeTimer
 `supabase/TELEMETRY.md`:
