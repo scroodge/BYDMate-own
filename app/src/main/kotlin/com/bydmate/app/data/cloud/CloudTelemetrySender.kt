@@ -28,9 +28,11 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastIdleSoc: Int? = null
     @Volatile private var lastIdleCharging: Boolean? = null
     @Volatile private var lastIdlePowerKw: Double? = null
+    @Volatile private var pendingFlushNow: Boolean = false
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
 
-    suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
+    /** Fast path: queue a sample without blocking on HTTP flush. */
+    suspend fun enqueue(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
         if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") != "true") {
             return Result.success(Unit)
         }
@@ -44,6 +46,9 @@ class CloudTelemetrySender @Inject constructor(
 
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
         val decision = decide(snapshot, now)
+        if (decision.flushNow) {
+            pendingFlushNow = true
+        }
         if (decision.enqueue) {
             val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
             queueDao.insert(pendingQueueEntity(payload, now))
@@ -54,13 +59,34 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         val unsentCount = queueDao.countUnsent()
+        saveStatus(ok = true, message = "queued $unsentCount")
+        return Result.success(Unit)
+    }
+
+    /** Flush queued samples when interval/batch thresholds are met. Safe to skip if already flushing. */
+    suspend fun flushPending(): Result<Unit> {
+        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") != "true") {
+            return Result.success(Unit)
+        }
+        val config = readConfig().getOrElse { error ->
+            saveStatus(ok = false, message = error.message ?: "Ошибка настроек")
+            return Result.failure(error)
+        }
+
+        val now = nowProvider()
+        val unsentCount = queueDao.countUnsent()
+        if (unsentCount == 0) {
+            pendingFlushNow = false
+            return Result.success(Unit)
+        }
+
         if (config.wifiOnly && !isWifiConnected()) {
             saveStatus(ok = false, message = "queued $unsentCount; waiting for Wi-Fi")
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             return Result.success(Unit)
         }
 
-        val activeBatchMode = decision.activeBatchMode || activeBatchStartedMs != 0L
+        val activeBatchMode = activeBatchStartedMs != 0L
         val flushIntervalMs = if (activeBatchMode) {
             ACTIVE_FLUSH_INTERVAL_MS
         } else {
@@ -73,7 +99,7 @@ class CloudTelemetrySender @Inject constructor(
         }
         val batchSize = if (activeBatchMode) ACTIVE_BATCH_SIZE else MAX_BATCH_SIZE
         val shouldFlush = unsentCount >= batchSize ||
-            decision.flushNow ||
+            pendingFlushNow ||
             (unsentCount > 0 && intervalElapsed)
 
         if (!shouldFlush) {
@@ -83,6 +109,7 @@ class CloudTelemetrySender @Inject constructor(
 
         lastFlushAttemptMs = now
         return if (flushQueue(config, now, batchSize, drainAll = !activeBatchMode)) {
+            pendingFlushNow = false
             if (activeBatchMode) activeBatchStartedMs = 0L
             val remaining = queueDao.countUnsent()
             saveStatus(ok = true, message = "OK; queued $remaining")
@@ -96,6 +123,12 @@ class CloudTelemetrySender @Inject constructor(
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.failure(IllegalStateException(message))
         }
+    }
+
+    suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
+        val enqueueResult = enqueue(snapshot)
+        if (enqueueResult.isFailure) return enqueueResult
+        return flushPending()
     }
 
     suspend fun sendTest(snapshot: VehicleTelemetrySnapshot): Result<String?> {

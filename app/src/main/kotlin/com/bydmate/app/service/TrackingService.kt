@@ -135,7 +135,7 @@ class TrackingService : Service(), LocationListener {
     // gives visibility, not atomicity).
     private val pollGunInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val cloudInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val flushInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val TAG = "TrackingService"
@@ -408,7 +408,6 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun maybeSendCloudTelemetry(snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
-        if (!cloudInFlight.compareAndSet(false, true)) return
         serviceScope.launch {
             try {
                 if (settingsRepository.getString(
@@ -418,13 +417,31 @@ class TrackingService : Service(), LocationListener {
                 ) {
                     return@launch
                 }
-                cloudTelemetrySender.send(snapshot).onFailure { e ->
-                    Log.w(TAG, "Cloud Sync: ${e.message}")
+                cloudTelemetrySender.enqueue(snapshot).onFailure { e ->
+                    Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Cloud Sync: ${e.message}")
+                Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
+            }
+        }
+
+        if (!flushInFlight.compareAndSet(false, true)) return
+        serviceScope.launch {
+            try {
+                if (settingsRepository.getString(
+                        com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                        "false"
+                    ) != "true"
+                ) {
+                    return@launch
+                }
+                cloudTelemetrySender.flushPending().onFailure { e ->
+                    Log.w(TAG, "Cloud Sync flush: ${e.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Cloud Sync flush: ${e.message}")
             } finally {
-                cloudInFlight.set(false)
+                flushInFlight.set(false)
             }
         }
     }
