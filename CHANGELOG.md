@@ -8,8 +8,18 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-31
+
+### Fixed
+- Cloud Sync больше не теряет 1 Hz samples во время HTTP flush: enqueue и flush разделены, каждый секундный poll ставит sample в очередь даже если предыдущий batch ещё отправляется. Раньше `cloudInFlight` пропускал тики и в VoltFlow попадали ~15 точек на burst вместо ~15 точек в секунду.
+
 ### Changed
 - Cloud Sync batch-запросы стали устойчивее на медленном backend: таймауты чтения и записи увеличены до 45 секунд, charging flush отправляет по одной минутной пачке до 60 samples за тик, а HTTP-ошибки теперь сохраняют короткое тело ответа сервера для диагностики.
+
+## [0.3.0] - 2026-05-30
+
+### Changed
+- Cloud Sync при движении/зарядке: enqueue 1 s, HTTP flush каждые 15 s (batch до 15 samples); idle heartbeat 5 min; slim idle payload; optional GPS privacy (`cloud_sync_omit_gps`).
 
 ## [0.2.5] - 2026-05-26
 
@@ -42,6 +52,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/scroodge/BYDMate-own/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/scroodge/BYDMate-own/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/scroodge/BYDMate-own/compare/v0.2.2...v0.2.5
 [0.2.2]: https://github.com/scroodge/BYDMate-own/releases/tag/v0.2.2
