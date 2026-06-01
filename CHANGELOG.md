@@ -8,7 +8,10 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-01
+
 ### Added
+- **Автообновление APK:** при запуске (если включено) проверка GitHub Releases `scroodge/BYDMate-own`, диалог с release notes, скачивание и установка по согласию пользователя. Реализация портирована из upstream [AndyShaman/BYDMate](https://github.com/AndyShaman/BYDMate); блок «Обновления» на экране шлюза (переключатель + ручная проверка).
 - Подключение к VoltFlow по **6-значному коду** из веб-настроек (`VoltflowLinkClient`, redeem URL от telemetry endpoint). Ручной API key — в **Дополнительно** на экране шлюза и в Cloud Sync.
 
 ## [0.3.1] - 2026-05-31
@@ -55,7 +58,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scroodge/BYDMate-own/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/scroodge/BYDMate-own/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/scroodge/BYDMate-own/compare/v0.2.2...v0.2.5

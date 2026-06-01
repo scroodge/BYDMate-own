@@ -24,7 +24,8 @@
 
 | Иконка | Раздел | Что делает |
 |---|---|---|
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> |Передает данные с BYDMATE в облако | Берёт данные из BYDMATE `energydata` или DiPlus TripInfo. 
+| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Передаёт данные с BYDMATE в облако | Берёт данные из BYDMATE `energydata` или DiPlus TripInfo. |
+| ⬆️ | Обновления APK | Проверка GitHub Releases при запуске, диалог, скачивание и установка (экран шлюза → **Обновления**). |
 
 
 Приложение использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`. Поэтому оно может стоять рядом с оригинальным BYDMate (`com.bydmate.app`) и не заменяет его.
@@ -42,6 +43,7 @@
 5. После запуска выдайте разрешения на геолокацию, хранилище и отображение поверх других приложений.
 6. В DiLink выключите ограничение фоновой работы для VoltFlow Mate: **Settings -> General -> Disable background Apps -> VoltFlow Mate = OFF**.
 
+Следующие версии можно ставить поверх: на экране шлюза включите **Проверять обновления** — при запуске приложение предложит скачать новый APK с [GitHub Releases](https://github.com/scroodge/BYDMate-own/releases/latest), если он новее установленного.
 
 ### Что ещё нужно установить
 
