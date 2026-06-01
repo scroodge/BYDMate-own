@@ -951,7 +951,7 @@ fun SettingsScreen(
                             Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                                 Text("Проверять обновления", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                                 Text(
-                                    "Через 30 секунд после запуска проверять GitHub и предлагать обновиться",
+                                    "При запуске проверять GitHub и предлагать обновиться",
                                     color = TextSecondary, fontSize = 12.sp
                                 )
                             }

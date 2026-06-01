@@ -42,6 +42,7 @@ import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.settings.SettingsViewModel
+import com.bydmate.app.ui.theme.AccentBlue
 import com.bydmate.app.ui.theme.AccentGreen
 import com.bydmate.app.ui.theme.AccentOrange
 import com.bydmate.app.ui.theme.CardSurface
@@ -53,7 +54,10 @@ import com.bydmate.app.ui.theme.TextSecondary
 
 @Composable
 fun GatewayScreen(
-    viewModel: SettingsViewModel = hiltViewModel()
+    viewModel: SettingsViewModel = hiltViewModel(),
+    autoCheckUpdates: Boolean = true,
+    onAutoCheckUpdatesChange: (Boolean) -> Unit = {},
+    onCheckUpdatesNow: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -126,6 +130,13 @@ fun GatewayScreen(
             strings = strings,
         )
 
+        UpdatesCard(
+            autoCheckUpdates = autoCheckUpdates,
+            onAutoCheckChange = onAutoCheckUpdatesChange,
+            onCheckNow = onCheckUpdatesNow,
+            strings = strings,
+        )
+
         Text(
             strings.gatewayMode,
             color = TextMuted,
@@ -181,6 +192,44 @@ private fun LanguageButton(
         ),
     ) {
         Text(text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+
+@Composable
+private fun UpdatesCard(
+    autoCheckUpdates: Boolean,
+    onAutoCheckChange: (Boolean) -> Unit,
+    onCheckNow: () -> Unit,
+    strings: GatewayStrings,
+) {
+    GatewayCard {
+        Text(strings.updates, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(strings.checkUpdates, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(strings.checkUpdatesHint, color = TextSecondary, fontSize = 12.sp)
+            }
+            Switch(
+                checked = autoCheckUpdates,
+                onCheckedChange = onAutoCheckChange,
+                colors = bydSwitchColors(),
+            )
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Button(
+            onClick = onCheckNow,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
+        ) {
+            Text(strings.checkUpdatesNow, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 
@@ -514,6 +563,10 @@ private data class GatewayStrings(
     val wifiOnly: String,
     val save: String,
     val sendTest: String,
+    val updates: String,
+    val checkUpdates: String,
+    val checkUpdatesHint: String,
+    val checkUpdatesNow: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -557,6 +610,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             wifiOnly = "Только Wi-Fi",
             save = "Сохранить",
             sendTest = "Отправить тест",
+            updates = "Обновления",
+            checkUpdates = "Проверять обновления",
+            checkUpdatesHint = "При запуске проверять GitHub и предлагать обновиться",
+            checkUpdatesNow = "Проверить обновления сейчас",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -597,6 +654,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             wifiOnly = "Wi-Fi only",
             save = "Save",
             sendTest = "Send test",
+            updates = "Updates",
+            checkUpdates = "Check for updates",
+            checkUpdatesHint = "On launch, check GitHub and offer to update",
+            checkUpdatesNow = "Check for updates now",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -637,6 +698,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             wifiOnly = "Толькі Wi-Fi",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
+            updates = "Абнаўленні",
+            checkUpdates = "Правяраць абнаўленні",
+            checkUpdatesHint = "Пры запуску правяраць GitHub і прапаноўваць абнавіцца",
+            checkUpdatesNow = "Праверыць абнаўленні зараз",
         )
     }
 
