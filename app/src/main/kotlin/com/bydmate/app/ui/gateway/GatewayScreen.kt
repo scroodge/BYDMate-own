@@ -115,6 +115,7 @@ fun GatewayScreen(
             vehicleId = state.cloudSyncVehicleId,
             intervalSec = state.cloudSyncIntervalSec,
             wifiOnly = state.cloudSyncWifiOnly,
+            omitGps = state.cloudSyncOmitGps,
             status = state.cloudSyncStatus,
             onEnabled = viewModel::toggleCloudSync,
             onUrl = viewModel::updateCloudSyncUrl,
@@ -125,6 +126,7 @@ fun GatewayScreen(
             onVehicleId = viewModel::updateCloudSyncVehicleId,
             onInterval = viewModel::updateCloudSyncIntervalSec,
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
+            onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onSave = viewModel::saveCloudSyncSettings,
             onTest = viewModel::sendCloudTestPayload,
             strings = strings,
@@ -347,6 +349,7 @@ private fun CloudSyncCard(
     vehicleId: String,
     intervalSec: String,
     wifiOnly: Boolean,
+    omitGps: Boolean,
     status: String?,
     onEnabled: (Boolean) -> Unit,
     onUrl: (String) -> Unit,
@@ -357,6 +360,7 @@ private fun CloudSyncCard(
     onVehicleId: (String) -> Unit,
     onInterval: (String) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
+    onOmitGps: (Boolean) -> Unit,
     onSave: () -> Unit,
     onTest: () -> Unit,
     strings: GatewayStrings,
@@ -421,6 +425,14 @@ private fun CloudSyncCard(
         ) {
             Text(strings.wifiOnly, color = TextPrimary, fontSize = 14.sp)
             Switch(checked = wifiOnly, onCheckedChange = onWifiOnly, colors = bydSwitchColors())
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(strings.gpsPrivacy, color = TextPrimary, fontSize = 14.sp)
+            Switch(checked = omitGps, onCheckedChange = onOmitGps, colors = bydSwitchColors())
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -561,6 +573,7 @@ private data class GatewayStrings(
     val interval: String,
     val intervalHint: String,
     val wifiOnly: String,
+    val gpsPrivacy: String,
     val save: String,
     val sendTest: String,
     val updates: String,
@@ -608,6 +621,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             interval = "Интервал отправки, сек",
             intervalHint = "Оставьте 60 секунд, если не нужна более частая отправка.",
             wifiOnly = "Только Wi-Fi",
+            gpsPrivacy = "Скрывать GPS",
             save = "Сохранить",
             sendTest = "Отправить тест",
             updates = "Обновления",
@@ -652,6 +666,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             interval = "Send interval, sec",
             intervalHint = "Leave 60 seconds unless you need more frequent sending.",
             wifiOnly = "Wi-Fi only",
+            gpsPrivacy = "Hide GPS",
             save = "Save",
             sendTest = "Send test",
             updates = "Updates",
@@ -696,6 +711,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             interval = "Інтэрвал адпраўкі, сек",
             intervalHint = "Пакіньце 60 секунд, калі не патрэбная больш частая адпраўка.",
             wifiOnly = "Толькі Wi-Fi",
+            gpsPrivacy = "Хаваць GPS",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
             updates = "Абнаўленні",
