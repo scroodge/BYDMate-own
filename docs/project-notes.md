@@ -91,8 +91,8 @@ Contract: `docs/cloud-telemetry-contract-ru.md`.
 Cloud Sync включается настройкой `cloud_sync_enabled`. `TrackingService` пробует вызвать `maybeSendCloudTelemetry()` на каждом успешном 1-секундном тике, но `CloudTelemetrySender` сам решает, надо ли класть новый снимок в очередь:
 
 - **движение или зарядка:** новый sample раз в **1 секунду**;
-- **стоянка:** heartbeat раз в **5 минут**;
-- **idle skip:** до **2** подряд неизменённых idle-сэмплов (SOC, charging, power) могут не ставиться в очередь;
+- **стоянка (P / parked):** heartbeat раз в **30 секунд**; slim payload с `diplus.gear` и `charge_gun_state`;
+- **смена передачи (P/D/R):** sample и flush сразу;
 - при смене состояния движение/зарядка sample кладётся сразу.
 
 Flush очереди на сервер:

@@ -8,6 +8,13 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-06-03
+
+### Changed
+- VoltFlow Cloud Sync on parked (gear P): heartbeat **30 s** instead of 5 min so live status (Online) updates promptly in the web app.
+- Parked payloads include minimal `diplus` (`gear`, `charge_gun_state`, `speed_kmh`) for VoltFlow driving/parked detection.
+- Cloud Sync state classification uses `IternioIntervalPolicy` (gear + charge gun); gear changes enqueue and flush immediately while parked.
+
 ## [0.3.2] - 2026-06-01
 
 ### Added
@@ -58,7 +65,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scroodge/BYDMate-own/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/scroodge/BYDMate-own/compare/v0.2.5...v0.3.0

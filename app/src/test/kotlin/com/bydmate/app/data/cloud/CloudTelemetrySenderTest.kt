@@ -6,6 +6,7 @@ import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.Flow
@@ -50,31 +51,43 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
-    fun `stopped heartbeat remains five minutes`() = runTest {
+    fun `parked heartbeat enqueues every thirty seconds`() = runTest {
         val setup = setup()
 
         setup.now = BASE_TIME_MS + 1_000L
-        setup.sender.send(snapshot())
-        setup.now = BASE_TIME_MS + 299_000L
-        setup.sender.send(snapshot())
-        setup.now = BASE_TIME_MS + 301_000L
-        setup.sender.send(snapshot(soc = 51))
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 29_000L
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 31_000L
+        setup.sender.send(snapshot(gear = 1, soc = 51))
 
         assertEquals(2, setup.queue.items.size)
     }
 
     @Test
-    fun `stopped unchanged idle skips scheduled heartbeats for two cycles`() = runTest {
+    fun `parked unchanged idle still heartbeats every thirty seconds`() = runTest {
         val setup = setup()
 
         setup.now = BASE_TIME_MS + 1_000L
-        setup.sender.send(snapshot())
-        setup.now = BASE_TIME_MS + 301_000L
-        setup.sender.send(snapshot())
-        setup.now = BASE_TIME_MS + 601_000L
-        setup.sender.send(snapshot())
-        setup.now = BASE_TIME_MS + 901_000L
-        setup.sender.send(snapshot())
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 31_000L
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 61_000L
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 91_000L
+        setup.sender.send(snapshot(gear = 1))
+
+        assertEquals(4, setup.queue.items.size)
+    }
+
+    @Test
+    fun `gear change enqueues immediately while parked`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 4, speedKmh = 0.0))
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.send(snapshot(gear = 1, speedKmh = 0.0))
 
         assertEquals(2, setup.queue.items.size)
     }
@@ -133,10 +146,61 @@ class CloudTelemetrySenderTest {
         charging: Boolean = false,
         speedKmh: Double = 0.0,
         soc: Int = 50,
+        gear: Int? = null,
     ) = VehicleTelemetrySnapshot(
         capturedAtMs = 1_700_000_000_000L,
         deviceTimeIso = "2023-11-14T22:13:20Z",
-        diPlusData = null,
+        diPlusData = if (gear != null) {
+            DiParsData(
+                soc = soc,
+                speed = speedKmh.toInt(),
+                mileage = null,
+                power = if (charging) -7.0 else 0.0,
+                chargeGunState = if (charging) 2 else 1,
+                maxBatTemp = null,
+                avgBatTemp = null,
+                minBatTemp = null,
+                chargingStatus = null,
+                batteryCapacityKwh = null,
+                totalElecConsumption = null,
+                voltage12v = null,
+                maxCellVoltage = null,
+                minCellVoltage = null,
+                exteriorTemp = null,
+                gear = gear,
+                powerState = null,
+                insideTemp = null,
+                acStatus = null,
+                acTemp = null,
+                fanLevel = null,
+                acCirc = null,
+                doorFL = null,
+                doorFR = null,
+                doorRL = null,
+                doorRR = null,
+                windowFL = null,
+                windowFR = null,
+                windowRL = null,
+                windowRR = null,
+                sunroof = null,
+                trunk = null,
+                hood = null,
+                seatbeltFL = null,
+                lockFL = null,
+                tirePressFL = null,
+                tirePressFR = null,
+                tirePressRL = null,
+                tirePressRR = null,
+                driveMode = null,
+                workMode = null,
+                autoPark = null,
+                rain = null,
+                lightLow = null,
+                drl = null,
+            )
+        } else {
+            null
+        },
         soc = soc,
         speedKmh = speedKmh,
         powerKw = if (charging) -7.0 else 0.0,

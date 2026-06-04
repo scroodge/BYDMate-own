@@ -33,9 +33,30 @@ class CloudTelemetryPayloadTest {
     }
 
     @Test
-    fun `payload includes full DiPlus object`() {
+    fun `idle parked payload includes gear in diplus`() {
         val snapshot = VehicleTelemetrySnapshot.from(
-            data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30),
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val json = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        val diPlus = json.getJSONObject("diplus")
+
+        assertEquals(1, diPlus.getInt("gear"))
+        assertEquals(1, diPlus.getInt("charge_gun_state"))
+    }
+
+    @Test
+    fun `payload includes full DiPlus object when driving`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30, speed = 12, gear = 4),
             battery = null,
             charging = null,
             enginePowerKw = null,
@@ -63,9 +84,11 @@ class CloudTelemetryPayloadTest {
     private fun diPlusData(
         maxCellVoltage: Double?,
         minCellVoltage: Double?,
+        speed: Int = 0,
+        gear: Int = 1,
     ) = DiParsData(
         soc = 73,
-        speed = 0,
+        speed = speed,
         mileage = 12345.0,
         power = 0.0,
         chargeGunState = 1,
@@ -79,7 +102,7 @@ class CloudTelemetryPayloadTest {
         maxCellVoltage = maxCellVoltage,
         minCellVoltage = minCellVoltage,
         exteriorTemp = 18,
-        gear = 1,
+        gear = gear,
         powerState = 1,
         insideTemp = 22,
         acStatus = 0,

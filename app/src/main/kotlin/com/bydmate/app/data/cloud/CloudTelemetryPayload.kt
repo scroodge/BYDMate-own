@@ -1,7 +1,8 @@
 package com.bydmate.app.data.cloud
 
-import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.remote.DiParsData
+import com.bydmate.app.data.remote.IternioIntervalPolicy
+import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -11,10 +12,10 @@ object CloudTelemetryPayload {
         snapshot: VehicleTelemetrySnapshot,
         omitGps: Boolean = false,
     ): String {
-        val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
-        val charging = snapshot.isCharging == true ||
-            kotlin.math.abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
-        val idleOnly = !moving && !charging
+        val telemetryState = classifyPayloadState(snapshot)
+        val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
+        val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
+        val idleOnly = telemetryState == IternioIntervalPolicy.TelemetryState.PARKED
 
         val telemetry = JSONObject().apply {
             putIfPresent("soc", snapshot.soc)
@@ -80,11 +81,24 @@ object CloudTelemetryPayload {
             put("device_time", snapshot.deviceTimeIso)
             put("source", "BYDMate")
             put("telemetry", telemetry)
-            if (!idleOnly && snapshot.diPlusData != null) {
-                put("diplus", snapshot.diPlusData.toJson(includePower = moving || charging))
+            when {
+                snapshot.diPlusData != null && idleOnly ->
+                    put("diplus", snapshot.diPlusData.toStatusJson())
+                snapshot.diPlusData != null && !idleOnly ->
+                    put("diplus", snapshot.diPlusData.toJson(includePower = moving || charging))
             }
             put("location", location)
         }.toString()
+    }
+
+    private fun classifyPayloadState(
+        snapshot: VehicleTelemetrySnapshot,
+    ): IternioIntervalPolicy.TelemetryState {
+        snapshot.diPlusData?.let { return IternioIntervalPolicy.classifyFromDiPars(it) }
+        val charging = snapshot.isCharging == true ||
+            kotlin.math.abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
+        return IternioIntervalPolicy.classify(charging = charging, parked = !moving && !charging)
     }
 
     fun buildBatch(payloads: List<String>): String {
@@ -102,8 +116,16 @@ object CloudTelemetryPayload {
         put(name, value)
     }
 
+    private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
+        putIfPresent("soc", soc)
+        putIfPresent("gear", gear)
+        putIfPresent("charge_gun_state", chargeGunState)
+        putIfPresent("speed_kmh", speed)
+    }
+
     private fun DiParsData.toJson(includePower: Boolean): JSONObject = JSONObject().apply {
         putIfPresent("soc", soc)
+        putIfPresent("gear", gear)
         if (includePower) {
             putIfPresent("speed_kmh", speed)
             putIfPresent("mileage_km", mileage)

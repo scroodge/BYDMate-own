@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
+import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,6 +24,7 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastFlushAttemptMs: Long = 0L
     @Volatile private var lastMoving: Boolean? = null
     @Volatile private var lastCharging: Boolean? = null
+    @Volatile private var lastGear: Int? = null
     @Volatile private var activeBatchStartedMs: Long = 0L
     @Volatile private var idleUnchangedCycles: Int = 0
     @Volatile private var lastIdleSoc: Int? = null
@@ -183,21 +185,27 @@ class CloudTelemetrySender @Inject constructor(
     }
 
     private fun decide(snapshot: VehicleTelemetrySnapshot, now: Long): QueueDecision {
-        val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
-        val charging = snapshot.isCharging == true ||
-            abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        val telemetryState = classifyCloudTelemetryState(snapshot)
+        val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
+        val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
         val active = moving || charging
+        val gear = snapshot.diPlusData?.gear
         val previousMoving = lastMoving
         val previousCharging = lastCharging
+        val previousGear = lastGear
+        val gearChanged = previousGear != null && gear != null && previousGear != gear
         val stateChanged = previousMoving?.let { it != moving } == true ||
-            previousCharging?.let { it != charging } == true
+            previousCharging?.let { it != charging } == true ||
+            gearChanged ||
+            (previousGear == null && gear != null && lastQueuedSampleMs > 0L)
         lastMoving = moving
         lastCharging = charging
+        lastGear = gear
 
-        val minSampleIntervalMs = when {
-            moving -> MOVING_SAMPLE_INTERVAL_MS
-            charging -> CHARGING_SAMPLE_INTERVAL_MS
-            else -> STOPPED_HEARTBEAT_INTERVAL_MS
+        val minSampleIntervalMs = when (telemetryState) {
+            IternioIntervalPolicy.TelemetryState.DRIVING -> MOVING_SAMPLE_INTERVAL_MS
+            IternioIntervalPolicy.TelemetryState.CHARGING -> CHARGING_SAMPLE_INTERVAL_MS
+            IternioIntervalPolicy.TelemetryState.PARKED -> PARKED_CLOUD_HEARTBEAT_MS
         }
 
         var enqueue = stateChanged || lastQueuedSampleMs == 0L || now - lastQueuedSampleMs >= minSampleIntervalMs
@@ -230,10 +238,20 @@ class CloudTelemetrySender @Inject constructor(
         val activeTransition = stateChanged && (active || previousCharging == true || previousMoving == true)
         return QueueDecision(
             enqueue = enqueue,
-            flushNow = stateChanged && !activeTransition,
+            flushNow = (gearChanged && !active) || (stateChanged && !activeTransition),
             activeBatchMode = active || previousCharging == true || previousMoving == true,
             activeSample = active,
         )
+    }
+
+    private fun classifyCloudTelemetryState(
+        snapshot: VehicleTelemetrySnapshot,
+    ): IternioIntervalPolicy.TelemetryState {
+        snapshot.diPlusData?.let { return IternioIntervalPolicy.classifyFromDiPars(it) }
+        val charging = snapshot.isCharging == true ||
+            abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
+        return IternioIntervalPolicy.classify(charging = charging, parked = !moving && !charging)
     }
 
     private suspend fun readConfig(): Result<Config> {
@@ -303,7 +321,9 @@ class CloudTelemetrySender @Inject constructor(
         const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
         const val CHARGING_SAMPLE_INTERVAL_MS = 1_000L
         const val ACTIVE_FLUSH_INTERVAL_MS = 15_000L
-        const val STOPPED_HEARTBEAT_INTERVAL_MS = 5L * 60_000L
-        const val IDLE_UNCHANGED_SKIP_CYCLES = 2
+        /** Parked online heartbeat for VoltFlow live status (aligned with Iternio PARKED cadence). */
+        const val PARKED_CLOUD_HEARTBEAT_MS = 30_000L
+        /** Disabled while parked heartbeat is 30s — unchanged SOC should still refresh VoltFlow status. */
+        const val IDLE_UNCHANGED_SKIP_CYCLES = 0
     }
 }
