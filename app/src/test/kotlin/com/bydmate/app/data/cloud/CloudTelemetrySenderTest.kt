@@ -93,6 +93,61 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
+    fun `incomplete ack with skipped stale keeps queue`() = runTest {
+        val setup = setup(
+            results = ArrayDeque(
+                listOf(
+                    CloudSendResult.Success(
+                        """{"ok":true,"inserted_count":0,"duplicate_count":0,"skipped_stale_count":15,"sample_count":0}""",
+                    ),
+                ),
+            ),
+        )
+
+        for (second in 1..15) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true))
+        }
+
+        assertEquals(15, setup.queue.items.count { it.sentAt == null })
+        assertTrue(setup.queue.items.all { it.attempts >= 1 })
+    }
+
+    @Test
+    fun `ok false on http 200 keeps queue`() = runTest {
+        val setup = setup(
+            results = ArrayDeque(
+                listOf(
+                    CloudSendResult.Success("""{"ok":false,"error":"telemetry missing after persist"}"""),
+                ),
+            ),
+        )
+
+        for (second in 1..15) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true))
+        }
+
+        assertEquals(15, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
+    fun `backlog drain sends multiple active batches in one flush`() = runTest {
+        val setup = setup()
+        for (second in 1..30) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.enqueue(snapshot(charging = true))
+        }
+        assertEquals(30, setup.queue.items.count { it.sentAt == null })
+
+        setup.now = BASE_TIME_MS + 31_000L
+        val flush = setup.sender.flushPending()
+        assertTrue(flush.isSuccess)
+        assertEquals(2, setup.client.payloads.size)
+        assertEquals(0, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
     fun `retry keeps accumulated active samples for later batch`() = runTest {
         val setup = setup(results = ArrayDeque(listOf(CloudSendResult.RetryableFailure("offline"))))
 
@@ -105,7 +160,7 @@ class CloudTelemetrySenderTest {
         assertEquals(15, setup.queue.items.count { it.sentAt == null })
         assertTrue(setup.queue.items.all { it.attempts == 1 })
 
-        setup.client.results.add(CloudSendResult.Success("{}"))
+        setup.client.results.add(CloudSendResult.Success(fullAckJson(15)))
         setup.now = BASE_TIME_MS + 30_000L
         setup.sender.send(snapshot(charging = true))
 
@@ -253,7 +308,7 @@ class CloudTelemetrySenderTest {
             payloadJson: String,
         ): CloudSendResult {
             payloads += payloadJson
-            return results.removeFirstOrNull() ?: CloudSendResult.Success("{}")
+            return results.removeFirstOrNull() ?: CloudSendResult.Success(fullAckJson(300))
         }
     }
 
@@ -311,5 +366,8 @@ class CloudTelemetrySenderTest {
 
     private companion object {
         const val BASE_TIME_MS = 1_700_000_000_000L
+
+        fun fullAckJson(sent: Int) =
+            """{"ok":true,"inserted_count":$sent,"duplicate_count":0,"skipped_stale_count":0,"sample_count":$sent}"""
     }
 }

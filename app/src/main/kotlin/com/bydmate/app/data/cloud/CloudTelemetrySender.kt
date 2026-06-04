@@ -110,18 +110,33 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         lastFlushAttemptMs = now
-        return if (flushQueue(config, now, batchSize, drainAll = !activeBatchMode)) {
+        val drainAll = !activeBatchMode || unsentCount > BACKLOG_DRAIN_THRESHOLD
+        val flushResult = flushQueue(config, now, batchSize, drainAll = drainAll)
+        return if (flushResult.success) {
             pendingFlushNow = false
-            if (activeBatchMode) activeBatchStartedMs = 0L
+            if (activeBatchMode && queueDao.countUnsent() <= BACKLOG_DRAIN_THRESHOLD) {
+                activeBatchStartedMs = 0L
+            }
             val remaining = queueDao.countUnsent()
-            saveStatus(ok = true, message = "OK; queued $remaining")
+            val ack = flushResult.lastAck?.formatDiagnostics()
+            val message = buildString {
+                append("OK")
+                if (!ack.isNullOrBlank()) append("; $ack")
+                append("; queued $remaining")
+            }
+            saveStatus(ok = true, message = message, ack = ack)
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.success(Unit)
         } else {
             if (activeBatchMode) activeBatchStartedMs = now
             val remaining = queueDao.countUnsent()
-            val message = "queued $remaining; waiting for retry"
-            saveStatus(ok = false, message = message)
+            val ack = flushResult.lastAck?.formatDiagnostics()
+            val message = buildString {
+                append("queued $remaining; waiting for retry")
+                flushResult.retryReason?.let { append(" ($it)") }
+                if (!ack.isNullOrBlank()) append("; $ack")
+            }
+            saveStatus(ok = false, message = message, ack = ack)
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.failure(IllegalStateException(message))
         }
@@ -142,7 +157,15 @@ class CloudTelemetrySender @Inject constructor(
         val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
             is CloudSendResult.Success -> {
-                saveStatus(ok = true, message = "Test OK")
+                val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1)
+                val ackText = ack.formatDiagnostics()
+                settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, ackText)
+                if (!ack.isFullyAcknowledged()) {
+                    val reason = ack.parseError ?: ack.error ?: "incomplete ack"
+                    saveStatus(ok = false, message = "Test HTTP OK; $ackText ($reason)")
+                    return Result.failure(IllegalStateException(reason))
+                }
+                saveStatus(ok = true, message = "Test OK; $ackText", ack = ackText)
                 Result.success(result.responseBody)
             }
             is CloudSendResult.NonRetryableFailure -> {
@@ -156,10 +179,16 @@ class CloudTelemetrySender @Inject constructor(
         }
     }
 
-    private suspend fun flushQueue(config: Config, now: Long, batchSize: Int, drainAll: Boolean): Boolean {
+    private suspend fun flushQueue(
+        config: Config,
+        now: Long,
+        batchSize: Int,
+        drainAll: Boolean,
+    ): FlushQueueResult {
+        var lastAck: CloudTelemetryAck? = null
         while (true) {
             val items = queueDao.getUnsent(batchSize)
-            if (items.isEmpty()) return true
+            if (items.isEmpty()) return FlushQueueResult(success = true, lastAck = lastAck)
 
             val payload = if (items.size == 1) {
                 items.first().payloadJson
@@ -169,16 +198,34 @@ class CloudTelemetrySender @Inject constructor(
 
             when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
                 is CloudSendResult.Success -> {
-                    items.forEach { queueDao.markFinished(it.id, null, now) }
-                    if (!drainAll) return true
+                    val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = items.size)
+                    lastAck = ack
+                    if (ack.isFullyAcknowledged()) {
+                        items.forEach { queueDao.markFinished(it.id, null, now) }
+                        if (!drainAll) return FlushQueueResult(success = true, lastAck = ack)
+                    } else {
+                        val reason = ack.parseError ?: ack.error ?: "incomplete ack"
+                        items.forEach { queueDao.markAttempt(it.id, reason) }
+                        return FlushQueueResult(
+                            success = false,
+                            lastAck = ack,
+                            retryReason = reason,
+                        )
+                    }
                 }
                 is CloudSendResult.NonRetryableFailure -> {
                     items.forEach { queueDao.markFinished(it.id, result.message, now) }
-                    if (!drainAll) return true
+                    if (!drainAll) {
+                        return FlushQueueResult(success = true, lastAck = lastAck, retryReason = result.message)
+                    }
                 }
                 is CloudSendResult.RetryableFailure -> {
                     items.forEach { queueDao.markAttempt(it.id, result.message) }
-                    return false
+                    return FlushQueueResult(
+                        success = false,
+                        lastAck = lastAck,
+                        retryReason = result.message,
+                    )
                 }
             }
         }
@@ -279,10 +326,13 @@ class CloudTelemetrySender @Inject constructor(
         )
     }
 
-    private suspend fun saveStatus(ok: Boolean, message: String) {
+    private suspend fun saveStatus(ok: Boolean, message: String, ack: String? = null) {
         settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, ok.toString())
         settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ERROR, message)
         settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS, System.currentTimeMillis().toString())
+        if (ack != null) {
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, ack)
+        }
     }
 
     private fun isWifiConnected(): Boolean {
@@ -312,10 +362,17 @@ class CloudTelemetrySender @Inject constructor(
         val activeSample: Boolean,
     )
 
+    private data class FlushQueueResult(
+        val success: Boolean,
+        val lastAck: CloudTelemetryAck? = null,
+        val retryReason: String? = null,
+    )
+
     private companion object {
         const val MAX_QUEUE_ROWS = 1000
         const val MAX_BATCH_SIZE = 120
         const val ACTIVE_BATCH_SIZE = 15
+        const val BACKLOG_DRAIN_THRESHOLD = ACTIVE_BATCH_SIZE
         const val MOVING_SPEED_THRESHOLD_KMH = 0.5
         const val CHARGING_POWER_THRESHOLD_KW = 0.1
         const val MOVING_SAMPLE_INTERVAL_MS = 1_000L

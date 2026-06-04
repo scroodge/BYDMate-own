@@ -87,16 +87,36 @@ X-App: VoltFlow-Mate
 
 ## Response Handling
 
-APK считает успешными любые HTTP `2xx`.
+HTTP `4xx` — non-retryable: записи в очереди помечаются завершёнными с ошибкой.
 
-HTTP `4xx` считаются non-retryable: записи в локальной очереди помечаются
-завершенными с ошибкой и больше не отправляются.
+HTTP `5xx`, другие коды и сетевые исключения — retryable: записи остаются в очереди.
 
-HTTP `5xx`, другие коды и сетевые исключения считаются retryable: записи
-остаются в очереди и будут отправлены позже.
+### Подтверждение доставки (application ACK)
 
-Тело успешного ответа может быть любым JSON или пустым. Для тестовой отправки
-APK показывает response body в диагностике, но не требует конкретной схемы.
+После HTTP `2xx` APK разбирает JSON и снимает батч с очереди **только** если:
+
+- `ok == true`
+- `skipped_stale_count == 0`
+- `inserted_count + duplicate_count >=` число сэмплов в отправленном теле
+
+Иначе батч остаётся в `cloud_sync_queue` и уходит на retry.
+
+Пример полей ответа VoltFlow:
+
+```json
+{
+  "ok": true,
+  "inserted_count": 12,
+  "duplicate_count": 3,
+  "skipped_stale_count": 0,
+  "sample_count": 15
+}
+```
+
+Диагностика в настройках: `cloud_sync_last_ack` (например `15 sent, 12 ins, 3 dup, 0 skip`).
+
+При отставании очереди (>15 unsent) flush дренирует несколько батчей подряд;
+`TrackingService` повторяет flush, если предыдущий ещё выполнялся.
 
 ## Payload Modes
 

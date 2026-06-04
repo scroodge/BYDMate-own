@@ -136,6 +136,7 @@ class TrackingService : Service(), LocationListener {
     private val pollGunInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val flushInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val pendingCloudFlush = java.util.concurrent.atomic.AtomicBoolean(false)
 
     companion object {
         private const val TAG = "TrackingService"
@@ -425,19 +426,25 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
-        if (!flushInFlight.compareAndSet(false, true)) return
+        if (!flushInFlight.compareAndSet(false, true)) {
+            pendingCloudFlush.set(true)
+            return
+        }
         serviceScope.launch {
             try {
-                if (settingsRepository.getString(
-                        com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                        "false"
-                    ) != "true"
-                ) {
-                    return@launch
-                }
-                cloudTelemetrySender.flushPending().onFailure { e ->
-                    Log.w(TAG, "Cloud Sync flush: ${e.message}")
-                }
+                do {
+                    pendingCloudFlush.set(false)
+                    if (settingsRepository.getString(
+                            com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                            "false"
+                        ) != "true"
+                    ) {
+                        return@launch
+                    }
+                    cloudTelemetrySender.flushPending().onFailure { e ->
+                        Log.w(TAG, "Cloud Sync flush: ${e.message}")
+                    }
+                } while (pendingCloudFlush.compareAndSet(true, false))
             } catch (e: Exception) {
                 Log.w(TAG, "Cloud Sync flush: ${e.message}")
             } finally {

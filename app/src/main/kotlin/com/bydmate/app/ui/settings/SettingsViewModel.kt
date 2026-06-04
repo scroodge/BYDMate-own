@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.cloud.CloudTelemetryAckParser
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.cloud.VoltflowLinkClient
 import com.bydmate.app.data.cloud.VoltflowLinkResult
@@ -953,6 +954,8 @@ class SettingsViewModel @Inject constructor(
     }
 
     private fun backendAckDiagnostics(responseBody: String?): String {
+        val ack = CloudTelemetryAckParser.parse(responseBody, sentCount = 1)
+        val delivery = ack.formatDiagnostics()
         val body = responseBody?.trim().orEmpty()
         if (body.isBlank()) return "empty ack"
         return runCatching {
@@ -972,9 +975,9 @@ class SettingsViewModel @Inject constructor(
             val hasCellMax = findNonNull(persisted, "diplus_max_cell_voltage_v") ||
                 findNonNull(persisted, "cell_voltage_max_v") ||
                 findNonNull(persisted, "max_cell_voltage_v")
-            "ok=$ok, db diplus ${if (hasDiPlus) "OK" else "missing"}, db cells ${if (hasCellMin && hasCellMax && hasCellDelta) "OK" else "missing"}"
+            "delivery $delivery; ok=$ok, db diplus ${if (hasDiPlus) "OK" else "missing"}, db cells ${if (hasCellMin && hasCellMax && hasCellDelta) "OK" else "missing"}"
         }.getOrElse {
-            "raw ${body.take(160)}"
+            "delivery $delivery; raw ${body.take(160)}"
         }
     }
 
@@ -1012,6 +1015,7 @@ class SettingsViewModel @Inject constructor(
         if (ts <= 0L) return null
         val ok = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, "false") == "true"
         val message = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ERROR, "")
+        val ack = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, "")
         val language = settingsRepository.getString(
             SettingsRepository.KEY_APP_LANGUAGE,
             SettingsRepository.DEFAULT_APP_LANGUAGE,
@@ -1021,8 +1025,11 @@ class SettingsViewModel @Inject constructor(
             SettingsRepository.LANGUAGE_EN -> if (ok) "Sync OK" else "Sync failed"
             else -> if (ok) "Сінхранізацыя OK" else "Памылка сінхранізацыі"
         }
-        return "$prefix: ${formatTs(ts)}" +
-            if (!ok && message.isNotBlank()) " ($message)" else ""
+        return buildString {
+            append("$prefix: ${formatTs(ts)}")
+            if (ack.isNotBlank()) append("; $ack")
+            if (!ok && message.isNotBlank()) append(" ($message)")
+        }
     }
 
     private fun cloudText(ru: String, be: String, en: String): String =
