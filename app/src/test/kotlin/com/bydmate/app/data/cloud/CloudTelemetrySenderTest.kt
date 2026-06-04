@@ -162,12 +162,13 @@ class CloudTelemetrySenderTest {
 
         setup.client.results.add(CloudSendResult.Success(fullAckJson(15)))
         setup.now = BASE_TIME_MS + 30_000L
-        setup.sender.send(snapshot(charging = true))
+        val flush = setup.sender.flushPending()
+        assertTrue(flush.isSuccess)
 
         assertEquals(2, setup.client.payloads.size)
         val retrySamples = JSONObject(setup.client.payloads.last()).getJSONArray("samples")
         assertEquals(15, retrySamples.length())
-        assertEquals(1, setup.queue.items.count { it.sentAt == null })
+        assertEquals(0, setup.queue.items.count { it.sentAt == null })
     }
 
     private fun setup(
