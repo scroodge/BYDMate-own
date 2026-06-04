@@ -11,6 +11,7 @@
 ## [0.3.3] - 2026-06-03
 
 ### Changed
+- Убрана настройка «Интервал отправки» из UI: cadence задаётся автоматически (30 с на парковке, 1 с / 15 s batch в движении и на зарядке).
 - VoltFlow Cloud Sync on parked (gear P): heartbeat **30 s** instead of 5 min so live status (Online) updates promptly in the web app.
 - Parked payloads include minimal `diplus` (`gear`, `charge_gun_state`, `speed_kmh`) for VoltFlow driving/parked detection.
 - Cloud Sync state classification uses `IternioIntervalPolicy` (gear + charge gun); gear changes enqueue and flush immediately while parked.

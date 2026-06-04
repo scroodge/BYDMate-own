@@ -113,7 +113,6 @@ fun GatewayScreen(
             advancedOpen = state.cloudSyncAdvancedOpen,
             linking = state.cloudSyncLinking,
             vehicleId = state.cloudSyncVehicleId,
-            intervalSec = state.cloudSyncIntervalSec,
             wifiOnly = state.cloudSyncWifiOnly,
             omitGps = state.cloudSyncOmitGps,
             status = state.cloudSyncStatus,
@@ -124,7 +123,6 @@ fun GatewayScreen(
             onToggleAdvanced = viewModel::toggleCloudSyncAdvanced,
             onApiKey = viewModel::updateCloudSyncApiKey,
             onVehicleId = viewModel::updateCloudSyncVehicleId,
-            onInterval = viewModel::updateCloudSyncIntervalSec,
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onSave = viewModel::saveCloudSyncSettings,
@@ -347,7 +345,6 @@ private fun CloudSyncCard(
     advancedOpen: Boolean,
     linking: Boolean,
     vehicleId: String,
-    intervalSec: String,
     wifiOnly: Boolean,
     omitGps: Boolean,
     status: String?,
@@ -358,7 +355,6 @@ private fun CloudSyncCard(
     onToggleAdvanced: () -> Unit,
     onApiKey: (String) -> Unit,
     onVehicleId: (String) -> Unit,
-    onInterval: (String) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
     onOmitGps: (Boolean) -> Unit,
     onSave: () -> Unit,
@@ -416,8 +412,6 @@ private fun CloudSyncCard(
         }
         GatewayTextField(strings.carName, vehicleId, onVehicleId, KeyboardType.Text)
         GatewayHint(strings.carNameHint)
-        GatewayTextField(strings.interval, intervalSec, onInterval, KeyboardType.Number)
-        GatewayHint(strings.intervalHint)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -570,8 +564,6 @@ private data class GatewayStrings(
     val advanced: String,
     val carName: String,
     val carNameHint: String,
-    val interval: String,
-    val intervalHint: String,
     val wifiOnly: String,
     val gpsPrivacy: String,
     val save: String,
@@ -618,8 +610,6 @@ private fun gatewayStrings(language: String): GatewayStrings =
             advanced = "Дополнительно",
             carName = "Ваше имя авто",
             carNameHint = "Например: Tang, Seal, Leopard 3 или любое удобное имя машины.",
-            interval = "Интервал отправки, сек",
-            intervalHint = "Оставьте 60 секунд, если не нужна более частая отправка.",
             wifiOnly = "Только Wi-Fi",
             gpsPrivacy = "Скрывать GPS",
             save = "Сохранить",
@@ -663,8 +653,6 @@ private fun gatewayStrings(language: String): GatewayStrings =
             advanced = "Advanced",
             carName = "Your car name",
             carNameHint = "For example: Tang, Seal, Leopard 3, or any convenient car name.",
-            interval = "Send interval, sec",
-            intervalHint = "Leave 60 seconds unless you need more frequent sending.",
             wifiOnly = "Wi-Fi only",
             gpsPrivacy = "Hide GPS",
             save = "Save",
@@ -708,8 +696,6 @@ private fun gatewayStrings(language: String): GatewayStrings =
             advanced = "Дадаткова",
             carName = "Ваша імя аўто",
             carNameHint = "Напрыклад: Tang, Seal, Leopard 3 або любое зручнае імя машыны.",
-            interval = "Інтэрвал адпраўкі, сек",
-            intervalHint = "Пакіньце 60 секунд, калі не патрэбная больш частая адпраўка.",
             wifiOnly = "Толькі Wi-Fi",
             gpsPrivacy = "Хаваць GPS",
             save = "Захаваць",

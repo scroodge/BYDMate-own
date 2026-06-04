@@ -127,7 +127,6 @@ data class SettingsUiState(
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
     val cloudSyncVehicleId: String = "",
-    val cloudSyncIntervalSec: String = SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
     val cloudSyncWifiOnly: Boolean = false,
     val cloudSyncOmitGps: Boolean = false,
     val cloudSyncStatus: String? = null,
@@ -223,10 +222,6 @@ class SettingsViewModel @Inject constructor(
             ).ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             val cloudSyncApiKey = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, "")
             val cloudSyncVehicleId = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "")
-            val cloudSyncIntervalSec = settingsRepository.getString(
-                SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
-                SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC
-            )
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
             val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncStatus = formatCloudSyncStatus()
@@ -265,7 +260,6 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncUrl = cloudSyncUrl,
                     cloudSyncApiKey = cloudSyncApiKey,
                     cloudSyncVehicleId = cloudSyncVehicleId,
-                    cloudSyncIntervalSec = cloudSyncIntervalSec,
                     cloudSyncWifiOnly = cloudSyncWifiOnly,
                     cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncStatus = cloudSyncStatus,
@@ -790,10 +784,6 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(cloudSyncVehicleId = value) }
     }
 
-    fun updateCloudSyncIntervalSec(value: String) {
-        _uiState.update { it.copy(cloudSyncIntervalSec = value.filter { ch -> ch.isDigit() }.take(4)) }
-    }
-
     fun updateAppLanguage(value: String) {
         val language = when (value) {
             SettingsRepository.LANGUAGE_RU -> SettingsRepository.LANGUAGE_RU
@@ -823,13 +813,15 @@ class SettingsViewModel @Inject constructor(
     fun saveCloudSyncSettings() {
         val state = _uiState.value
         viewModelScope.launch {
-            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
             val url = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             val enabled = state.cloudSyncEnabled && url.startsWith("https://", ignoreCase = true)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
-            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
+            settingsRepository.setString(
+                SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
+                SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
+            )
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, state.cloudSyncOmitGps.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
@@ -844,7 +836,6 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     cloudSyncEnabled = enabled,
                     cloudSyncUrl = url,
-                    cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = status,
                 )
             }
@@ -854,12 +845,14 @@ class SettingsViewModel @Inject constructor(
     fun sendCloudTestPayload() {
         val state = _uiState.value
         viewModelScope.launch {
-            val interval = state.cloudSyncIntervalSec.toIntOrNull()?.coerceIn(5, 300) ?: 60
             val url = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
-            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC, interval.toString())
+            settingsRepository.setString(
+                SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
+                SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
+            )
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, state.cloudSyncWifiOnly.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, state.cloudSyncOmitGps.toString())
             val canEnableLiveSync = url.startsWith("https://", ignoreCase = true) &&
@@ -886,7 +879,6 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     cloudSyncEnabled = result.isSuccess && canEnableLiveSync,
                     cloudSyncUrl = url,
-                    cloudSyncIntervalSec = interval.toString(),
                     cloudSyncStatus = result.fold(
                         onSuccess = {
                             val diagnostics = cloudTestDiagnostics(snapshot)

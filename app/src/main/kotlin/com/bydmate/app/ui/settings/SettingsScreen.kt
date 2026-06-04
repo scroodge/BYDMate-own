@@ -523,13 +523,6 @@ fun SettingsScreen(
                             keyboardType = KeyboardType.Text
                         )
                         CloudSyncHint("Например: Tang, Seal, Leopard 3 или любое удобное имя машины.")
-                        SettingsTextField(
-                            label = "Интервал отправки, сек",
-                            value = state.cloudSyncIntervalSec,
-                            onValueChange = { viewModel.updateCloudSyncIntervalSec(it) },
-                            keyboardType = KeyboardType.Number
-                        )
-                        CloudSyncHint("Оставьте 60 секунд, если не нужна более частая отправка.")
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,

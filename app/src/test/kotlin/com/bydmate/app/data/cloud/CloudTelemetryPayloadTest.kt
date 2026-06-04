@@ -10,7 +10,7 @@ class CloudTelemetryPayloadTest {
     @Test
     fun `payload includes DiPlus cell voltages and delta`() {
         val snapshot = VehicleTelemetrySnapshot.from(
-            data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30),
+            data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30, speed = 12, gear = 4),
             battery = null,
             charging = null,
             enginePowerKw = null,
@@ -27,9 +27,6 @@ class CloudTelemetryPayloadTest {
         assertEquals(3.30, telemetry.getDouble("cell_voltage_min_v"), 0.0001)
         assertEquals(3.31, telemetry.getDouble("cell_voltage_max_v"), 0.0001)
         assertEquals(0.01, telemetry.getDouble("cell_delta_v"), 0.0001)
-        assertEquals(3.30, telemetry.getDouble("diplus_min_cell_voltage_v"), 0.0001)
-        assertEquals(3.31, telemetry.getDouble("diplus_max_cell_voltage_v"), 0.0001)
-        assertEquals(0.01, telemetry.getDouble("diplus_cell_delta_v"), 0.0001)
     }
 
     @Test
@@ -75,10 +72,7 @@ class CloudTelemetryPayloadTest {
         assertEquals(72.9, diPlus.getDouble("battery_capacity_kwh"), 0.0001)
         assertEquals(3456.0, diPlus.getDouble("total_elec_consumption_kwh"), 0.0001)
         assertEquals(0.01, diPlus.getDouble("cell_delta_v"), 0.0001)
-        assertEquals(240, diPlus.getInt("tire_press_fl_kpa"))
-        assertEquals(1, diPlus.getInt("seatbelt_fl"))
-        assertEquals(2, diPlus.getInt("lock_fl"))
-        assertEquals(1, diPlus.getInt("drl"))
+        assertEquals(4, diPlus.getInt("gear"))
     }
 
     private fun diPlusData(

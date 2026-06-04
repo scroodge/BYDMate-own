@@ -98,7 +98,7 @@ Cloud Sync включается настройкой `cloud_sync_enabled`. `Trac
 Flush очереди на сервер:
 
 - **движение/зарядка:** batch до **15** samples каждые **15 секунд**;
-- **idle:** по настройке `cloud_sync_interval_sec` (default 60 с, диапазон 5–300), batch до 120 samples;
+- **idle flush:** фиксированно `cloud_sync_interval_sec` = 60 с (без настройки в UI), batch до 120 samples;
 - сразу при смене состояния (кроме charging-переходов);
 - если Wi-Fi only и Wi-Fi нет — samples копятся локально.
 
