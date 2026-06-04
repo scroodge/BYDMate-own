@@ -8,6 +8,18 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-06-04
+
+### Added
+- **Подтверждение доставки Cloud Sync:** APK разбирает ACK от VoltFlow (`inserted_count`, `duplicate_count`, `skipped_stale_count`, `ok`) и снимает батч с очереди только при полном подтверждении; иначе retry.
+- Диагностика `cloud_sync_last_ack` в статусе синхронизации (например `15 sent, 12 ins, 3 dup, 0 skip`).
+
+### Changed
+- При отставании очереди (>15 samples) flush отправляет несколько батчей подряд; повторный flush не пропускается, если предыдущий ещё выполняется.
+
+### Fixed
+- Пропуски на графиках SOC в VoltFlow при догоне очереди после сетевых задержек (в паре с серверным batch backfill).
+
 ## [0.3.3] - 2026-06-03
 
 ### Changed
@@ -66,7 +78,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scroodge/BYDMate-own/compare/v0.3.0...v0.3.1
