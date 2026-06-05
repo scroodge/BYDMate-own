@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-06-05
+
+### Added
+- **`SohResolver`:** cloud/UI SoH from live BMS `FID_SOH`, last charge `battery_health` snapshot, or persisted `last_known_soh_percent` cache.
+
+### Changed
+- Cloud Sync sends **`soh_percent` while parked** when a cached BMS value exists (VoltFlow live SOH no longer stuck on `—`).
+- Autoservice **auto-enables** when ADB/autoservice responds (aligns with upstream BYDMate ADB-on behavior).
+- Throttled battery snapshot read every **15 min** when not charging, so SoH can refresh outside charge sessions.
+
+### Fixed
+- VoltFlow never received numeric `soh_percent` because cloud sync only read BMS SoH during charging and idle payloads omitted the field.
+
 ## [0.3.4] - 2026-06-04
 
 ### Added
@@ -78,7 +91,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/scroodge/BYDMate-own/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/scroodge/BYDMate-own/compare/v0.3.1...v0.3.2

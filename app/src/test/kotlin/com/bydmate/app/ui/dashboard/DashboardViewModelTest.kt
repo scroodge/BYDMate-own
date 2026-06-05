@@ -22,6 +22,7 @@ import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
 import com.bydmate.app.domain.battery.BatteryStateRepository
+import com.bydmate.app.domain.battery.SohResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -165,7 +166,11 @@ class DashboardViewModelTest {
         val insightsManager = InsightsManager(ctx, OpenRouterClient(httpClient), tripDao, idleDrainDao, settingsRepo)
 
         val batteryHealthRepo = BatteryHealthRepository(StubBatterySnapshotDao())
-        val batteryStateRepo = BatteryStateRepository(fakeAutoservice, batteryHealthRepo, settingsRepo)
+        val batteryStateRepo = BatteryStateRepository(
+            fakeAutoservice,
+            SohResolver(batteryHealthRepo, settingsRepo),
+            settingsRepo,
+        )
 
         return DashboardViewModel(
             tripRepository = tripRepo,

@@ -16,6 +16,7 @@ import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.domain.battery.BatteryStateRepository
+import com.bydmate.app.domain.battery.SohResolver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -173,7 +174,11 @@ class ChargesViewModelTest {
         val snapshotDao = FakeBatterySnapshotDao(snapshots)
         val autoservice = FakeAutoserviceClient(batteryReading, autoserviceAvailable)
         val batteryHealthRepo = BatteryHealthRepository(snapshotDao)
-        val batteryStateRepo = BatteryStateRepository(autoservice, batteryHealthRepo, settingsRepo)
+        val batteryStateRepo = BatteryStateRepository(
+            autoservice,
+            SohResolver(batteryHealthRepo, settingsRepo),
+            settingsRepo,
+        )
 
         return ChargesViewModel(chargeRepo, snapshotDao, settingsRepo, batteryStateRepo) to chargeDao
     }

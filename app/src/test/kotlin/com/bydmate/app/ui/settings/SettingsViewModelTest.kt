@@ -34,6 +34,7 @@ import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
 import com.bydmate.app.domain.battery.BatteryStateRepository
+import com.bydmate.app.domain.battery.SohResolver
 import com.bydmate.app.service.UpdateChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -223,7 +224,11 @@ class SettingsViewModelTest {
         val insightsManager = InsightsManager(ctx, openRouterClient, tripDao, idleDrainDao, settingsRepo)
 
         val batteryHealthRepo = BatteryHealthRepository(StubBatterySnapshotDao())
-        val batteryStateRepo = BatteryStateRepository(fakeAutoservice, batteryHealthRepo, settingsRepo)
+        val batteryStateRepo = BatteryStateRepository(
+            fakeAutoservice,
+            SohResolver(batteryHealthRepo, settingsRepo),
+            settingsRepo,
+        )
 
         return SettingsViewModel(
             appContext = ctx,
