@@ -111,6 +111,31 @@ class CloudTelemetryPayloadTest {
     }
 
     @Test
+    fun `latched drive payload keeps speed at zero`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val telemetry = JSONObject(
+            CloudTelemetryPayload.build(
+                "way",
+                snapshot,
+                telemetryState = com.bydmate.app.data.remote.IternioIntervalPolicy.TelemetryState.DRIVING,
+            ),
+        ).getJSONObject("telemetry")
+
+        assertEquals(0.0, telemetry.getDouble("speed_kmh"), 0.0001)
+    }
+
+    @Test
     fun `payload includes full DiPlus object when driving`() {
         val snapshot = VehicleTelemetrySnapshot.from(
             data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30, speed = 12, gear = 4),

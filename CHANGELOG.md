@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-06-05
+
+### Fixed
+- **Графики поездки без дыр в пробке:** drive latch держит Cloud Sync на **1 Гц** ещё 10 мин после D/движения, даже если DiPars кратко отдаёт **P**; `speed_kmh`/`power_kw` остаются в payload (включая 0 км/ч).
+
 ## [0.3.5] - 2026-06-05
 
 ### Added
@@ -91,7 +96,8 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/scroodge/BYDMate-own/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/scroodge/BYDMate-own/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/scroodge/BYDMate-own/compare/v0.3.2...v0.3.3

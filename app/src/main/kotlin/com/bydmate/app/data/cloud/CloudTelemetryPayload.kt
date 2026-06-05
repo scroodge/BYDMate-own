@@ -11,8 +11,9 @@ object CloudTelemetryPayload {
         vehicleId: String,
         snapshot: VehicleTelemetrySnapshot,
         omitGps: Boolean = false,
+        telemetryState: IternioIntervalPolicy.TelemetryState? = null,
     ): String {
-        val telemetryState = classifyPayloadState(snapshot)
+        val telemetryState = telemetryState ?: classifyPayloadState(snapshot)
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
         val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
         val idleOnly = telemetryState == IternioIntervalPolicy.TelemetryState.PARKED
@@ -22,7 +23,7 @@ object CloudTelemetryPayload {
             if (!idleOnly || snapshot.soc != null) {
                 putIfPresent("is_charging", snapshot.isCharging)
             }
-            if (moving || charging) {
+            if (moving || charging || snapshot.speedKmh != null || snapshot.powerKw != null) {
                 putIfPresent("speed_kmh", snapshot.speedKmh)
                 putIfPresent("power_kw", snapshot.powerKw)
             }

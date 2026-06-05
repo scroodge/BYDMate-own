@@ -31,6 +31,7 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastIdleCharging: Boolean? = null
     @Volatile private var lastIdlePowerKw: Double? = null
     @Volatile private var pendingFlushNow: Boolean = false
+    private val cadence = CloudTelemetryCadence()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
 
     /** Fast path: queue a sample without blocking on HTTP flush. */
@@ -47,12 +48,18 @@ class CloudTelemetrySender @Inject constructor(
         queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
 
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
-        val decision = decide(snapshot, now)
+        val telemetryState = cadence.effectiveState(snapshot, now)
+        val decision = decide(snapshot, now, telemetryState)
         if (decision.flushNow) {
             pendingFlushNow = true
         }
         if (decision.enqueue) {
-            val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
+            val payload = CloudTelemetryPayload.build(
+                config.vehicleId,
+                snapshot,
+                omitGps = omitGps,
+                telemetryState = telemetryState,
+            )
             queueDao.insert(pendingQueueEntity(payload, now))
             lastQueuedSampleMs = now
             if (decision.activeSample && activeBatchStartedMs == 0L) {
@@ -154,7 +161,14 @@ class CloudTelemetrySender @Inject constructor(
             return Result.failure(error)
         }
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
-        val payload = CloudTelemetryPayload.build(config.vehicleId, snapshot, omitGps = omitGps)
+        val now = nowProvider()
+        val telemetryState = cadence.effectiveState(snapshot, now)
+        val payload = CloudTelemetryPayload.build(
+            config.vehicleId,
+            snapshot,
+            omitGps = omitGps,
+            telemetryState = telemetryState,
+        )
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
             is CloudSendResult.Success -> {
                 val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1)
@@ -231,8 +245,11 @@ class CloudTelemetrySender @Inject constructor(
         }
     }
 
-    private fun decide(snapshot: VehicleTelemetrySnapshot, now: Long): QueueDecision {
-        val telemetryState = classifyCloudTelemetryState(snapshot)
+    private fun decide(
+        snapshot: VehicleTelemetrySnapshot,
+        now: Long,
+        telemetryState: IternioIntervalPolicy.TelemetryState,
+    ): QueueDecision {
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
         val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
         val active = moving || charging
@@ -289,16 +306,6 @@ class CloudTelemetrySender @Inject constructor(
             activeBatchMode = active || previousCharging == true || previousMoving == true,
             activeSample = active,
         )
-    }
-
-    private fun classifyCloudTelemetryState(
-        snapshot: VehicleTelemetrySnapshot,
-    ): IternioIntervalPolicy.TelemetryState {
-        snapshot.diPlusData?.let { return IternioIntervalPolicy.classifyFromDiPars(it) }
-        val charging = snapshot.isCharging == true ||
-            abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
-        val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
-        return IternioIntervalPolicy.classify(charging = charging, parked = !moving && !charging)
     }
 
     private suspend fun readConfig(): Result<Config> {
@@ -373,8 +380,6 @@ class CloudTelemetrySender @Inject constructor(
         const val MAX_BATCH_SIZE = 120
         const val ACTIVE_BATCH_SIZE = 15
         const val BACKLOG_DRAIN_THRESHOLD = ACTIVE_BATCH_SIZE
-        const val MOVING_SPEED_THRESHOLD_KMH = 0.5
-        const val CHARGING_POWER_THRESHOLD_KW = 0.1
         const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
         const val CHARGING_SAMPLE_INTERVAL_MS = 1_000L
         const val ACTIVE_FLUSH_INTERVAL_MS = 15_000L

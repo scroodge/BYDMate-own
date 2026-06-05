@@ -81,6 +81,21 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
+    fun `brief P during drive keeps one hertz cadence`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 4, speedKmh = 40.0))
+
+        for (second in 2..65) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(gear = 1, speedKmh = 0.0))
+        }
+
+        assertEquals(65, setup.queue.items.size)
+    }
+
+    @Test
     fun `gear change enqueues immediately while parked`() = runTest {
         val setup = setup()
 
