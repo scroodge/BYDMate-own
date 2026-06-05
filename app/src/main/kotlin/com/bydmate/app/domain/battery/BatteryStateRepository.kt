@@ -1,7 +1,6 @@
 package com.bydmate.app.domain.battery
 
 import com.bydmate.app.data.autoservice.AutoserviceClient
-import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,7 +25,7 @@ data class BatteryState(
 @Singleton
 class BatteryStateRepository @Inject constructor(
     private val autoservice: AutoserviceClient,
-    private val batteryHealth: BatteryHealthRepository,
+    private val sohResolver: SohResolver,
     private val settings: SettingsRepository
 ) {
     suspend fun refresh(): BatteryState {
@@ -39,11 +38,11 @@ class BatteryStateRepository @Inject constructor(
         val r = autoservice.readBatterySnapshot()
             ?: return BatteryState(null, null, null, null, null, autoserviceAvailable = false)
 
-        val sohFromSnapshot = batteryHealth.getLast()?.sohPercent?.toFloat()
+        val soh = sohResolver.resolveSohPercent(r)?.toFloat()
         return BatteryState(
             socNow = r.socPercent,
             voltage12v = r.voltage12v,
-            sohPercent = r.sohPercent ?: sohFromSnapshot,
+            sohPercent = soh,
             lifetimeKm = r.lifetimeMileageKm,
             lifetimeKwh = r.lifetimeKwh,
             autoserviceAvailable = true

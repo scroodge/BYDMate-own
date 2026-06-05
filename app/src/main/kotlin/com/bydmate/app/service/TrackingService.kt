@@ -75,6 +75,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
+    @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -137,6 +138,7 @@ class TrackingService : Service(), LocationListener {
 
     private val flushInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pendingCloudFlush = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var lastSohBatteryReadMs: Long = 0L
 
     companion object {
         private const val TAG = "TrackingService"
@@ -157,6 +159,7 @@ class TrackingService : Service(), LocationListener {
         // consider the session closed. 30 sec survives brief powerState blips and
         // covers the DiLink wind-down after ignition-off.
         private const val SESSION_IDLE_CLOSE_MS = 10_000L
+        private const val SOH_BATTERY_READ_INTERVAL_MS = 15L * 60_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
         private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
@@ -671,11 +674,30 @@ class TrackingService : Service(), LocationListener {
                             "false"
                         ) == "true"
                         if (cloudEnabled) {
-                            val autoserviceOn = settingsRepository.isAutoserviceEnabled()
-                            val readSnapshots = autoserviceOn && isChargingFromDiPars(data)
-                            val telemetryBattery = if (readSnapshots) {
-                                runCatching { autoserviceClient.readBatterySnapshot() }.getOrNull()
-                            } else null
+                            var autoserviceOn = settingsRepository.isAutoserviceEnabled()
+                            if (!autoserviceOn && runCatching { autoserviceClient.isAvailable() }.getOrDefault(false)) {
+                                settingsRepository.setAutoserviceEnabled(true)
+                                autoserviceOn = true
+                                Log.i(TAG, "autoservice auto-enabled (ADB available)")
+                            }
+                            val charging = isChargingFromDiPars(data)
+                            val autoserviceReady = autoserviceOn &&
+                                runCatching { autoserviceClient.isAvailable() }.getOrDefault(false)
+                            val readSnapshots = autoserviceReady && charging
+                            val telemetryBattery = when {
+                                readSnapshots -> runCatching {
+                                    autoserviceClient.readBatterySnapshot()
+                                }.getOrNull()
+                                autoserviceReady && nowMs - lastSohBatteryReadMs >= SOH_BATTERY_READ_INTERVAL_MS -> {
+                                    lastSohBatteryReadMs = nowMs
+                                    runCatching {
+                                        kotlinx.coroutines.withTimeoutOrNull(900L) {
+                                            autoserviceClient.readBatterySnapshot()
+                                        }
+                                    }.getOrNull()
+                                }
+                                else -> null
+                            }
                             val telemetryCharging = if (readSnapshots) {
                                 runCatching { autoserviceClient.readChargingSnapshot() }.getOrNull()
                             } else null
@@ -686,6 +708,7 @@ class TrackingService : Service(), LocationListener {
                                     }
                                 }.getOrNull()
                             } else null
+                            val resolvedSoh = sohResolver.resolveSohPercent(telemetryBattery)
                             val omitGps = settingsRepository.getString(
                                 com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS,
                                 "false",
@@ -705,7 +728,9 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
-                            )
+                            ).let { base ->
+                                if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
+                            }
                             maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
                         }
                     } else {

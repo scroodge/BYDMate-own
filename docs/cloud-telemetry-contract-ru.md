@@ -278,7 +278,7 @@ Backend не должен отклонять sample только из-за `null
 | `diplus_max_cell_voltage_v` | number/null | V | Дубликат DiPlus max cell для совместимости backend. |
 | `diplus_cell_delta_v` | number/null | V | Дубликат DiPlus cell delta для совместимости backend. |
 | `odometer_km` | number/null | km | Пробег. |
-| `soh_percent` | number/null | percent | Battery SOH, если доступен из autoservice и в диапазоне `0..100`. |
+| `soh_percent` | number/null | percent | Battery SOH (BMS `FID_SOH`), если доступен из autoservice и в диапазоне `0..100`. Может приходить и в **idle/parked** payload как кэшированное последнее известное значение. |
 | `is_charging` | boolean/null | `true/false` | Определяется по состоянию зарядного порта. |
 | `charge_power_kw` | number/null | kW | Положительная мощность зарядки. Если не заряжается, APK ставит `0.0`. |
 | `charge_type` | string/null | `AC`/`DC` | `AC` для gun state `2`, `DC` для `3..5`. |

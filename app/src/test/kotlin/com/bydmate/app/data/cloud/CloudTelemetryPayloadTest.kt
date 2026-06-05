@@ -30,6 +30,66 @@ class CloudTelemetryPayloadTest {
     }
 
     @Test
+    fun `idle parked payload includes soh_percent when snapshot has cached SoH`() {
+        val snapshot = VehicleTelemetrySnapshot(
+            capturedAtMs = 1_700_000_000_000L,
+            deviceTimeIso = "2026-06-05T10:00:00Z",
+            diPlusData = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            soc = 82,
+            speedKmh = 0.0,
+            powerKw = null,
+            batteryTempC = null,
+            cabinTempC = null,
+            outsideTempC = null,
+            batteryVoltageV = null,
+            auxVoltageV = null,
+            cellVoltageMinV = null,
+            cellVoltageMaxV = null,
+            cellDeltaV = null,
+            odometerKm = null,
+            sohPercent = 98.5,
+            isCharging = false,
+            chargePowerKw = null,
+            chargeType = null,
+            kwhCharged = null,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            isParked = true,
+            tirePressFL = null,
+            tirePressFR = null,
+            tirePressRL = null,
+            tirePressRR = null,
+            location = null,
+        )
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+            .getJSONObject("telemetry")
+
+        assertEquals(98.5, telemetry.getDouble("soh_percent"), 0.01)
+    }
+
+    @Test
+    fun `idle parked payload omits soh_percent when unknown`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+            .getJSONObject("telemetry")
+
+        assertEquals(false, telemetry.has("soh_percent"))
+    }
+
+    @Test
     fun `idle parked payload includes gear in diplus`() {
         val snapshot = VehicleTelemetrySnapshot.from(
             data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),

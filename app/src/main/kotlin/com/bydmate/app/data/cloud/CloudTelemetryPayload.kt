@@ -43,9 +43,10 @@ object CloudTelemetryPayload {
                 putIfPresent("cell_voltage_max_v", snapshot.cellVoltageMaxV)
                 putIfPresent("cell_delta_v", snapshot.cellDeltaV)
             }
+            // SoH changes slowly — include cached BMS value even when parked.
+            putIfPresent("soh_percent", snapshot.sohPercent)
             if (!idleOnly) {
                 putIfPresent("odometer_km", snapshot.odometerKm)
-                putIfPresent("soh_percent", snapshot.sohPercent)
                 putIfPresent("range_est_km", snapshot.rangeEstKm)
                 putIfPresent("current_trip_distance_km", snapshot.currentTripDistanceKm)
                 putIfPresent(

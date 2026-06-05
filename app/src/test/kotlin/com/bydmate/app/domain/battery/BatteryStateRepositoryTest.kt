@@ -8,6 +8,7 @@ import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -59,12 +60,28 @@ class BatteryStateRepositoryTest {
         return SettingsRepository(dao)
     }
 
+    private fun repo(
+        autoservice: FakeAutoservice,
+        lastSnapshot: BatterySnapshotEntity? = null,
+        autoserviceEnabled: Boolean = true,
+        settingsExtras: Map<String, String> = emptyMap(),
+    ): BatteryStateRepository {
+        val settings = fakeSettings(autoserviceEnabled)
+        settingsExtras.forEach { (k, v) ->
+            runBlocking { settings.setString(k, v) }
+        }
+        return BatteryStateRepository(
+            autoservice,
+            SohResolver(fakeBatteryHealth(lastSnapshot), settings),
+            settings,
+        )
+    }
+
     @Test
     fun `state has all autoservice fields null when toggle OFF`() = runTest {
-        val repo = BatteryStateRepository(
+        val repo = repo(
             FakeAutoservice(BatteryReading(100f, 91f, 600f, 2091f, 14f, 0L)),
-            fakeBatteryHealth(null),
-            fakeSettings(autoserviceEnabled = false)
+            autoserviceEnabled = false,
         )
 
         val state = repo.refresh()
@@ -78,11 +95,7 @@ class BatteryStateRepositoryTest {
 
     @Test
     fun `state populated when toggle ON and autoservice available`() = runTest {
-        val repo = BatteryStateRepository(
-            FakeAutoservice(BatteryReading(100f, 91f, 602.7f, 2091f, 14.0f, 0L)),
-            fakeBatteryHealth(null),
-            fakeSettings(autoserviceEnabled = true)
-        )
+        val repo = repo(FakeAutoservice(BatteryReading(100f, 91f, 602.7f, 2091f, 14.0f, 0L)))
 
         val state = repo.refresh()
 
@@ -96,11 +109,7 @@ class BatteryStateRepositoryTest {
 
     @Test
     fun `autoserviceAvailable is false when toggle ON but client unreachable`() = runTest {
-        val repo = BatteryStateRepository(
-            FakeAutoservice(battery = null, available = false),
-            fakeBatteryHealth(null),
-            fakeSettings(autoserviceEnabled = true)
-        )
+        val repo = repo(FakeAutoservice(battery = null, available = false))
 
         val state = repo.refresh()
 
@@ -114,10 +123,9 @@ class BatteryStateRepositoryTest {
             timestamp = 0L, socStart = 30, socEnd = 80,
             kwhCharged = 36.0, calculatedCapacityKwh = 72.0, sohPercent = 98.7
         )
-        val repo = BatteryStateRepository(
-            FakeAutoservice(BatteryReading(null, 91f, 602.7f, 2091f, 14f, 0L)),  // sohPercent sentinel
-            fakeBatteryHealth(snap),
-            fakeSettings(autoserviceEnabled = true)
+        val repo = repo(
+            FakeAutoservice(BatteryReading(null, 91f, 602.7f, 2091f, 14f, 0L)),
+            lastSnapshot = snap,
         )
 
         val state = repo.refresh()
