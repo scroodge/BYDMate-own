@@ -196,7 +196,8 @@ class AutoserviceChargingDetectorTest {
         sunroof = null, trunk = null, hood = null, seatbeltFL = null, lockFL = null,
         tirePressFL = null, tirePressFR = null, tirePressRL = null, tirePressRR = null,
         driveMode = null, workMode = null, autoPark = null, rain = null,
-        lightLow = null, drl = null
+        lightLow = null, drl = null,
+        sunshade = null, sentryState = null, remoteLockState = null,
     )
 
     // --- helpers ---

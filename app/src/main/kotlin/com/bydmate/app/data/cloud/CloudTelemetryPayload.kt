@@ -148,6 +148,18 @@ object CloudTelemetryPayload {
         } else {
             null
         })
+        putIfPresent("sunshade_percent", sunshade)
+        putIfPresent("sentry_state", sentryState)
+        putIfPresent("remote_lock_state", remoteLockState)
+        putIfPresent("window_fl_percent", windowFL)
+        putIfPresent("window_fr_percent", windowFR)
+        putIfPresent("window_rl_percent", windowRL)
+        putIfPresent("window_rr_percent", windowRR)
+        putIfPresent("sunroof_percent", sunroof)
+        putIfPresent("lock_fl", lockFL)
+        putIfPresent("ac_status", acStatus)
+        putIfPresent("ac_temp_c", acTemp)
+        putIfPresent("inside_temp_c", insideTemp)
     }
 
     private const val MOVING_SPEED_THRESHOLD_KMH = 0.5

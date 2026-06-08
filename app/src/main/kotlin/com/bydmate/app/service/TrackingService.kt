@@ -23,6 +23,7 @@ import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
+import com.bydmate.app.data.remote.VehicleCommandPoller
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
@@ -66,6 +67,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var automationEngine: AutomationEngine
     @Inject lateinit var networkAvailableMonitor: com.bydmate.app.data.automation.NetworkAvailableMonitor
     @Inject lateinit var alicePollingManager: AlicePollingManager
+    @Inject lateinit var vehicleCommandPoller: VehicleCommandPoller
     @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
     @Inject lateinit var liveTripBuffer: LiveTripBuffer
     @Inject lateinit var socInterpolator: SocInterpolator
@@ -282,6 +284,13 @@ class TrackingService : Service(), LocationListener {
             if (enabled) alicePollingManager.start()
         }
 
+        serviceScope.launch {
+            val cloudEnabled = settingsRepository.getString(
+                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false"
+            ) == "true"
+            if (cloudEnabled) vehicleCommandPoller.start()
+        }
+
         // v2.0: event-based sync on service start
         serviceScope.launch {
             try {
@@ -486,6 +495,7 @@ class TrackingService : Service(), LocationListener {
         }
 
         alicePollingManager.stop()
+        vehicleCommandPoller.stop()
         cameraStateMonitor.stop()
         _cameraActive.value = false
         networkAvailableMonitor.stop()
@@ -559,6 +569,7 @@ class TrackingService : Service(), LocationListener {
 
                         // Feed DiPlus data to Alice for real device states
                         alicePollingManager.latestData = data
+                        vehicleCommandPoller.latestData = data
 
                         // Save SOC for retrospective charge detection
                         data.soc?.let { soc ->

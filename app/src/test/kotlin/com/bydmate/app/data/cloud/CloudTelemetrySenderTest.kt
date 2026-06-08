@@ -268,6 +268,9 @@ class CloudTelemetrySenderTest {
                 rain = null,
                 lightLow = null,
                 drl = null,
+                sunshade = null,
+                sentryState = null,
+                remoteLockState = null,
             )
         } else {
             null

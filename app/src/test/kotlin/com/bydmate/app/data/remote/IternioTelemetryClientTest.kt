@@ -88,7 +88,8 @@ class IternioTelemetryClientTest {
         sunroof = 0, trunk = 0, hood = 0, seatbeltFL = 1, lockFL = 2,
         tirePressFL = 240, tirePressFR = 241, tirePressRL = 239, tirePressRR = 242,
         driveMode = 1, workMode = 1, autoPark = 0, rain = 0,
-        lightLow = 0, drl = 1
+        lightLow = 0, drl = 1,
+        sunshade = null, sentryState = null, remoteLockState = null,
     )
 
     @Test

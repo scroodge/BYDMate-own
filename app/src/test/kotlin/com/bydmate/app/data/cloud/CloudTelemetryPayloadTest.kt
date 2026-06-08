@@ -211,5 +211,8 @@ class CloudTelemetryPayloadTest {
         rain = 0,
         lightLow = 0,
         drl = 1,
+        sunshade = null,
+        sentryState = null,
+        remoteLockState = null,
     )
 }

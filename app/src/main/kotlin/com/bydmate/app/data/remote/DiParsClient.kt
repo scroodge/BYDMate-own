@@ -56,7 +56,10 @@ data class DiParsData(
     val autoPark: Int?,           // 0=disabled, 1=standby, 2=active
     val rain: Int?,
     val lightLow: Int?,           // 0=OFF, 1=ON
-    val drl: Int?                 // 0=invalid, 1=ON, 2=OFF
+    val drl: Int?,                // 0=invalid, 1=ON, 2=OFF
+    val sunshade: Int?,           // 0-100%
+    val sentryState: Int?,        // D+ sentry on/off
+    val remoteLockState: Int?,    // remote lock enum
 )
 
 @Singleton
@@ -87,7 +90,8 @@ open class DiParsClient @Inject constructor(
             "|TirePressRL:{左后轮气压}|TirePressRR:{右后轮气压}" +
             "|DriveMode:{整车运行模式}|WorkMode:{整车工作模式}" +
             "|AutoPark:{自动驻车}|Rain:{雨量}" +
-            "|LightLow:{近光灯}|DRL:{日行灯}"
+            "|LightLow:{近光灯}|DRL:{日行灯}" +
+            "|Sunshade:{遮阳帘打开百分比}|Sentry:{哨兵状态}|RemoteLock:{远程锁车状态}"
     }
 
     open suspend fun fetch(): DiParsData? = withContext(Dispatchers.IO) {
@@ -193,7 +197,10 @@ open class DiParsClient @Inject constructor(
             autoPark = map["AutoPark"]?.toIntOrNull(),
             rain = map["Rain"]?.toIntOrNull(),
             lightLow = map["LightLow"]?.toIntOrNull(),
-            drl = map["DRL"]?.toIntOrNull()
+            drl = map["DRL"]?.toIntOrNull(),
+            sunshade = map["Sunshade"]?.toIntOrNull(),
+            sentryState = map["Sentry"]?.toIntOrNull(),
+            remoteLockState = map["RemoteLock"]?.toIntOrNull(),
         )
     }
 }
