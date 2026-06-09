@@ -1,0 +1,84 @@
+#!/system/bin/sh
+# VoltFlow Mate command-poll daemon — survival watchdog launcher.
+#
+# Runs CommandDaemon (com.bydmate.app.daemon.CommandDaemon) as a shell-uid app_process
+# daemon so it survives BYD's power-off force-stop (collectPowerOffEvent / quickboot),
+# exactly like DI+ (aps_diplus) and Overdrive (acc_sentry_daemon) do.
+#
+# Deploy once via wireless ADB or Termux (shell uid):
+#   1. Put cloud config at /data/local/tmp/voltflow_cmd.conf  (see voltflow_cmd.conf.example)
+#   2. adb push tools/start_voltflow_cmd.sh /data/local/tmp/ && chmod 755 /data/local/tmp/start_voltflow_cmd.sh
+#   3. setsid sh /data/local/tmp/start_voltflow_cmd.sh >/dev/null 2>&1 &
+# To stop: touch /data/local/tmp/voltflow_cmd_daemon.disabled   (watchdog exits on next loop)
+# To re-enable: rm that sentinel and relaunch step 3.
+
+PKG="dev.scroodge.cloudevmate"
+CLS="com.bydmate.app.daemon.CommandDaemon"
+CONF="/data/local/tmp/voltflow_cmd.conf"
+# The app (TrackingService.exportDaemonConfig) writes creds here — shell-readable mirror of app settings.
+APP_CONF="/storage/emulated/0/Android/data/$PKG/files/voltflow_cmd.conf"
+PROCESS_NAME="voltflow_cmd_daemon"
+LOG_FILE="/data/local/tmp/voltflow_cmd_daemon.log"
+SENTINEL="/data/local/tmp/voltflow_cmd_daemon.disabled"
+
+# Android 12+ kills "phantom" (app-spawned) processes; lift the cap so app_process daemons persist.
+/system/bin/device_config put activity_manager max_phantom_processes 2147483647 >/dev/null 2>&1
+
+echo "=== VoltFlow cmd watchdog started $(date) ===" > "$LOG_FILE"
+
+# Wait for boot so pm/package paths resolve.
+BOOT_WAIT=0
+while [ "$(getprop sys.boot_completed)" != "1" ] && [ $BOOT_WAIT -lt 120 ]; do
+  [ -f "$SENTINEL" ] && { echo "[$(date)] disabled during boot-wait, exit" >> "$LOG_FILE"; exit 0; }
+  sleep 2; BOOT_WAIT=$((BOOT_WAIT + 2))
+done
+echo "[$(date)] boot ready (waited ${BOOT_WAIT}s)" >> "$LOG_FILE"
+sleep 3
+
+while true; do
+  [ -f "$SENTINEL" ] && { echo "[$(date)] disabled (sentinel), exit" >> "$LOG_FILE"; exit 0; }
+
+  # Pull latest creds the app exported (if present) into our shell-readable conf.
+  if [ -f "$APP_CONF" ]; then
+    cp -f "$APP_CONF" "$CONF" 2>/dev/null && chmod 600 "$CONF" 2>/dev/null
+  fi
+
+  # Resolve current APK path each iteration (survives app updates).
+  APK_PATH=$(pm path "$PKG" 2>/dev/null | sed -n 's/^package://p' | head -1)
+  if [ -z "$APK_PATH" ]; then
+    echo "[$(date)] $PKG not installed yet, retry in 10s" >> "$LOG_FILE"
+    sleep 10; continue
+  fi
+
+  # Rotate log if large (>5MB).
+  LOG_SZ=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+  [ "$LOG_SZ" -gt 5242880 ] && : > "$LOG_FILE"
+
+  echo "[$(date)] launching $PROCESS_NAME (apk=$APK_PATH)" >> "$LOG_FILE"
+  CLASSPATH="$APK_PATH" app_process /system/bin --nice-name="$PROCESS_NAME" "$CLS" "$CONF" >> "$LOG_FILE" 2>&1 &
+  DAEMON_PID=$!
+
+  # Watcher: while the daemon runs, refresh exported creds and detect APK updates.
+  # On `adb install -r` the package path changes — kill the daemon so the loop respawns
+  # it from the NEW code automatically (no manual restart needed after an APK update).
+  (
+    while kill -0 "$DAEMON_PID" 2>/dev/null; do
+      sleep 30
+      [ -f "$APP_CONF" ] && cp -f "$APP_CONF" "$CONF" 2>/dev/null && chmod 600 "$CONF" 2>/dev/null
+      NOW_APK=$(pm path "$PKG" 2>/dev/null | sed -n 's/^package://p' | head -1)
+      if [ -n "$NOW_APK" ] && [ "$NOW_APK" != "$APK_PATH" ]; then
+        echo "[$(date)] APK changed, restarting daemon for new code" >> "$LOG_FILE"
+        kill "$DAEMON_PID" 2>/dev/null
+        break
+      fi
+    done
+  ) &
+  WATCHER_PID=$!
+  wait "$DAEMON_PID"
+  EXIT_CODE=$?
+  kill "$WATCHER_PID" 2>/dev/null
+
+  [ -f "$SENTINEL" ] && { echo "[$(date)] disabled after daemon stop, exit" >> "$LOG_FILE"; exit 0; }
+  echo "[$(date)] daemon died (code=$EXIT_CODE), respawn in 3s" >> "$LOG_FILE"
+  sleep 3
+done

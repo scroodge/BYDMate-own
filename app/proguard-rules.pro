@@ -26,3 +26,7 @@
 # Keep data classes for Room
 -keepclassmembers class com.bydmate.app.data.local.entity.** { *; }
 -keepclassmembers class com.bydmate.app.data.local.dao.** { *; }
+
+# Headless app_process command daemon — launched by name via `app_process ... com.bydmate.app.daemon.CommandDaemon`.
+# Its main() entrypoint is resolved reflectively by the runtime, so the class + main must survive R8.
+-keep class com.bydmate.app.daemon.CommandDaemon { public static void main(java.lang.String[]); }
