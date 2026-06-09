@@ -27,6 +27,20 @@ class CommandAllowlistTest {
     }
 
     @Test
+    fun windowsPresetVentPhrase() {
+        val result = CommandAllowlist.buildPhrase("windows_preset", mapOf("preset" to "vent"))
+        assertTrue(result is CommandAllowlist.BuildResult.Ok)
+        assertEquals("车窗通风", (result as CommandAllowlist.BuildResult.Ok).phrase)
+    }
+
+    @Test
+    fun acVentPhrases() {
+        val on = CommandAllowlist.buildPhrase("ac_vent", mapOf("on" to true))
+        assertTrue(on is CommandAllowlist.BuildResult.Ok)
+        assertEquals("打开空调通风", (on as CommandAllowlist.BuildResult.Ok).phrase)
+    }
+
+    @Test
     fun movementGuardBlocksDriving() {
         val data = DiParsData(
             soc = 50, speed = 10, mileage = null, power = null, chargeGunState = null,

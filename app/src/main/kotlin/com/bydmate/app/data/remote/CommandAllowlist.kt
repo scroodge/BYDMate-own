@@ -14,6 +14,13 @@ object CommandAllowlist {
         "all" to "全部车窗",
     )
 
+    private val WINDOWS_PRESET_PHRASES = mapOf(
+        "vent" to "车窗通风",
+        "close" to "车窗关闭",
+        "open" to "车窗全开",
+        "half" to "车窗半开",
+    )
+
     private const val GEAR_PARK = 1
     private const val MIN_AUX_VOLTAGE_V = 11.8
 
@@ -64,6 +71,25 @@ object CommandAllowlist {
                     ?: return BuildResult.Rejected("window.pct invalid")
                 if (pct !in 0..100) return BuildResult.Rejected("window.pct out of range")
                 "${cn}打开百分之$pct"
+            }
+            "windows_preset" -> {
+                val preset = params["preset"]?.toString()?.trim().orEmpty()
+                WINDOWS_PRESET_PHRASES[preset]
+                    ?: return BuildResult.Rejected("windows_preset.preset invalid")
+            }
+            "ac" -> {
+                when (readBool(params["on"])) {
+                    true -> "自动空调"
+                    false -> "关闭空调"
+                    null -> return BuildResult.Rejected("ac.on invalid")
+                }
+            }
+            "ac_vent" -> {
+                when (readBool(params["on"])) {
+                    true -> "打开空调通风"
+                    false -> "关闭空调"
+                    null -> return BuildResult.Rejected("ac_vent.on invalid")
+                }
             }
             "sunroof" -> {
                 val pct = readInt(params["pct"])
