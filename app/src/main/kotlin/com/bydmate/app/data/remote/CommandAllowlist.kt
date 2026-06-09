@@ -23,6 +23,7 @@ object CommandAllowlist {
 
     private const val GEAR_PARK = 1
     private const val MIN_AUX_VOLTAGE_V = 11.8
+    private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 
     sealed class BuildResult {
         data class Ok(val phrase: String) : BuildResult()
@@ -31,11 +32,20 @@ object CommandAllowlist {
 
     fun movementBlockReason(data: DiParsData?): String? {
         if (data == null) return null
-        val speed = data.speed ?: return "speed_unknown"
-        if (speed != 0) return "vehicle_moving"
+        val speed = data.speed
+        if (speed != null && speed != 0) return "vehicle_moving"
+        if (data.gear == GEAR_PARK) return null
+        if (isStationaryCharging(data)) return null
         val gear = data.gear ?: return "gear_unknown"
         if (gear != GEAR_PARK) return "gear_not_park"
         return null
+    }
+
+    private fun isStationaryCharging(data: DiParsData): Boolean {
+        if (data.speed != null && data.speed != 0) return false
+        if (data.chargeGunState in CHARGING_GUN_STATES) return true
+        val status = data.chargingStatus
+        return status != null && status > 0
     }
 
     fun auxVoltageBlockReason(data: DiParsData?): String? {
