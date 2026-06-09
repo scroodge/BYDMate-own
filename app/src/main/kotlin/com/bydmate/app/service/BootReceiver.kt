@@ -7,9 +7,12 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.bydmate.app.di.BootEntryPoint
+import dagger.hilt.android.EntryPointAccessors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.runBlocking
 
 /**
  * Auto-start on boot — uses WorkManager (like BydConnect).
@@ -41,6 +44,17 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_USER_PRESENT
         )
         if (intent.action !in validActions) return
+
+        val gatewayWanted = runBlocking {
+            EntryPointAccessors.fromApplication(context.applicationContext, BootEntryPoint::class.java)
+                .settingsRepository()
+                .isGatewayWanted()
+        }
+        if (!gatewayWanted) {
+            Log.i(TAG, "Gateway not wanted, skipping autostart (${intent.action})")
+            appendChainLog(context, "Boot skipped (gateway_wanted=false)")
+            return
+        }
 
         Log.i(TAG, "Boot/user event: ${intent.action}")
         appendChainLog(context, "BootReceiver: ${intent.action}")

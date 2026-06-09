@@ -63,6 +63,7 @@ fun GatewayScreen(
     val context = LocalContext.current
     val isRunning by TrackingService.isRunning.collectAsStateWithLifecycle()
     val diPlusConnected by TrackingService.diPlusConnected.collectAsStateWithLifecycle()
+    val overdriveConnected by TrackingService.overdriveConnected.collectAsStateWithLifecycle()
     val data by TrackingService.lastData.collectAsStateWithLifecycle()
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
@@ -85,6 +86,10 @@ fun GatewayScreen(
         StatusCard(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
+            overdriveConnected = overdriveConnected,
+            keepAliveProvider = state.keepAliveProvider,
+            onKeepAliveProvider = viewModel::updateKeepAliveProvider,
+            cloudSyncStatus = state.cloudSyncStatus,
             onStart = { TrackingService.start(context) },
             onStop = { TrackingService.stop(context) },
             strings = strings,
@@ -264,15 +269,49 @@ private fun Header(appVersion: String, strings: GatewayStrings) {
 private fun StatusCard(
     isRunning: Boolean,
     diPlusConnected: Boolean,
+    overdriveConnected: Boolean,
+    keepAliveProvider: String,
+    onKeepAliveProvider: (String) -> Unit,
+    cloudSyncStatus: String?,
     onStart: () -> Unit,
     onStop: () -> Unit,
     strings: GatewayStrings,
 ) {
+    val isOverdrive = keepAliveProvider == SettingsRepository.KEEP_ALIVE_PROVIDER_OVERDRIVE
     GatewayCard {
         Text(strings.gatewayStatus, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(10.dp))
         StatusRow(strings.service, if (isRunning) strings.running else strings.stopped, isRunning)
+        StatusRow(strings.keepAliveProvider, if (isOverdrive) "Overdrive" else "D+", true)
+        if (isOverdrive) {
+            StatusRow("Overdrive", if (overdriveConnected) strings.connected else strings.waiting, overdriveConnected)
+        }
         StatusRow("DiPlus", if (diPlusConnected) strings.connected else strings.waiting, diPlusConnected)
+        cloudSyncStatus?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(it, color = if (it.isErrorStatus()) AccentOrange else TextSecondary, fontSize = 12.sp)
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = { onKeepAliveProvider(SettingsRepository.KEEP_ALIVE_PROVIDER_OVERDRIVE) },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isOverdrive) AccentGreen else CardSurfaceElevated,
+                    contentColor = if (isOverdrive) NavyDark else TextPrimary,
+                ),
+            ) { Text("Overdrive", fontSize = 12.sp) }
+            Button(
+                onClick = { onKeepAliveProvider(SettingsRepository.KEEP_ALIVE_PROVIDER_DIPLUS) },
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (!isOverdrive) AccentGreen else CardSurfaceElevated,
+                    contentColor = if (!isOverdrive) NavyDark else TextPrimary,
+                ),
+            ) { Text("D+", fontSize = 12.sp) }
+        }
         Spacer(modifier = Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -572,6 +611,7 @@ private data class GatewayStrings(
     val checkUpdates: String,
     val checkUpdatesHint: String,
     val checkUpdatesNow: String,
+    val keepAliveProvider: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -618,6 +658,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Проверять обновления",
             checkUpdatesHint = "При запуске проверять GitHub и предлагать обновиться",
             checkUpdatesNow = "Проверить обновления сейчас",
+            keepAliveProvider = "Keep-alive",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -661,6 +702,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Check for updates",
             checkUpdatesHint = "On launch, check GitHub and offer to update",
             checkUpdatesNow = "Check for updates now",
+            keepAliveProvider = "Keep-alive",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -704,6 +746,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Правяраць абнаўленні",
             checkUpdatesHint = "Пры запуску правяраць GitHub і прапаноўваць абнавіцца",
             checkUpdatesNow = "Праверыць абнаўленні зараз",
+            keepAliveProvider = "Keep-alive",
         )
     }
 

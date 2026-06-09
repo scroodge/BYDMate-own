@@ -60,6 +60,10 @@ data class DiParsData(
     val sunshade: Int?,           // 0-100%
     val sentryState: Int?,        // D+ sentry on/off
     val remoteLockState: Int?,    // remote lock enum
+    /** D+ `熄火录像配置开关` text value, e.g. 开启熄火哨兵 */
+    val stallSentryMode: String?,
+    /** D+ `电源状态` text, e.g. 关 / 行车 */
+    val powerStateLabel: String?,
 )
 
 @Singleton
@@ -69,6 +73,7 @@ open class DiParsClient @Inject constructor(
     companion object {
         private const val TAG = "DiParsClient"
         private const val BASE_URL = "http://127.0.0.1:8988/api/getDiPars"
+        private const val GET_VAL_URL = "http://127.0.0.1:8988/api/getVal"
         private const val TEMPLATE =
             "SOC:{电量百分比}|Speed:{车速}|Mileage:{里程}|Power:{发动机功率}" +
             "|ChargeGun:{充电枪插枪状态}|MaxBatTemp:{最高电池温度}" +
@@ -114,9 +119,33 @@ open class DiParsClient @Inject constructor(
                 return@withContext null
             }
 
-            parse(json.optString("val", ""))
+            val base = parse(json.optString("val", ""))
+            val stallSentry = fetchVal("熄火录像配置开关")
+            val powerLabel = fetchVal("电源状态")
+            base.copy(
+                stallSentryMode = stallSentry ?: base.stallSentryMode,
+                powerStateLabel = powerLabel ?: base.powerStateLabel,
+            )
         } catch (e: Exception) {
             Log.e(TAG, "fetch failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun fetchVal(name: String): String? {
+        return try {
+            val httpUrl = GET_VAL_URL.toHttpUrl().newBuilder()
+                .addQueryParameter("name", name)
+                .addQueryParameter("status", "true")
+                .build()
+            val request = Request.Builder().url(httpUrl).build()
+            val response = httpClient.newCall(request).execute()
+            val body = response.body?.string() ?: return null
+            val json = JSONObject(body)
+            if (!json.optBoolean("success", false)) return null
+            json.optString("val").takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            Log.d(TAG, "fetchVal($name) failed: ${e.message}")
             null
         }
     }
@@ -201,6 +230,8 @@ open class DiParsClient @Inject constructor(
             sunshade = map["Sunshade"]?.toIntOrNull(),
             sentryState = map["Sentry"]?.toIntOrNull(),
             remoteLockState = map["RemoteLock"]?.toIntOrNull(),
+            stallSentryMode = null,
+            powerStateLabel = null,
         )
     }
 }

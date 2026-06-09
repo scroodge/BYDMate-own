@@ -78,6 +78,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
+    @Inject lateinit var overdriveEventClient: com.bydmate.app.data.remote.OverdriveEventClient
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -90,6 +91,9 @@ class TrackingService : Service(), LocationListener {
     // outage triggers an immediate retry; otherwise spaced by RELAUNCH_COOLDOWN_MS
     // to avoid hammering the launcher when D+ is genuinely broken.
     @Volatile private var lastDiPlusRelaunchTs: Long = 0L
+    @Volatile private var lastWakeLockRenewTs: Long = 0L
+    @Volatile private var lastOverdriveCheckTs: Long = 0L
+    @Volatile private var overdriveOfflineTicks: Int = 0
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
     // Primary signal: DiPars powerState ≥ 1. Fallback when powerState is unreliable:
@@ -157,6 +161,10 @@ class TrackingService : Service(), LocationListener {
         // Cool-down between D+ relaunch attempts while it is still silent. Caps
         // log noise / launcher pressure when D+ refuses to come back up.
         private const val DIPLUS_RELAUNCH_COOLDOWN_MS = 5L * 60_000L
+        private const val WAKE_LOCK_RENEW_MS = 5L * 60_000L
+        private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
+        private const val OVERDRIVE_CHECK_INTERVAL_MS = 30_000L
+        const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
         // covers the DiLink wind-down after ignition-off.
@@ -193,6 +201,9 @@ class TrackingService : Service(), LocationListener {
         private val _diPlusConnected = MutableStateFlow(true)
         val diPlusConnected: StateFlow<Boolean> = _diPlusConnected
 
+        private val _overdriveConnected = MutableStateFlow(false)
+        val overdriveConnected: StateFlow<Boolean> = _overdriveConnected
+
         /**
          * True while the BYD built-in camera surface (`com.byd.avc`) is in
          * foreground — covers reverse, slow-forward auto-pop, 360° button and
@@ -203,11 +214,21 @@ class TrackingService : Service(), LocationListener {
         val cameraActive: StateFlow<Boolean> = _cameraActive
 
         fun start(context: Context) {
-            val intent = Intent(context, TrackingService::class.java)
+            val intent = Intent(context, TrackingService::class.java).apply {
+                putExtra(EXTRA_SET_GATEWAY_WANTED, true)
+            }
             context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
+            val markIntent = Intent(context, TrackingService::class.java).apply {
+                putExtra(EXTRA_SET_GATEWAY_WANTED, false)
+            }
+            try {
+                context.startService(markIntent)
+            } catch (_: Exception) {
+            }
+            GatewayKeepAliveWorker.cancel(context)
             context.stopService(Intent(context, TrackingService::class.java))
         }
     }
@@ -275,6 +296,11 @@ class TrackingService : Service(), LocationListener {
         startCameraMonitor()
         _isRunning.value = true
         appendChainLog("TrackingService fully started")
+        serviceScope.launch {
+            if (settingsRepository.isGatewayWanted()) {
+                GatewayKeepAliveWorker.schedule(this@TrackingService)
+            }
+        }
 
         // Start Smart Home polling if configured
         serviceScope.launch {
@@ -324,8 +350,22 @@ class TrackingService : Service(), LocationListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.let { handleGatewayWantedExtra(it) }
         maybeAttachWidget()
         return START_STICKY
+    }
+
+    private fun handleGatewayWantedExtra(intent: Intent) {
+        if (!intent.hasExtra(EXTRA_SET_GATEWAY_WANTED)) return
+        val wanted = intent.getBooleanExtra(EXTRA_SET_GATEWAY_WANTED, false)
+        serviceScope.launch {
+            settingsRepository.setGatewayWanted(wanted)
+            if (wanted) {
+                GatewayKeepAliveWorker.schedule(this@TrackingService)
+            } else {
+                GatewayKeepAliveWorker.cancel(this@TrackingService)
+            }
+        }
     }
 
     private fun maybeAttachWidget() {
@@ -680,6 +720,8 @@ class TrackingService : Service(), LocationListener {
                         automationEngine.evaluate(data, sessionId)
                         updateNotification(data)
                         maybeLogSessionSummary(nowMs, data, sessionId)
+                        renewWakeLockIfNeeded()
+                        runCoLifecycleWatchdog(dataFetched = true)
                         val cloudEnabled = settingsRepository.getString(
                             com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
                             "false"
@@ -729,6 +771,14 @@ class TrackingService : Service(), LocationListener {
                                 !hasLocationPermission() -> null
                                 else -> loc
                             }
+                            val keepAliveProvider = settingsRepository.getKeepAliveProvider()
+                            val overdriveActive = if (
+                                OverdriveCoLifecycleWatchdog.isOverdriveProvider(keepAliveProvider)
+                            ) {
+                                _overdriveConnected.value
+                            } else {
+                                null
+                            }
                             val telemetrySnapshot = VehicleTelemetrySnapshot.from(
                                 data = data,
                                 battery = telemetryBattery,
@@ -739,6 +789,8 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
+                                sentryProvider = keepAliveProvider,
+                                overdriveSentryActive = overdriveActive,
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }
@@ -746,12 +798,16 @@ class TrackingService : Service(), LocationListener {
                         }
                     } else {
                         consecutiveNullCount++
+                        renewWakeLockIfNeeded()
+                        runCoLifecycleWatchdog(dataFetched = false)
                         if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
                             _diPlusConnected.value = false
                             currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
                                 .coerceAtMost(MAX_POLL_INTERVAL_MS)
                             val now = System.currentTimeMillis()
-                            if (DiPlusWatchdog.shouldRelaunch(
+                            val provider = settingsRepository.getKeepAliveProvider()
+                            if (OverdriveCoLifecycleWatchdog.shouldRelaunchDiPlus(provider) &&
+                                DiPlusWatchdog.shouldRelaunch(
                                     failuresCount = consecutiveNullCount,
                                     threshold = NULL_WARNING_THRESHOLD,
                                     nowMs = now,
@@ -1007,7 +1063,44 @@ class TrackingService : Service(), LocationListener {
     private fun acquireWakeLock() {
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "bydmate:tracking")
-        wakeLock?.acquire(30 * 60 * 1000L) // 30 min max, auto-released
+        wakeLock?.acquire(WAKE_LOCK_DURATION_MS)
+        lastWakeLockRenewTs = System.currentTimeMillis()
+    }
+
+    private fun renewWakeLockIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeLockRenewTs < WAKE_LOCK_RENEW_MS) return
+        val lock = wakeLock ?: return
+        if (lock.isHeld) {
+            lock.release()
+        }
+        lock.acquire(WAKE_LOCK_DURATION_MS)
+        lastWakeLockRenewTs = now
+    }
+
+    private suspend fun runCoLifecycleWatchdog(dataFetched: Boolean) {
+        if (!settingsRepository.isGatewayWanted()) return
+        val provider = settingsRepository.getKeepAliveProvider()
+        if (OverdriveCoLifecycleWatchdog.isOverdriveProvider(provider)) {
+            val now = System.currentTimeMillis()
+            if (now - lastOverdriveCheckTs >= OVERDRIVE_CHECK_INTERVAL_MS) {
+                lastOverdriveCheckTs = now
+                val alive = OverdriveCoLifecycleWatchdog.isOverdriveProcessAlive(this) ||
+                    overdriveEventClient.ping()
+                _overdriveConnected.value = alive
+                overdriveOfflineTicks = if (alive) 0 else overdriveOfflineTicks + 1
+                if (overdriveOfflineTicks >= NULL_WARNING_THRESHOLD) {
+                    Log.w(TAG, "Overdrive sentry offline — remote may be unavailable")
+                }
+            }
+            if (!dataFetched && overdriveOfflineTicks >= NULL_WARNING_THRESHOLD) {
+                _diPlusConnected.value = false
+            }
+            return
+        }
+        if (dataFetched) {
+            _overdriveConnected.value = false
+        }
     }
 
     private fun createNotificationChannel() {

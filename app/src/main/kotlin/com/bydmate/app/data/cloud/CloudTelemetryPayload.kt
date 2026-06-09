@@ -85,7 +85,13 @@ object CloudTelemetryPayload {
             put("telemetry", telemetry)
             when {
                 snapshot.diPlusData != null && idleOnly ->
-                    put("diplus", snapshot.diPlusData.toStatusJson())
+                    put(
+                        "diplus",
+                        snapshot.diPlusData.toStatusJson(
+                            keepAliveProvider = snapshot.sentryProvider,
+                            overdriveSentryActive = snapshot.overdriveSentryActive,
+                        ),
+                    )
                 snapshot.diPlusData != null && !idleOnly ->
                     put("diplus", snapshot.diPlusData.toJson(includePower = moving || charging))
             }
@@ -118,11 +124,20 @@ object CloudTelemetryPayload {
         put(name, value)
     }
 
-    private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
+    private fun DiParsData.toStatusJson(
+        keepAliveProvider: String? = null,
+        overdriveSentryActive: Boolean? = null,
+    ): JSONObject = JSONObject().apply {
         putIfPresent("soc", soc)
         putIfPresent("gear", gear)
         putIfPresent("charge_gun_state", chargeGunState)
         putIfPresent("speed_kmh", speed)
+        putIfPresent("power_state", powerStateLabel ?: powerState)
+        putIfPresent("voltage_12v", voltage12v)
+        putIfPresent("sentry_state", sentryState)
+        putIfPresent("stall_sentry_mode", stallSentryMode)
+        keepAliveProvider?.let { put("sentry_provider", it) }
+        overdriveSentryActive?.let { put("sentry_active", it) }
     }
 
     private fun DiParsData.toJson(includePower: Boolean): JSONObject = JSONObject().apply {

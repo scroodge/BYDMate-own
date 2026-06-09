@@ -6,6 +6,8 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.bydmate.app.di.BootEntryPoint
+import dagger.hilt.android.EntryPointAccessors
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +32,13 @@ class ServiceStartWorker(
     override suspend fun doWork(): Result {
         Log.i(TAG, "Starting TrackingService via WorkManager")
         appendChainLog("Worker doWork started")
+        val settings = EntryPointAccessors.fromApplication(applicationContext, BootEntryPoint::class.java)
+            .settingsRepository()
+        if (!settings.isGatewayWanted()) {
+            Log.i(TAG, "Gateway not wanted, skip start")
+            appendChainLog("Worker skipped (gateway_wanted=false)")
+            return Result.success()
+        }
         return try {
             val intent = Intent(applicationContext, TrackingService::class.java).apply {
                 putExtra("onBoot", true)
