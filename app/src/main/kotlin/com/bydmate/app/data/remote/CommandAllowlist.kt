@@ -128,6 +128,68 @@ object CommandAllowlist {
                 }
             }
             "child_lock_left" -> "打开左童锁"
+            // --- Extended set (keep in sync with command-allowlist.ts + BYD_MA COMMAND_ALLOWLIST.md) ---
+            // Confidence apk = present in decompiled D+ (cmd/f.java, service/KDService.java).
+            "sentry" -> when (readBool(params["on"])) {            // apk
+                true -> "开启哨兵模式"
+                false -> "关闭哨兵模式"
+                null -> return BuildResult.Rejected("sentry.on invalid")
+            }
+            "sentry_autostart" -> when (readBool(params["on"])) {  // apk
+                true -> "开启自动启动哨兵模式"
+                false -> "关闭自动启动哨兵模式"
+                null -> return BuildResult.Rejected("sentry_autostart.on invalid")
+            }
+            "screen_off" -> "屏幕关闭"                              // apk
+            "windows_close" -> "一键关窗"                          // apk
+            "ac_temp_up" -> "空调升温"                            // apk (KDService)
+            "ac_temp_down" -> "空调降温"                          // apk (KDService)
+            // Comfort set below — BYD voice vocabulary, UNVERIFIED (confidence guess): live-test then mark.
+            "ac_temp" -> {
+                val v = readInt(params["value"]) ?: return BuildResult.Rejected("ac_temp.value invalid")
+                if (v !in 16..32) return BuildResult.Rejected("ac_temp.value out of range")
+                "空调温度${v}度"
+            }
+            "fan_level" -> {
+                val v = readInt(params["value"]) ?: return BuildResult.Rejected("fan_level.value invalid")
+                if (v !in 0..7) return BuildResult.Rejected("fan_level.value out of range")
+                "风量${v}档"
+            }
+            "trunk" -> "打开后备箱"
+            "defrost" -> when (readBool(params["on"])) {
+                true -> "打开除雾"
+                false -> "关闭除雾"
+                null -> return BuildResult.Rejected("defrost.on invalid")
+            }
+            "rear_defrost" -> when (readBool(params["on"])) {
+                true -> "打开后除霜"
+                false -> "关闭后除霜"
+                null -> return BuildResult.Rejected("rear_defrost.on invalid")
+            }
+            "seat_heat_driver" -> when (readBool(params["on"])) {
+                true -> "打开主驾座椅加热"
+                false -> "关闭主驾座椅加热"
+                null -> return BuildResult.Rejected("seat_heat_driver.on invalid")
+            }
+            "seat_heat_pass" -> when (readBool(params["on"])) {
+                true -> "打开副驾座椅加热"
+                false -> "关闭副驾座椅加热"
+                null -> return BuildResult.Rejected("seat_heat_pass.on invalid")
+            }
+            "steering_heat" -> when (readBool(params["on"])) {
+                true -> "打开方向盘加热"
+                false -> "关闭方向盘加热"
+                null -> return BuildResult.Rejected("steering_heat.on invalid")
+            }
+            "mirror_fold" -> when (readBool(params["on"])) {
+                true -> "折叠后视镜"
+                false -> "展开后视镜"
+                null -> return BuildResult.Rejected("mirror_fold.on invalid")
+            }
+            "find_car" -> "寻车"
+            "honk" -> "鸣笛"
+            "flash_lights" -> "闪灯"
+            "charge_port" -> "打开充电口"
             "tts" -> {
                 val text = params["text"]?.toString()?.trim().orEmpty()
                 if (text.isEmpty() || text.length > 80) return BuildResult.Rejected("tts.text invalid")
