@@ -47,6 +47,9 @@ object CommandDaemon {
     /** How often to refresh telemetry used for movement/voltage guards. */
     private const val TELEMETRY_TTL_MS = 5_000L
 
+    /** How often the daemon pushes a telemetry sample to the cloud (keeps data flowing when the app is dead). */
+    private const val TELEMETRY_PUSH_MS = 60_000L
+
     private val ts get() = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
     private fun log(msg: String) {
         println("[$ts] $msg")
@@ -56,6 +59,7 @@ object CommandDaemon {
     private data class Conf(
         val commandsUrl: String,
         val ackUrl: String,
+        val telemetryUrl: String,
         val apiKey: String,
         val vehicleId: String,
     )
@@ -76,6 +80,7 @@ object CommandDaemon {
         var backoffMs = BASE_POLL_MS
         var latestData: DiParsData? = null
         var latestDataAt = 0L
+        var lastTelemetryPushAt = 0L
 
         runBlocking {
             while (true) {
@@ -90,6 +95,12 @@ object CommandDaemon {
                     val now = System.currentTimeMillis()
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
                         diPars.fetch()?.let { latestData = it; latestDataAt = now }
+                    }
+
+                    // Push telemetry to the cloud so data keeps flowing while the app process is dead.
+                    if (now - lastTelemetryPushAt >= TELEMETRY_PUSH_MS) {
+                        latestData?.let { pushTelemetry(ok, conf, it) }
+                        lastTelemetryPushAt = now
                     }
 
                     val result = pollOnce(ok, conf, control, latestData)
@@ -194,6 +205,94 @@ object CommandDaemon {
             put("result", JSONObject(result))
         }
 
+    /** Push one telemetry sample to the cloud ingest endpoint (contract: docs/cloud-telemetry-contract-ru.md). */
+    private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData) {
+        try {
+            val payload = buildTelemetryPayload(conf.vehicleId, data).toString()
+            val request = Request.Builder()
+                .url(conf.telemetryUrl)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("X-API-Key", conf.apiKey)
+                .header("X-Vehicle-Id", conf.vehicleId)
+                .header("X-App", "VoltFlow-Mate-Daemon")
+                .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            ok.newCall(request).execute().use {
+                log("telemetry HTTP ${it.code} (soc=${data.soc} pwr_state=${data.powerState})")
+            }
+        } catch (e: Exception) {
+            log("telemetry push failed: ${e.message}")
+        }
+    }
+
+    private fun buildTelemetryPayload(vehicleId: String, d: DiParsData): JSONObject {
+        val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
+            d.maxCellVoltage!! - d.minCellVoltage!!
+        } else {
+            null
+        }
+        val gun = d.chargeGunState
+        val isCharging = (d.chargingStatus != null && d.chargingStatus!! > 0) ||
+            (gun != null && gun in 2..5)
+
+        val diplus = JSONObject().apply {
+            putN("soc", d.soc); putN("speed_kmh", d.speed); putN("mileage_km", d.mileage)
+            putN("power_kw", d.power); putN("charge_gun_state", d.chargeGunState)
+            putN("max_battery_temp_c", d.maxBatTemp); putN("avg_battery_temp_c", d.avgBatTemp)
+            putN("min_battery_temp_c", d.minBatTemp); putN("charging_status", d.chargingStatus)
+            putN("battery_capacity_kwh", d.batteryCapacityKwh)
+            putN("total_elec_consumption_kwh", d.totalElecConsumption)
+            putN("voltage_12v", d.voltage12v); putN("max_cell_voltage_v", d.maxCellVoltage)
+            putN("min_cell_voltage_v", d.minCellVoltage); putN("cell_delta_v", cellDelta)
+            putN("exterior_temp_c", d.exteriorTemp); putN("gear", d.gear); putN("power_state", d.powerState)
+            putN("inside_temp_c", d.insideTemp); putN("ac_status", d.acStatus); putN("ac_temp_c", d.acTemp)
+            putN("fan_level", d.fanLevel); putN("ac_circ", d.acCirc)
+            putN("door_fl", d.doorFL); putN("door_fr", d.doorFR); putN("door_rl", d.doorRL); putN("door_rr", d.doorRR)
+            putN("window_fl_percent", d.windowFL); putN("window_fr_percent", d.windowFR)
+            putN("window_rl_percent", d.windowRL); putN("window_rr_percent", d.windowRR)
+            putN("sunroof_percent", d.sunroof); putN("trunk", d.trunk); putN("hood", d.hood)
+            putN("seatbelt_fl", d.seatbeltFL); putN("lock_fl", d.lockFL)
+            putN("tire_press_fl_kpa", d.tirePressFL); putN("tire_press_fr_kpa", d.tirePressFR)
+            putN("tire_press_rl_kpa", d.tirePressRL); putN("tire_press_rr_kpa", d.tirePressRR)
+            putN("drive_mode", d.driveMode); putN("work_mode", d.workMode); putN("auto_park", d.autoPark)
+            putN("rain", d.rain); putN("light_low", d.lightLow); putN("drl", d.drl)
+            putN("sunshade_percent", d.sunshade)
+            putN("sentry_state", d.sentryState); putN("remote_lock_state", d.remoteLockState)
+            putN("stall_sentry_mode", d.stallSentryMode)
+        }
+
+        val telemetry = JSONObject().apply {
+            putN("soc", d.soc); putN("speed_kmh", d.speed?.toDouble()); putN("power_kw", d.power)
+            putN("battery_temp_c", d.avgBatTemp?.toDouble()); putN("cabin_temp_c", d.insideTemp?.toDouble())
+            putN("outside_temp_c", d.exteriorTemp?.toDouble()); putN("aux_voltage_v", d.voltage12v)
+            putN("cell_voltage_min_v", d.minCellVoltage); putN("cell_voltage_max_v", d.maxCellVoltage)
+            putN("cell_delta_v", cellDelta); putN("odometer_km", d.mileage)
+            put("is_charging", isCharging)
+            putN("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
+        }
+
+        return JSONObject().apply {
+            put("schema_version", 1)
+            put("vehicle_id", vehicleId)
+            put("device_time", isoNow())
+            put("source", "BYDMate")
+            put("telemetry", telemetry)
+            put("diplus", diplus)
+            // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
+            put("location", JSONObject())
+        }
+    }
+
+    private fun isoNow(): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return fmt.format(Date())
+    }
+
+    private fun JSONObject.putN(key: String, value: Any?) {
+        put(key, value ?: JSONObject.NULL)
+    }
+
     private fun jsonObjectToMap(json: JSONObject): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>()
         val keys = json.keys()
@@ -228,7 +327,14 @@ object CommandDaemon {
         val apiKey = props["api_key"]?.takeIf { it.isNotBlank() } ?: return null
         val vehicleId = props["vehicle_id"]?.takeIf { it.isNotBlank() } ?: return null
         val commandsUrl = commandsUrlFromTelemetry(rawUrl) ?: return null
-        return Conf(commandsUrl = commandsUrl, ackUrl = "$commandsUrl/ack", apiKey = apiKey, vehicleId = vehicleId)
+        val telemetryUrl = telemetryUrlFromAny(rawUrl) ?: return null
+        return Conf(
+            commandsUrl = commandsUrl,
+            ackUrl = "$commandsUrl/ack",
+            telemetryUrl = telemetryUrl,
+            apiKey = apiKey,
+            vehicleId = vehicleId,
+        )
     }
 
     /** Mirror of VehicleCommandPoller.commandsUrlFromTelemetry — keep in sync. */
@@ -238,6 +344,17 @@ object CommandDaemon {
             trimmed.endsWith("/commands") -> trimmed
             trimmed.endsWith("/telemetry") -> trimmed.removeSuffix("/telemetry") + "/commands"
             trimmed.contains("/api/bydmate") -> trimmed.substringBeforeLast('/') + "/commands"
+            else -> null
+        }
+    }
+
+    /** Normalize the configured base URL to the `…/api/bydmate/telemetry` ingest endpoint. */
+    private fun telemetryUrlFromAny(url: String): String? {
+        val trimmed = url.trimEnd('/')
+        return when {
+            trimmed.endsWith("/telemetry") -> trimmed
+            trimmed.endsWith("/commands") -> trimmed.removeSuffix("/commands") + "/telemetry"
+            trimmed.contains("/api/bydmate") -> trimmed.substringBeforeLast('/') + "/telemetry"
             else -> null
         }
     }
