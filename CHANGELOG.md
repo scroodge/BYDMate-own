@@ -8,6 +8,37 @@
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-06-10
+
+### Added
+- **`CommandDaemon` — shell-uid daemon, survives car power-off:** headless `app_process` daemon
+  launched by `start_voltflow_cmd.sh` as uid shell (identical mechanism to DI+ `aps_diplus`).
+  Polls cloud for commands every 2.5 s and executes them via DiPlus `127.0.0.1:8988/sendCmd`.
+  Survives BYD `collectPowerOffEvent` force-stop that kills all regular app processes.
+- **Telemetry push while car is off:** `CommandDaemon` reads DiPlus `getDiPars` and POSTs to
+  `/api/bydmate/telemetry` every 60 s — `bydmate_live_snapshots` updated continuously even when
+  app is dead and car is off (`PWR=0`). Proven on Yuan Up 2024 (DiLink 3.0).
+- **Auto-update via APK path change:** `start_voltflow_cmd.sh` watchdog detects when `pm path`
+  changes (adb install -r), kills the running daemon, and respawns on the new code automatically
+  within ~30 s. No manual restart needed after APK updates.
+- **Extended `CommandAllowlist`:** added `sentry`, `sentry_autostart`, `screen_off`,
+  `windows_close`, `ac_temp_up`, `ac_temp_down` (confidence: apk) and comfort-set guesses
+  `ac_temp`, `fan_level`, `trunk`, `defrost`, `rear_defrost`, `seat_heat_driver`,
+  `seat_heat_pass`, `steering_heat`, `mirror_fold`, `find_car`, `honk`, `flash_lights`,
+  `charge_port` — fully synced with `command-allowlist.ts` and `BYD_MA/COMMAND_ALLOWLIST.md`.
+
+### Changed
+- `exportDaemonConfig()` in `TrackingService` writes cloud credentials to
+  `getExternalFilesDir(null)/voltflow_cmd.conf`; the shell daemon reads them from
+  `/data/local/tmp/voltflow_cmd.conf` (copied by the launcher on each restart).
+
+### Notes
+- DiPlus `迪加`-phrases require car `PWR ≥ 1` to actuate hardware. At `PWR=0` the daemon
+  correctly acks commands (they are queued), but physical actuation happens only when the car
+  is powered on. This is a DiLink/T-BOX architectural constraint, not a daemon bug.
+- Network keep-alive: enable **"Keep network on while parked"** in the head-unit settings;
+  otherwise WiFi drops ~9 min after power-off and the daemon loses cloud connectivity.
+
 ## [0.3.6] - 2026-06-05
 
 ### Fixed

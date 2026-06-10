@@ -1,7 +1,8 @@
 # Remote command daemon (survives car power-off)
 
-VoltFlow Mate can execute cloud commands (lock, climate, windows, SOC limit, TTS…) **while
-the head unit is parked / "off"**. This document explains how and the exact install / update steps.
+VoltFlow Mate can execute cloud commands (lock, climate, windows, SOC limit, TTS…) **and push
+live telemetry to the cloud** while the head unit is parked / "off". This document explains how
+and the exact install / update steps.
 
 ## Why a separate daemon
 
@@ -26,18 +27,41 @@ Supabase /api/bydmate/commands ──poll──> CommandDaemon (app_process, uid
                               DiPlus 127.0.0.1:8988 /api/sendCmd  ──> vehicle (CAN)
                                               │
                               POST /api/bydmate/commands/ack  <───┘
+
+DiPlus 127.0.0.1:8988 /api/getDiPars ──read──> CommandDaemon
+                                                    │  every 60 s
+                                                    ▼
+                              POST /api/bydmate/telemetry ──> Supabase bydmate_live_snapshots
 ```
+
+**Proven behavior** (Yuan Up 2024, DiLink 3.0, 2026-06-10):
+- Car off (`PWR=0`), app force-stopped by BYD `collectPowerOffEvent`
+- Daemon (uid shell) survived; DiPlus still accessible at `127.0.0.1:8988`
+- `bydmate_live_snapshots` updated every ~60 s (`SOC=32, PWR=0, GUN=1, V12=13.7`)
+- Network stayed alive thanks to head-unit **"Keep network on while parked"** setting (see below)
+
+> **Known limitation**: DiPlus `迪加`-phrases require `电源状态 ≥ 1` (car ON) to actuate physical
+> hardware (windows, locks, AC). At `PWR=0` DiPlus ACKs the phrase but nothing moves. The daemon
+> still queues and acks commands — they will execute the next time the car is powered on.
+> Official BYD remote commands use a separate T-BOX/CAN wake channel.
 
 ## Components
 
 | Piece | Where | Role |
 |---|---|---|
-| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | the poll→guard→actuate→ack loop |
+| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + telemetry push every 60 s |
 | `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
 | `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
+
+## Network keep-alive (required for car-off operation)
+
+By default, the BYD head unit drops WiFi ~9 minutes after the car is switched off.
+Enable **Settings → Connectivity → "Keep network on while parked"** (or equivalent) on the head
+unit so the WiFi connection to your phone hotspot (gateway `192.168.43.1`) stays up indefinitely.
+Without this, the daemon survives but loses cloud connectivity after ~9 min.
 
 ## Prerequisites (one time)
 
