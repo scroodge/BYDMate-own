@@ -27,6 +27,8 @@ class AutoserviceClientImplTest {
         }
         override suspend fun grantUsageStatsAppop(packageName: String): Boolean = true
         override suspend fun launchDiPlusService(): Boolean = true
+        override suspend fun isCommandDaemonRunning(): Boolean = false
+        override suspend fun launchCommandDaemon(scriptPath: String): Boolean = true
         override suspend fun shutdown() {}
     }
 

@@ -127,9 +127,27 @@ adb -s $HOST shell "chmod 755 /data/local/tmp/start_voltflow_cmd.sh; setsid sh /
 ## Boot persistence
 
 The daemon survives **power-off / sleep** (shell-uid) but **not a full reboot** — after a reboot
-something must re-run `start_voltflow_cmd.sh`. The app cannot do this itself. Use one of:
+something must re-run `start_voltflow_cmd.sh`.
 
-- **Termux:Boot** (recommended): install Termux:Boot, then create
+**Primary (automatic, no extra setup): the app revives the daemon on start.**
+`TrackingService` is auto-started on boot/quickboot (`BootReceiver` → `ServiceStartWorker`).
+On every start (when cloud sync is on) it calls `ensureCommandDaemonRunning()`:
+
+1. connect to **on-device ADB** (127.0.0.1:5555) via `AdbOnDeviceClient` (shell uid),
+2. `pidof voltflow_cmd_daemon` — if alive, no-op,
+3. otherwise deploy the bundled launcher (`assets/start_voltflow_cmd.sh` →
+   `getExternalFilesDir()/start_voltflow_cmd.sh`, shell-readable) and start it detached with
+   `setsid`.
+
+So a full reboot self-heals once DiLink finishes booting and the app autostarts — **no manual
+`adb`/`setsid` and no `/data/local/tmp` push required** (the launcher ships inside the APK).
+Requirement: **on-device wireless ADB enabled and the app's ADB key authorised once** (same
+"Allow USB debugging?" prompt the app already uses for D+ launch / usage-stats appop). If ADB is
+not authorised, `ensureCommandDaemonRunning()` logs a warning and no-ops — fall back below.
+
+**Fallbacks (if on-device ADB is unavailable):**
+
+- **Termux:Boot**: install Termux:Boot, then create
   `~/.termux/boot/voltflow-cmd.sh` containing:
   ```sh
   #!/data/data/com.termux/files/usr/bin/sh
