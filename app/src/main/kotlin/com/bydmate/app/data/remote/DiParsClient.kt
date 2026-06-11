@@ -61,9 +61,9 @@ data class DiParsData(
     val sentryState: Int?,        // D+ sentry on/off
     val remoteLockState: Int?,    // remote lock enum
     /** D+ `熄火录像配置开关` text value, e.g. 开启熄火哨兵 */
-    val stallSentryMode: String?,
+    val stallSentryMode: String? = null,
     /** D+ `电源状态` text, e.g. 关 / 行车 */
-    val powerStateLabel: String?,
+    val powerStateLabel: String? = null,
 )
 
 @Singleton

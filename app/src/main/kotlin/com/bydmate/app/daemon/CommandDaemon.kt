@@ -25,7 +25,7 @@ import kotlin.math.min
  * Why this exists: the in-app poller runs inside the `com.bydmate.app` process, which BYD's
  * power-off routine (`collectPowerOffEvent` → force-stop) kills when the head unit parks/sleeps.
  * This class is launched as a shell-uid `app_process` daemon (see `tools/start_voltflow_cmd.sh`),
- * which survives the force-stop exactly like DI+ (`aps_diplus`) and Overdrive's daemons do.
+ * which survives the force-stop exactly like DI+ (`aps_diplus`) does.
  *
  * It needs NO Android Context: both actuation and telemetry go over plain localhost HTTP to
  * DiPlus on 127.0.0.1:8988, and [DiParsClient] / [DiParsControlClient] / [CommandAllowlist]

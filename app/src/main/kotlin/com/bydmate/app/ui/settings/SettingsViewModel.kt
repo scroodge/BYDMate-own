@@ -135,7 +135,6 @@ data class SettingsUiState(
     val cloudSyncAdvancedOpen: Boolean = false,
     val cloudSyncLinking: Boolean = false,
     val appLanguage: String = SettingsRepository.DEFAULT_APP_LANGUAGE,
-    val keepAliveProvider: String = SettingsRepository.DEFAULT_KEEP_ALIVE_PROVIDER,
 )
 
 @HiltViewModel
@@ -227,7 +226,6 @@ class SettingsViewModel @Inject constructor(
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
             val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncStatus = formatCloudSyncStatus()
-            val keepAliveProvider = settingsRepository.getKeepAliveProvider()
             val appLanguage = settingsRepository.getString(
                 SettingsRepository.KEY_APP_LANGUAGE,
                 SettingsRepository.DEFAULT_APP_LANGUAGE,
@@ -267,7 +265,6 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncStatus = cloudSyncStatus,
                     appLanguage = appLanguage,
-                    keepAliveProvider = keepAliveProvider,
                 )
             }
 
@@ -811,13 +808,6 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(cloudSyncOmitGps = enabled) }
         viewModelScope.launch {
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, enabled.toString())
-        }
-    }
-
-    fun updateKeepAliveProvider(provider: String) {
-        _uiState.update { it.copy(keepAliveProvider = provider) }
-        viewModelScope.launch {
-            settingsRepository.setKeepAliveProvider(provider)
         }
     }
 

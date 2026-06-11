@@ -78,7 +78,6 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
-    @Inject lateinit var overdriveEventClient: com.bydmate.app.data.remote.OverdriveEventClient
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollingJob: Job? = null
@@ -92,8 +91,6 @@ class TrackingService : Service(), LocationListener {
     // to avoid hammering the launcher when D+ is genuinely broken.
     @Volatile private var lastDiPlusRelaunchTs: Long = 0L
     @Volatile private var lastWakeLockRenewTs: Long = 0L
-    @Volatile private var lastOverdriveCheckTs: Long = 0L
-    @Volatile private var overdriveOfflineTicks: Int = 0
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
     // Primary signal: DiPars powerState ≥ 1. Fallback when powerState is unreliable:
@@ -163,7 +160,6 @@ class TrackingService : Service(), LocationListener {
         private const val DIPLUS_RELAUNCH_COOLDOWN_MS = 5L * 60_000L
         private const val WAKE_LOCK_RENEW_MS = 5L * 60_000L
         private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
-        private const val OVERDRIVE_CHECK_INTERVAL_MS = 30_000L
         // Bundled launcher asset that spawns the shell-uid survival daemon.
         private const val DAEMON_LAUNCHER_ASSET = "start_voltflow_cmd.sh"
         const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
@@ -202,9 +198,6 @@ class TrackingService : Service(), LocationListener {
 
         private val _diPlusConnected = MutableStateFlow(true)
         val diPlusConnected: StateFlow<Boolean> = _diPlusConnected
-
-        private val _overdriveConnected = MutableStateFlow(false)
-        val overdriveConnected: StateFlow<Boolean> = _overdriveConnected
 
         /**
          * True while the BYD built-in camera surface (`com.byd.avc`) is in
@@ -823,7 +816,6 @@ class TrackingService : Service(), LocationListener {
                         updateNotification(data)
                         maybeLogSessionSummary(nowMs, data, sessionId)
                         renewWakeLockIfNeeded()
-                        runCoLifecycleWatchdog(dataFetched = true)
                         val cloudEnabled = settingsRepository.getString(
                             com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
                             "false"
@@ -873,14 +865,6 @@ class TrackingService : Service(), LocationListener {
                                 !hasLocationPermission() -> null
                                 else -> loc
                             }
-                            val keepAliveProvider = settingsRepository.getKeepAliveProvider()
-                            val overdriveActive = if (
-                                OverdriveCoLifecycleWatchdog.isOverdriveProvider(keepAliveProvider)
-                            ) {
-                                _overdriveConnected.value
-                            } else {
-                                null
-                            }
                             val telemetrySnapshot = VehicleTelemetrySnapshot.from(
                                 data = data,
                                 battery = telemetryBattery,
@@ -891,8 +875,6 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
-                                sentryProvider = keepAliveProvider,
-                                overdriveSentryActive = overdriveActive,
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }
@@ -901,15 +883,12 @@ class TrackingService : Service(), LocationListener {
                     } else {
                         consecutiveNullCount++
                         renewWakeLockIfNeeded()
-                        runCoLifecycleWatchdog(dataFetched = false)
                         if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
                             _diPlusConnected.value = false
                             currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
                                 .coerceAtMost(MAX_POLL_INTERVAL_MS)
                             val now = System.currentTimeMillis()
-                            val provider = settingsRepository.getKeepAliveProvider()
-                            if (OverdriveCoLifecycleWatchdog.shouldRelaunchDiPlus(provider) &&
-                                DiPlusWatchdog.shouldRelaunch(
+                            if (DiPlusWatchdog.shouldRelaunch(
                                     failuresCount = consecutiveNullCount,
                                     threshold = NULL_WARNING_THRESHOLD,
                                     nowMs = now,
@@ -1178,31 +1157,6 @@ class TrackingService : Service(), LocationListener {
         }
         lock.acquire(WAKE_LOCK_DURATION_MS)
         lastWakeLockRenewTs = now
-    }
-
-    private suspend fun runCoLifecycleWatchdog(dataFetched: Boolean) {
-        if (!settingsRepository.isGatewayWanted()) return
-        val provider = settingsRepository.getKeepAliveProvider()
-        if (OverdriveCoLifecycleWatchdog.isOverdriveProvider(provider)) {
-            val now = System.currentTimeMillis()
-            if (now - lastOverdriveCheckTs >= OVERDRIVE_CHECK_INTERVAL_MS) {
-                lastOverdriveCheckTs = now
-                val alive = OverdriveCoLifecycleWatchdog.isOverdriveProcessAlive(this) ||
-                    overdriveEventClient.ping()
-                _overdriveConnected.value = alive
-                overdriveOfflineTicks = if (alive) 0 else overdriveOfflineTicks + 1
-                if (overdriveOfflineTicks >= NULL_WARNING_THRESHOLD) {
-                    Log.w(TAG, "Overdrive sentry offline — remote may be unavailable")
-                }
-            }
-            if (!dataFetched && overdriveOfflineTicks >= NULL_WARNING_THRESHOLD) {
-                _diPlusConnected.value = false
-            }
-            return
-        }
-        if (dataFetched) {
-            _overdriveConnected.value = false
-        }
     }
 
     private fun createNotificationChannel() {

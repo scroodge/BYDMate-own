@@ -69,11 +69,6 @@ open class SettingsRepository @Inject constructor(
         const val KEY_MIGRATION_V2_4_17 = "migration_v2_4_17_done"
         /** User explicitly started Gateway from UI; BootReceiver respects this. */
         const val KEY_GATEWAY_WANTED = "gateway_wanted"
-        /** MCU keep-alive source: [KEEP_ALIVE_PROVIDER_OVERDRIVE] or [KEEP_ALIVE_PROVIDER_DIPLUS]. */
-        const val KEY_KEEP_ALIVE_PROVIDER = "keep_alive_provider"
-        const val KEEP_ALIVE_PROVIDER_OVERDRIVE = "overdrive"
-        const val KEEP_ALIVE_PROVIDER_DIPLUS = "diplus"
-        const val DEFAULT_KEEP_ALIVE_PROVIDER = KEEP_ALIVE_PROVIDER_OVERDRIVE
 
         const val DEFAULT_BATTERY_CAPACITY = "72.9"
         const val DEFAULT_HOME_TARIFF = "0.20"
@@ -267,9 +262,4 @@ open class SettingsRepository @Inject constructor(
     suspend fun setGatewayWanted(wanted: Boolean) =
         setString(KEY_GATEWAY_WANTED, wanted.toString())
 
-    suspend fun getKeepAliveProvider(): String =
-        getString(KEY_KEEP_ALIVE_PROVIDER, DEFAULT_KEEP_ALIVE_PROVIDER)
-
-    suspend fun setKeepAliveProvider(provider: String) =
-        setString(KEY_KEEP_ALIVE_PROVIDER, provider)
 }

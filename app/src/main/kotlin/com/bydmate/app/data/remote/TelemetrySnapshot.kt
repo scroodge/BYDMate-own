@@ -35,8 +35,6 @@ data class VehicleTelemetrySnapshot(
     val tirePressRL: Int?,
     val tirePressRR: Int?,
     val location: TelemetryLocation?,
-    val sentryProvider: String? = null,
-    val overdriveSentryActive: Boolean? = null,
 ) {
     companion object {
         private const val POWER_MIN_KW = -300
@@ -54,8 +52,6 @@ data class VehicleTelemetrySnapshot(
             currentTripDistanceKm: Double?,
             currentTripConsumptionKwh100km: Double?,
             location: Location?,
-            sentryProvider: String? = null,
-            overdriveSentryActive: Boolean? = null,
         ): VehicleTelemetrySnapshot {
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
@@ -111,8 +107,6 @@ data class VehicleTelemetrySnapshot(
                         bearingDeg = it.bearing.takeIf { _ -> it.hasBearing() }?.toDouble(),
                     )
                 },
-                sentryProvider = sentryProvider,
-                overdriveSentryActive = overdriveSentryActive,
             )
         }
     }
