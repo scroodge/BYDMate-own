@@ -164,6 +164,9 @@ class TrackingService : Service(), LocationListener {
         private const val WAKE_LOCK_RENEW_MS = 5L * 60_000L
         private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
         private const val OVERDRIVE_CHECK_INTERVAL_MS = 30_000L
+        // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
+        private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"
+        private const val DAEMON_LAUNCHER_ASSET = "start_voltflow_cmd.sh"
         const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
@@ -320,6 +323,13 @@ class TrackingService : Service(), LocationListener {
                 // The daemon runs as uid shell and cannot read our app-private settings,
                 // so mirror the cloud-sync creds to a shell-readable file in external storage.
                 exportDaemonConfig()
+                // Boot/quickboot persistence: BYD force-stops the app (and thus this
+                // foreground TrackingService) on every quickboot, but the shell-uid
+                // CommandDaemon survives. It still dies on a full reboot, and nothing
+                // re-spawns its watchdog. Since TrackingService is auto-started on boot
+                // (BootReceiver → ServiceStartWorker), revive the daemon here whenever it
+                // is missing — idempotent, guarded by a pidof check.
+                ensureCommandDaemonRunning()
             }
         }
 
@@ -621,6 +631,65 @@ class TrackingService : Service(), LocationListener {
             Log.i(TAG, "Daemon config exported to ${conf.absolutePath}")
         } catch (e: Exception) {
             Log.w(TAG, "exportDaemonConfig failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Ensures the shell-uid survival daemon ([com.bydmate.app.daemon.CommandDaemon],
+     * spawned by `start_voltflow_cmd.sh`) is running. The daemon is the durable
+     * telemetry + command path: it survives BYD's quickboot force-stop, but dies on a
+     * full reboot. This runs on every TrackingService start (incl. the boot/quickboot
+     * autostart path) so the daemon is revived without a manual `adb` relaunch.
+     *
+     * Path: connect on-device ADB (shell uid) → if the daemon is already alive, no-op →
+     * otherwise deploy the bundled launcher to a shell-readable path and start it
+     * detached via `setsid`. Safe no-op on any failure (e.g. ADB not authorised).
+     */
+    private suspend fun ensureCommandDaemonRunning() {
+        try {
+            if (!adbOnDeviceClient.isConnected() && adbOnDeviceClient.connect().isFailure) {
+                Log.w(TAG, "Daemon supervisor: on-device ADB unavailable, daemon not (re)launched")
+                return
+            }
+            // pidof prints a PID when the daemon is alive; empty/null when it is not.
+            val pid = adbOnDeviceClient.exec("pidof $DAEMON_PROCESS_NAME")?.trim().orEmpty()
+            if (pid.isNotEmpty()) {
+                Log.i(TAG, "Command daemon already running (pid=$pid)")
+                return
+            }
+            val launcher = deployDaemonLauncher()
+            if (launcher == null) {
+                Log.w(TAG, "Daemon supervisor: launcher not deployed, skipping")
+                return
+            }
+            // Detach via setsid so the watchdog outlives this one-shot ADB exec session.
+            adbOnDeviceClient.exec("setsid sh $launcher >/dev/null 2>&1 &")
+            Log.i(TAG, "Command daemon launcher (re)started via on-device ADB: $launcher")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureCommandDaemonRunning failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Copies the bundled `start_voltflow_cmd.sh` launcher from assets to the app's
+     * external files dir (app-writable, shell-readable) so it can be started under the
+     * shell uid without a manual `adb push`. Returns the absolute path, or null on failure.
+     */
+    private fun deployDaemonLauncher(): String? {
+        return try {
+            val dir = getExternalFilesDir(null) ?: return null
+            val script = java.io.File(dir, DAEMON_LAUNCHER_ASSET)
+            assets.open(DAEMON_LAUNCHER_ASSET).use { input ->
+                script.outputStream().use { output -> input.copyTo(output) }
+            }
+            script.setReadable(true, false)
+            script.setExecutable(true, false)
+            script.absolutePath
+        } catch (e: Exception) {
+            Log.w(TAG, "deployDaemonLauncher failed: ${e.message}")
+            null
         }
     }
 

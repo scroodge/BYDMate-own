@@ -1,5 +1,25 @@
 # Project Notes
 
+## 2026-06-11: Agentmemory подключён; документация прочитана и зафиксирован текущий статус
+
+### Что прочитано
+
+- `README.md`: VoltFlow Mate — форк BYDMate для BYD DiLink; основной путь установки через APK из GitHub Releases, приложение живёт под `applicationId` `dev.scroodge.cloudevmate`.
+- `docs/cloud-telemetry-contract-ru.md`: Cloud Sync использует HTTPS ingest, `X-API-Key`, `X-Vehicle-Id`, 6-значное подключение через `link-code/redeem`, ACK-проверку батчей и GPS privacy через `cloud_sync_omit_gps`.
+- `docs/REMOTE_COMMAND_DAEMON.md`: remote command daemon запускается как shell-uid `app_process`, переживает force-stop приложения при parked/off состоянии, читает DiPlus на `127.0.0.1:8988`, пушит live telemetry примерно раз в 60 секунд и poll/ack команд через VoltFlow.
+- `docs/release-notes-v0.2.2.md`: первый публичный релиз под брендом VoltFlow Mate; debug/release APK называется `VoltFlow-Mate-v...apk`.
+
+### Текущий статус
+
+- Agentmemory MCP доступен в этой сессии и видит проект `/Users/way/Dev/BYDMate-own` как `BYDMate-own`.
+- Документация уже описывает текущую архитектуру Cloud Sync, pairing и parked/off daemon; отдельная память в agentmemory обновлена тем же резюме.
+- Важный открытый риск из предыдущих заметок: смена `cloud_sync_vehicle_id` при непустой очереди может дать mismatch header/body и потерю mixed batch; фикс ещё не отмечен как сделанный.
+
+### Следующие ориентиры
+
+- Для работы над Cloud Sync сначала проверять `CloudTelemetrySender`, `CloudTelemetryPayload`, `CloudTelemetryCadence`, `TrackingService` и тесты в `app/src/test/kotlin/com/bydmate/app/data/cloud/`.
+- Для работы над parked/off remote commands сначала проверять `CommandDaemon`, `VehicleCommandPoller`, `CommandAllowlist`, `DiParsControlClient`, `tools/start_voltflow_cmd.sh` и `docs/REMOTE_COMMAND_DAEMON.md`.
+
 ## 2026-05-29: Смена имени машины в APK ломает очередь и разрывает историю телеметрии
 
 ### Диагноз
