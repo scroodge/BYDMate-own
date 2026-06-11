@@ -45,6 +45,19 @@ interface AdbOnDeviceClient {
      * Returns true when am succeeded.
      */
     suspend fun launchDiPlusService(): Boolean
+    /**
+     * Returns true if the shell-uid survival daemon (nice-name `voltflow_cmd_daemon`,
+     * spawned by `start_voltflow_cmd.sh`) is currently alive. Uses `pidof` over shell uid.
+     */
+    suspend fun isCommandDaemonRunning(): Boolean
+    /**
+     * (Re)starts the shell-uid survival daemon by launching its watchdog script
+     * detached via `setsid` (so it outlives BYD's quickboot force-stop and this one-shot
+     * ADB session). [scriptPath] is an app-controlled absolute path to the bundled
+     * launcher in the app's external files dir — not user input. Returns true if the
+     * launch command was issued.
+     */
+    suspend fun launchCommandDaemon(scriptPath: String): Boolean
     /** Closes any underlying socket. Idempotent. */
     suspend fun shutdown()
 }
@@ -138,6 +151,31 @@ class AdbOnDeviceClientImpl @Inject constructor(
         }
     }
 
+    override suspend fun isCommandDaemonRunning(): Boolean = withContext(Dispatchers.IO) {
+        val p = protocol ?: return@withContext false
+        try {
+            // pidof prints the PID(s) when alive, nothing when dead.
+            !p.exec("pidof $DAEMON_PROCESS_NAME").isNullOrBlank()
+        } catch (e: Exception) {
+            Log.w(TAG, "isCommandDaemonRunning failed: ${e.message}")
+            false
+        }
+    }
+
+    override suspend fun launchCommandDaemon(scriptPath: String): Boolean = withContext(Dispatchers.IO) {
+        val p = protocol ?: return@withContext false
+        try {
+            // setsid + detached redirect so the watchdog survives this exec session and
+            // BYD's quickboot force-stop (shell uid). exec returns at EOF (immediately,
+            // since stdout is redirected to /dev/null and the job is backgrounded).
+            val out = p.exec("setsid sh $scriptPath >/dev/null 2>&1 &") ?: return@withContext false
+            !out.trimStart().startsWith("Error") && !out.contains("not found")
+        } catch (e: Exception) {
+            Log.w(TAG, "launchCommandDaemon failed: ${e.message}")
+            false
+        }
+    }
+
     override suspend fun shutdown() {
         withContext(Dispatchers.IO) {
             try {
@@ -158,5 +196,8 @@ class AdbOnDeviceClientImpl @Inject constructor(
         // Hardcoded — no params, so no injection surface.
         private const val LAUNCH_DIPLUS_CMD =
             "am start-foreground-service -n com.van.diplus/com.van.diplus.service.MainService"
+
+        // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
+        private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"
     }
 }

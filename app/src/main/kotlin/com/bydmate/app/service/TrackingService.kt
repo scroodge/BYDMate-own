@@ -164,8 +164,7 @@ class TrackingService : Service(), LocationListener {
         private const val WAKE_LOCK_RENEW_MS = 5L * 60_000L
         private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
         private const val OVERDRIVE_CHECK_INTERVAL_MS = 30_000L
-        // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
-        private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"
+        // Bundled launcher asset that spawns the shell-uid survival daemon.
         private const val DAEMON_LAUNCHER_ASSET = "start_voltflow_cmd.sh"
         const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
         // Tolerance between last "session active" tick and the current tick before we
@@ -651,10 +650,8 @@ class TrackingService : Service(), LocationListener {
                 Log.w(TAG, "Daemon supervisor: on-device ADB unavailable, daemon not (re)launched")
                 return
             }
-            // pidof prints a PID when the daemon is alive; empty/null when it is not.
-            val pid = adbOnDeviceClient.exec("pidof $DAEMON_PROCESS_NAME")?.trim().orEmpty()
-            if (pid.isNotEmpty()) {
-                Log.i(TAG, "Command daemon already running (pid=$pid)")
+            if (adbOnDeviceClient.isCommandDaemonRunning()) {
+                Log.i(TAG, "Command daemon already running")
                 return
             }
             val launcher = deployDaemonLauncher()
@@ -662,9 +659,8 @@ class TrackingService : Service(), LocationListener {
                 Log.w(TAG, "Daemon supervisor: launcher not deployed, skipping")
                 return
             }
-            // Detach via setsid so the watchdog outlives this one-shot ADB exec session.
-            adbOnDeviceClient.exec("setsid sh $launcher >/dev/null 2>&1 &")
-            Log.i(TAG, "Command daemon launcher (re)started via on-device ADB: $launcher")
+            val ok = adbOnDeviceClient.launchCommandDaemon(launcher)
+            Log.i(TAG, "Command daemon launcher (re)start via on-device ADB: ok=$ok ($launcher)")
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
