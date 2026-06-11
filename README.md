@@ -76,6 +76,18 @@ VoltFlow Mate читает live-данные машины через **BYDMATE.*
 
 Контракт API: [VoltFlow `supabase/BYDMATE_APK_API.md`](https://github.com/scroodge/VoltFlow/blob/main/supabase/BYDMATE_APK_API.md) (или ваш fork EvAcChargeTimer). Детали wire format: [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md).
 
+### Расширенные функции (опционально)
+
+Для **базовой live-телеметрии** (пока машина включена, а приложение и D+ работают) хватает шагов выше. Дополнительно ничего настраивать не нужно — источник данных всегда D+ (выбора провайдера keep-alive больше нет).
+
+Если хотите **удалённые команды, телеметрию при выключенной машине и автовосстановление после перезагрузки**, включите на DiLink беспроводной ADB и один раз авторизуйте ключ:
+
+1. В DiLink включите **отладку по Wi-Fi/ADB** (порт `5555`) — см. [docs/guides/dilink5-adb-activation-ru.pdf](docs/guides/dilink5-adb-activation-ru.pdf).
+2. При первом обращении приложения подтвердите системный диалог **«Allow USB debugging?»** (тот же ключ используется для автозапуска D+, чтения SoH/autoservice и демона выживания).
+3. Включите на головном устройстве **«Keep network on while parked»** (Wi-Fi не должен отключаться через ~9 минут после стоянки), иначе при выключенной машине демон жив, но теряет связь с облаком.
+
+Без ADB всё это просто не активируется — приложение логирует предупреждение и продолжает слать обычную live-телеметрию. Подробности: [docs/REMOTE_COMMAND_DAEMON.md](docs/REMOTE_COMMAND_DAEMON.md).
+
 ---
 
 ## Скриншоты

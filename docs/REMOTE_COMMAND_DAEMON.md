@@ -13,7 +13,7 @@ process, so command polling stops the moment the car sleeps.
 
 [`CommandDaemon`](../app/src/main/kotlin/com/bydmate/app/daemon/CommandDaemon.kt) is the
 survival-proof twin. It is launched as a **shell-uid `app_process` daemon** (the same mechanism
-DI+ `aps_diplus` and Overdrive `acc_sentry_daemon` use), which is **not an "app"** and therefore
+DI+ `aps_diplus` uses), which is **not an "app"** and therefore
 survives the force-stop. It needs **no Android Context**: both telemetry read and actuation go
 over plain localhost HTTP to DiPlus at `http://127.0.0.1:8988`, and it reuses the app's own
 [`CommandAllowlist`](../app/src/main/kotlin/com/bydmate/app/data/remote/CommandAllowlist.kt) (movement /
