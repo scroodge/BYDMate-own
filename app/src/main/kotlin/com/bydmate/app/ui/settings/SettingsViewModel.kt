@@ -79,6 +79,15 @@ sealed class AutoserviceStatus {
 }
 
 /**
+ * On-device ADB (127.0.0.1:5555) connection state for the advanced-features
+ * wizard. UNKNOWN = not checked yet / never attempted; CONNECTING = handshake in
+ * flight (the «Allow USB debugging?» dialog is up on screen); CONNECTED = paired;
+ * FAILED = handshake refused (wireless ADB not enabled in the engineering menu,
+ * or the user dismissed the dialog).
+ */
+enum class AdbStatus { UNKNOWN, CONNECTING, CONNECTED, FAILED }
+
+/**
  * UI state for the Settings screen.
  * Contains current setting values and export operation status.
  */
@@ -124,6 +133,7 @@ data class SettingsUiState(
     val dataSourceStatus: String? = null,
     val autoserviceEnabled: Boolean = false,
     val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled,
+    val adbStatus: AdbStatus = AdbStatus.UNKNOWN,
     val cloudSyncEnabled: Boolean = false,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
@@ -305,6 +315,41 @@ class SettingsViewModel @Inject constructor(
                 adbOnDeviceClient.connect()
             }
             loadAutoserviceState()
+        }
+    }
+
+    /**
+     * Re-reads the live on-device ADB connection state. Cheap; safe to call when
+     * the advanced-features card appears or resumes. Never downgrades a CONNECTING
+     * status (the handshake may still be in flight with the dialog on screen).
+     */
+    fun refreshAdbStatus() {
+        viewModelScope.launch {
+            val connected = runCatching { adbOnDeviceClient.isConnected() }.getOrDefault(false)
+            _uiState.update { s ->
+                when {
+                    connected -> s.copy(adbStatus = AdbStatus.CONNECTED)
+                    s.adbStatus == AdbStatus.CONNECTING -> s
+                    s.adbStatus == AdbStatus.CONNECTED -> s.copy(adbStatus = AdbStatus.UNKNOWN)
+                    else -> s
+                }
+            }
+        }
+    }
+
+    /**
+     * Triggers the on-device ADB handshake — this is what raises the system
+     * «Allow USB debugging?» dialog on the head unit (no computer needed). On
+     * success the app gains shell-uid abilities (SoH/autoservice reads, D+
+     * relaunch, survival-daemon supervision). Failure means wireless ADB is not
+     * enabled in the engineering menu, or the dialog was dismissed.
+     */
+    fun connectAdb() {
+        if (_uiState.value.adbStatus == AdbStatus.CONNECTING) return
+        _uiState.update { it.copy(adbStatus = AdbStatus.CONNECTING) }
+        viewModelScope.launch {
+            val ok = runCatching { adbOnDeviceClient.connect().isSuccess }.getOrDefault(false)
+            _uiState.update { it.copy(adbStatus = if (ok) AdbStatus.CONNECTED else AdbStatus.FAILED) }
         }
     }
 

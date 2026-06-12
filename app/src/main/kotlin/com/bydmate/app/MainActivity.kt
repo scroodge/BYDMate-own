@@ -39,6 +39,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestPermissionsIfNeeded()
+        if (com.bydmate.app.util.BackgroundRestriction.isRestricted(this)) {
+            Log.w(TAG, "Background activity is RESTRICTED (DiLink 'Disable background Apps' ON) — " +
+                "telemetry will stop when the car sleeps. Gateway screen shows a warning.")
+        }
 
         setContent {
             val thresholds by produceState(initialValue = ConsumptionThresholds.Default) {

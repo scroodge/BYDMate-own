@@ -1,5 +1,7 @@
 package com.bydmate.app.ui.gateway
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -24,7 +26,12 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -36,11 +43,17 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bydmate.app.R
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.util.BackgroundRestriction
+import com.bydmate.app.util.HeadUnitSettings
 import com.bydmate.app.ui.components.bydSwitchColors
+import com.bydmate.app.ui.settings.AdbStatus
 import com.bydmate.app.ui.settings.SettingsViewModel
 import com.bydmate.app.ui.theme.AccentBlue
 import com.bydmate.app.ui.theme.AccentGreen
@@ -51,6 +64,9 @@ import com.bydmate.app.ui.theme.NavyDark
 import com.bydmate.app.ui.theme.TextMuted
 import com.bydmate.app.ui.theme.TextPrimary
 import com.bydmate.app.ui.theme.TextSecondary
+
+private const val ADB_GUIDE_URL =
+    "https://github.com/scroodge/BYDMate-own/blob/main/docs/guides/dilink5-adb-activation-ru.pdf"
 
 @Composable
 fun GatewayScreen(
@@ -69,6 +85,24 @@ fun GatewayScreen(
     val location by TrackingService.lastLocation.collectAsStateWithLifecycle()
     val strings = gatewayStrings(state.appLanguage)
 
+    // Re-check the head-unit "Disable background Apps" restriction on every resume,
+    // so the warning clears immediately after the user returns from the BYD setting.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var backgroundRestricted by remember {
+        mutableStateOf(BackgroundRestriction.isRestricted(context))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                backgroundRestricted = BackgroundRestriction.isRestricted(context)
+                viewModel.refreshAdbStatus()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(Unit) { viewModel.refreshAdbStatus() }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -81,6 +115,13 @@ fun GatewayScreen(
             onLanguageChange = viewModel::updateAppLanguage,
         )
         Header(appVersion = state.appVersion, strings = strings)
+
+        if (backgroundRestricted) {
+            BackgroundRestrictionCard(
+                onOpenSettings = { BackgroundRestriction.openBackgroundSettings(context) },
+                strings = strings,
+            )
+        }
 
         StatusCard(
             isRunning = isRunning,
@@ -128,6 +169,21 @@ fun GatewayScreen(
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onSave = viewModel::saveCloudSyncSettings,
             onTest = viewModel::sendCloudTestPayload,
+            strings = strings,
+        )
+
+        AdvancedFeaturesCard(
+            adbStatus = state.adbStatus,
+            onConnectAdb = viewModel::connectAdb,
+            onOpenGuide = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(ADB_GUIDE_URL))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }
+            },
+            onOpenNetworkSettings = { HeadUnitSettings.openParkedNetworkSettings(context) },
             strings = strings,
         )
 
@@ -258,6 +314,106 @@ private fun Header(appVersion: String, strings: GatewayStrings) {
             color = TextSecondary,
             fontSize = 14.sp,
         )
+    }
+}
+
+@Composable
+private fun BackgroundRestrictionCard(
+    onOpenSettings: () -> Unit,
+    strings: GatewayStrings,
+) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                strings.bgRestrictedTitle,
+                color = AccentOrange,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                strings.bgRestrictedBody,
+                color = TextSecondary,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+            )
+            Button(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentOrange,
+                    contentColor = NavyDark,
+                ),
+            ) {
+                Text(strings.bgRestrictedAction, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdvancedFeaturesCard(
+    adbStatus: AdbStatus,
+    onConnectAdb: () -> Unit,
+    onOpenGuide: () -> Unit,
+    onOpenNetworkSettings: () -> Unit,
+    strings: GatewayStrings,
+) {
+    var howtoOpen by remember { mutableStateOf(false) }
+    GatewayCard {
+        Text(strings.advancedTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(strings.advancedSubtitle, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+        val statusText = when (adbStatus) {
+            AdbStatus.CONNECTED -> strings.adbStatusConnected
+            AdbStatus.CONNECTING -> strings.adbStatusConnecting
+            else -> strings.adbStatusNotSet
+        }
+        StatusRow(strings.adbStatusLabel, statusText, adbStatus == AdbStatus.CONNECTED)
+        if (adbStatus == AdbStatus.CONNECTED) {
+            Text(strings.adbConnected, color = AccentGreen, fontSize = 12.sp)
+        } else {
+            Button(
+                onClick = onConnectAdb,
+                enabled = adbStatus != AdbStatus.CONNECTING,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+            ) {
+                Text(
+                    if (adbStatus == AdbStatus.CONNECTING) strings.adbStatusConnecting else strings.adbConnectAction,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Button(
+                onClick = { howtoOpen = !howtoOpen },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+            ) { Text(strings.adbHowtoToggle, fontWeight = FontWeight.Medium) }
+            if (howtoOpen) {
+                Text(strings.adbHowtoBody, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                Button(
+                    onClick = onOpenGuide,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
+                ) { Text(strings.adbGuideAction, fontWeight = FontWeight.Medium) }
+            }
+        }
+        Text(strings.parkedNetworkHint, color = TextSecondary, fontSize = 11.sp, lineHeight = 16.sp)
+        Button(
+            onClick = onOpenNetworkSettings,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+        ) { Text(strings.parkedNetworkAction, fontWeight = FontWeight.Medium) }
     }
 }
 
@@ -578,6 +734,22 @@ private data class GatewayStrings(
     val checkUpdates: String,
     val checkUpdatesHint: String,
     val checkUpdatesNow: String,
+    val bgRestrictedTitle: String,
+    val bgRestrictedBody: String,
+    val bgRestrictedAction: String,
+    val advancedTitle: String,
+    val advancedSubtitle: String,
+    val adbStatusLabel: String,
+    val adbStatusConnected: String,
+    val adbStatusConnecting: String,
+    val adbStatusNotSet: String,
+    val adbConnected: String,
+    val adbConnectAction: String,
+    val adbHowtoToggle: String,
+    val adbHowtoBody: String,
+    val adbGuideAction: String,
+    val parkedNetworkHint: String,
+    val parkedNetworkAction: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -624,6 +796,22 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Проверять обновления",
             checkUpdatesHint = "При запуске проверять GitHub и предлагать обновиться",
             checkUpdatesNow = "Проверить обновления сейчас",
+            bgRestrictedTitle = "Фоновая работа ограничена",
+            bgRestrictedBody = "Головное устройство ограничивает фоновую работу VoltFlow Mate — данные перестанут идти, когда машина уснёт. Откройте «Disable background Apps» и отключите ограничение для VoltFlow Mate (OFF).",
+            bgRestrictedAction = "Открыть настройки фона",
+            advancedTitle = "Расширенные функции",
+            advancedSubtitle = "Удалённые команды, телеметрия при выключенной машине, чтение SoH. Нужен разовый on-device ADB — без компьютера.",
+            adbStatusLabel = "On-device ADB",
+            adbStatusConnected = "Подключён",
+            adbStatusConnecting = "Подключение…",
+            adbStatusNotSet = "Не настроен",
+            adbConnected = "Готово — расширенные функции доступны.",
+            adbConnectAction = "Подключить ADB",
+            adbHowtoToggle = "Как включить беспроводной ADB",
+            adbHowtoBody = "ADB включается на самом планшете, без ПК: инженерное меню → TestTools → «Wireless adb debug switch». Затем нажмите «Подключить ADB» и подтвердите «Allow USB debugging?» прямо на экране.",
+            adbGuideAction = "Открыть инструкцию",
+            parkedNetworkHint = "Чтобы данные шли при выключенной машине, включите «Keep network on while parked» — Wi-Fi не отключится на стоянке.",
+            parkedNetworkAction = "Сеть на стоянке",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -667,6 +855,22 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Check for updates",
             checkUpdatesHint = "On launch, check GitHub and offer to update",
             checkUpdatesNow = "Check for updates now",
+            bgRestrictedTitle = "Background activity restricted",
+            bgRestrictedBody = "The head unit is restricting VoltFlow Mate in the background — data will stop once the car sleeps. Open “Disable background Apps” and turn the restriction OFF for VoltFlow Mate.",
+            bgRestrictedAction = "Open background settings",
+            advancedTitle = "Advanced features",
+            advancedSubtitle = "Remote commands, telemetry while the car is off, SoH reads. Requires a one-time on-device ADB — no computer needed.",
+            adbStatusLabel = "On-device ADB",
+            adbStatusConnected = "Connected",
+            adbStatusConnecting = "Connecting…",
+            adbStatusNotSet = "Not set up",
+            adbConnected = "Ready — advanced features available.",
+            adbConnectAction = "Connect ADB",
+            adbHowtoToggle = "How to enable wireless ADB",
+            adbHowtoBody = "ADB is enabled on the tablet itself, no PC: engineering menu → TestTools → “Wireless adb debug switch”. Then tap “Connect ADB” and confirm “Allow USB debugging?” right on screen.",
+            adbGuideAction = "Open guide",
+            parkedNetworkHint = "For data while the car is off, enable “Keep network on while parked” so Wi-Fi stays up after parking.",
+            parkedNetworkAction = "Network while parked",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -710,6 +914,22 @@ private fun gatewayStrings(language: String): GatewayStrings =
             checkUpdates = "Правяраць абнаўленні",
             checkUpdatesHint = "Пры запуску правяраць GitHub і прапаноўваць абнавіцца",
             checkUpdatesNow = "Праверыць абнаўленні зараз",
+            bgRestrictedTitle = "Фонавая праца абмежавана",
+            bgRestrictedBody = "Галаўное прыладзе абмяжоўвае фонавую працу VoltFlow Mate — даныя спыняцца, калі машына засне. Адкрыйце «Disable background Apps» і адключыце абмежаванне для VoltFlow Mate (OFF).",
+            bgRestrictedAction = "Адкрыць налады фону",
+            advancedTitle = "Пашыраныя функцыі",
+            advancedSubtitle = "Аддаленыя каманды, тэлеметрыя пры выключанай машыне, чытанне SoH. Патрэбен разавы on-device ADB — без камп'ютара.",
+            adbStatusLabel = "On-device ADB",
+            adbStatusConnected = "Падключаны",
+            adbStatusConnecting = "Падключэнне…",
+            adbStatusNotSet = "Не наладжаны",
+            adbConnected = "Гатова — пашыраныя функцыі даступны.",
+            adbConnectAction = "Падключыць ADB",
+            adbHowtoToggle = "Як уключыць бесправадны ADB",
+            adbHowtoBody = "ADB уключаецца на самім планшэце, без ПК: інжынернае меню → TestTools → «Wireless adb debug switch». Потым націсніце «Падключыць ADB» і пацвердзіце «Allow USB debugging?» прама на экране.",
+            adbGuideAction = "Адкрыць інструкцыю",
+            parkedNetworkHint = "Каб даныя ішлі пры выключанай машыне, уключыце «Keep network on while parked» — Wi-Fi не адключыцца на стаянцы.",
+            parkedNetworkAction = "Сетка на стаянцы",
         )
     }
 
