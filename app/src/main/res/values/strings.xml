@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">VoltFlow Mate</string>
+
+    <!-- Post-install autostart hint dialog -->
+    <string name="nav_autostart_dialog_title">VoltFlow Mate обновлён до v%1$s</string>
+    <string name="nav_autostart_dialog_body">Проверьте, что фоновая работа не заблокирована:\n\nНастройки DiLink → General → Disable background Apps → VoltFlow Mate → OFF\n\nЕсли переключатель включён (ON), DiLink может прибить сервис — тогда поездки и данные не будут записываться.</string>
+    <string name="nav_autostart_dialog_button">Понятно</string>
+    <string name="nav_autostart_open_settings_error">Не удалось открыть настройки автозапуска DiLink. Открыты настройки приложения.</string>
 </resources>
