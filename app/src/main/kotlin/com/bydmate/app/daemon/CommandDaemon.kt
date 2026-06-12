@@ -98,8 +98,17 @@ object CommandDaemon {
                     }
 
                     // Push telemetry to the cloud so data keeps flowing while the app process is dead.
+                    // Skip while driving — VoltFlow Mate sends 1 Hz data then; a daemon heartbeat
+                    // with DiPars reduced-payload gear=1 would incorrectly split the live trip.
                     if (now - lastTelemetryPushAt >= TELEMETRY_PUSH_MS) {
-                        latestData?.let { pushTelemetry(ok, conf, it) }
+                        latestData?.let { data ->
+                            val state = IternioIntervalPolicy.classifyFromDiPars(data)
+                            if (state != IternioIntervalPolicy.TelemetryState.DRIVING) {
+                                pushTelemetry(ok, conf, data)
+                            } else {
+                                log("telemetry push skipped (driving — VoltFlow Mate is active)")
+                            }
+                        }
                         lastTelemetryPushAt = now
                     }
 
