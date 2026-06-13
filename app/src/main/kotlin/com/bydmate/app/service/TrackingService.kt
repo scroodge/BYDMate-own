@@ -481,6 +481,11 @@ class TrackingService : Service(), LocationListener {
                 cloudTelemetrySender.enqueue(snapshot).onFailure { e ->
                     Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
                 }
+                // Liveness beacon for the survival daemon: while this app is sending,
+                // CommandDaemon must NOT push its own 60s telemetry heartbeat (it would
+                // duplicate samples and risk phantom trips). The daemon reads this file
+                // and skips its push when the timestamp is fresh.
+                writeAppAliveHeartbeat()
             } catch (e: Exception) {
                 Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
             }
@@ -623,6 +628,22 @@ class TrackingService : Service(), LocationListener {
             Log.i(TAG, "Daemon config exported to ${conf.absolutePath}")
         } catch (e: Exception) {
             Log.w(TAG, "exportDaemonConfig failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Write an app-liveness beacon to `<externalFilesDir>/voltflow_mate_heartbeat` (epoch millis
+     * as text). The shell-uid [com.bydmate.app.daemon.CommandDaemon] reads this and suppresses its
+     * own telemetry push while the timestamp is fresh, so exactly one source sends at a time.
+     * Content (not mtime) is the signal, so any file-copy lag is irrelevant. Safe no-op on failure.
+     */
+    private fun writeAppAliveHeartbeat() {
+        try {
+            val dir = getExternalFilesDir(null) ?: return
+            java.io.File(dir, "voltflow_mate_heartbeat")
+                .writeText(System.currentTimeMillis().toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "writeAppAliveHeartbeat failed: ${e.message}")
         }
     }
 

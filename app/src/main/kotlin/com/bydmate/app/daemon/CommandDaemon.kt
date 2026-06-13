@@ -52,6 +52,16 @@ object CommandDaemon {
     /** How often the daemon pushes a telemetry sample to the cloud (keeps data flowing when the app is dead). */
     private const val TELEMETRY_PUSH_MS = 60_000L
 
+    /**
+     * App-liveness beacon written by [com.bydmate.app.service.TrackingService.writeAppAliveHeartbeat]
+     * on every cloud enqueue. While this file's epoch is fresher than [APP_ALIVE_TTL_MS], the app
+     * is actively sending 1 Hz/30 s telemetry — the daemon must NOT push its own 60 s heartbeat
+     * (it would duplicate samples and risk phantom trips). Shell uid can read external-files dir.
+     */
+    private const val APP_HEARTBEAT_FILE =
+        "/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_mate_heartbeat"
+    private const val APP_ALIVE_TTL_MS = 120_000L
+
     private val ts get() = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
     private fun log(msg: String) {
         println("[$ts] $msg")
@@ -100,15 +110,20 @@ object CommandDaemon {
                     }
 
                     // Push telemetry to the cloud so data keeps flowing while the app process is dead.
-                    // Skip while driving — VoltFlow Mate sends 1 Hz data then; a daemon heartbeat
-                    // with DiPars reduced-payload gear=1 would incorrectly split the live trip.
+                    // Two guards prevent duplicating the app's stream:
+                    //  1. App-alive beacon — if VoltFlow Mate is actively sending, stay silent.
+                    //     The daemon exists only to cover the window when BYD force-stops the app.
+                    //  2. Driving — belt-and-suspenders: never push a reduced-payload gear=1
+                    //     heartbeat mid-drive (would split the live trip).
                     if (now - lastTelemetryPushAt >= TELEMETRY_PUSH_MS) {
                         latestData?.let { data ->
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
-                            if (state != IternioIntervalPolicy.TelemetryState.DRIVING) {
-                                pushTelemetry(ok, conf, data)
-                            } else {
-                                log("telemetry push skipped (driving — VoltFlow Mate is active)")
+                            when {
+                                isAppAlive(now) ->
+                                    log("telemetry push skipped (app alive — VoltFlow Mate is sending)")
+                                state == IternioIntervalPolicy.TelemetryState.DRIVING ->
+                                    log("telemetry push skipped (driving — VoltFlow Mate is active)")
+                                else -> pushTelemetry(ok, conf, data)
                             }
                         }
                         lastTelemetryPushAt = now
@@ -293,6 +308,15 @@ object CommandDaemon {
             // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
             put("location", JSONObject())
         }
+    }
+
+    /** True if VoltFlow Mate wrote its liveness beacon within [APP_ALIVE_TTL_MS]. */
+    private fun isAppAlive(now: Long): Boolean = try {
+        val epoch = File(APP_HEARTBEAT_FILE).takeIf { it.exists() }
+            ?.readText()?.trim()?.toLongOrNull()
+        epoch != null && now - epoch in 0..APP_ALIVE_TTL_MS
+    } catch (_: Exception) {
+        false
     }
 
     private fun isoNow(): String {
