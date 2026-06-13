@@ -1,5 +1,6 @@
 package com.bydmate.app.daemon
 
+import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
@@ -286,6 +287,7 @@ object CommandDaemon {
             put("vehicle_id", vehicleId)
             put("device_time", isoNow())
             put("source", "BYDMate")
+            put("mate_version", BuildConfig.VERSION_NAME)
             put("telemetry", telemetry)
             put("diplus", diplus)
             // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).

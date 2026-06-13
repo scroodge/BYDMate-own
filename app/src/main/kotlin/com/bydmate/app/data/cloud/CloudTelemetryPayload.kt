@@ -1,5 +1,6 @@
 package com.bydmate.app.data.cloud
 
+import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
@@ -82,6 +83,7 @@ object CloudTelemetryPayload {
             put("vehicle_id", vehicleId)
             put("device_time", snapshot.deviceTimeIso)
             put("source", "BYDMate")
+            put("mate_version", BuildConfig.VERSION_NAME)
             put("telemetry", telemetry)
             when {
                 snapshot.diPlusData != null && idleOnly ->
