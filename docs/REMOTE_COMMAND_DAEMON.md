@@ -29,10 +29,33 @@ Supabase /api/bydmate/commands ──poll──> CommandDaemon (app_process, uid
                               POST /api/bydmate/commands/ack  <───┘
 
 DiPlus 127.0.0.1:8988 /api/getDiPars ──read──> CommandDaemon
-                                                    │  every 60 s
+                                                    │  every 60 s, ONLY when the app is NOT sending
+                                                    │  (app-alive beacon stale AND not DRIVING)
                                                     ▼
                               POST /api/bydmate/telemetry ──> Supabase bydmate_live_snapshots
 ```
+
+### Telemetry: the daemon and the app never send at the same time
+
+The daemon's reason to exist is the window when BYD force-stops the app. While the app **is**
+alive it already streams telemetry (1 Hz driving / 8 s charging / 30 s parked), so a parallel
+60 s daemon heartbeat would only duplicate samples — and because each source stamps its own
+`device_time`, the duplicates never dedup, which raised the risk of phantom trips on D→R→P
+parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetry:
+
+- `TrackingService.writeAppAliveHeartbeat()` writes epoch-millis to
+  `<externalFilesDir>/voltflow_mate_heartbeat` on every cloud enqueue.
+- `CommandDaemon.isAppAlive()` reads that file; if it is fresher than `APP_ALIVE_TTL_MS`
+  (120 s) the daemon **skips** its telemetry push (`"telemetry push skipped (app alive …)"`).
+- A second guard skips the push while `classifyFromDiPars == DRIVING`, belt-and-suspenders
+  against a reduced-payload `gear=1` heartbeat splitting a live trip.
+
+**Command polling stays always-on** regardless of app liveness — commands are idempotent and
+server-acked, so a brief double-poll is harmless and maximizes control reliability.
+
+Every payload (app and daemon) carries a root `mate_version` field (`BuildConfig.VERSION_NAME`);
+the server stores it in `bydmate_live_snapshots.mate_version` so the APK version running on each
+head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-contract-ru.md).
 
 **Proven behavior** (Yuan Up 2024, DiLink 3.0, 2026-06-10):
 - Car off (`PWR=0`), app force-stopped by BYD `collectPowerOffEvent`
@@ -49,10 +72,11 @@ DiPlus 127.0.0.1:8988 /api/getDiPars ──read──> CommandDaemon
 
 | Piece | Where | Role |
 |---|---|---|
-| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + telemetry push every 60 s |
+| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + telemetry push every 60 s (only when the app is not sending) |
 | `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
 | `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |
+| `voltflow_mate_heartbeat` | `<externalFilesDir>/` | app-alive beacon (epoch millis); daemon reads it to suppress its telemetry push while the app is sending |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
 

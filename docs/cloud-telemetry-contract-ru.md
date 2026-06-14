@@ -128,6 +128,7 @@ APK может отправить один telemetry sample:
   "vehicle_id": "way",
   "device_time": "2026-05-25T12:34:56Z",
   "source": "BYDMate",
+  "mate_version": "0.3.9.5",
   "telemetry": {
     "soc": 73,
     "speed_kmh": 0.0,
@@ -240,6 +241,7 @@ Backend должен принимать оба варианта: одиночн�
 | `vehicle_id` | string | yes | Имя/ID автомобиля из настроек APK. |
 | `device_time` | string | yes | ISO-8601 UTC timestamp, например `2026-05-25T12:34:56Z`. |
 | `source` | string | yes | Сейчас всегда `BYDMate`. |
+| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, например `0.3.9.5`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. Добавлено в v0.3.9.4. |
 | `telemetry` | object | yes | Нормализованный набор основных метрик. |
 | `diplus` | object/null | yes | Сырые/расширенные данные DiPlus после парсинга APK. Может быть `null`. |
 | `location` | object | yes | GPS-данные. Объект есть всегда, поля внутри могут быть `null` или отсутствовать по смыслу. |
