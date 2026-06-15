@@ -34,7 +34,7 @@ class VehicleCommandPoller @Inject constructor(
 
     companion object {
         private const val TAG = "VehicleCmdPoll"
-        private const val BASE_POLL_MS = 2500L
+        private const val BASE_POLL_MS = 6000L
         private const val MAX_BACKOFF_MS = 30_000L
     }
 

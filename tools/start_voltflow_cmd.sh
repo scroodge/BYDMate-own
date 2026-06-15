@@ -20,6 +20,26 @@ APP_CONF="/storage/emulated/0/Android/data/$PKG/files/voltflow_cmd.conf"
 PROCESS_NAME="voltflow_cmd_daemon"
 LOG_FILE="/data/local/tmp/voltflow_cmd_daemon.log"
 SENTINEL="/data/local/tmp/voltflow_cmd_daemon.disabled"
+LOCKFILE="/data/local/tmp/voltflow_cmd_watchdog.pid"
+
+# Single-instance guard. Without this, every relaunch (app USER_PRESENT / boot / the
+# APK-update kill-respawn gap in TrackingService.ensureCommandDaemonRunning) starts a
+# NEW watchdog, each spawning its own voltflow_cmd_daemon. They accumulate and the
+# command-poll rate multiplies — root cause of the Vercel Fluid Active-CPU spike: dozens
+# of daemons each polling /api/bydmate/commands every BASE_POLL_MS. If a live watchdog
+# already holds the lock, exit immediately; otherwise reap orphan daemons and take it.
+if [ -f "$LOCKFILE" ]; then
+  OLD_PID=$(cat "$LOCKFILE" 2>/dev/null)
+  if [ -n "$OLD_PID" ] && [ "$OLD_PID" != "$$" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "[$(date)] watchdog already running (pid=$OLD_PID), exit" >> "$LOG_FILE"
+    exit 0
+  fi
+fi
+for stray in $(pidof "$PROCESS_NAME" 2>/dev/null); do
+  kill "$stray" 2>/dev/null
+done
+echo $$ > "$LOCKFILE"
+trap 'rm -f "$LOCKFILE" 2>/dev/null' EXIT
 
 # Android 12+ kills "phantom" (app-spawned) processes; lift the cap so app_process daemons persist.
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 >/dev/null 2>&1

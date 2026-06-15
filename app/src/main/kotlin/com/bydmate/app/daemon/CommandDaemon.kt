@@ -43,7 +43,7 @@ import kotlin.math.min
 object CommandDaemon {
 
     private const val DEFAULT_CONF = "/data/local/tmp/voltflow_cmd.conf"
-    private const val BASE_POLL_MS = 2500L
+    private const val BASE_POLL_MS = 6000L
     private const val MAX_BACKOFF_MS = 30_000L
 
     /** How often to refresh telemetry used for movement/voltage guards. */
