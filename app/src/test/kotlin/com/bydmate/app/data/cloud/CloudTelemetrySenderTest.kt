@@ -27,13 +27,41 @@ class CloudTelemetrySenderTest {
 
         for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.send(snapshot(charging = true))
+            setup.sender.send(snapshot(charging = true, soc = 98))
         }
 
         assertEquals(1, setup.client.payloads.size)
         val samples = JSONObject(setup.client.payloads.single()).getJSONArray("samples")
         assertEquals(15, samples.length())
         assertEquals(0, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
+    fun `charging below tail soc throttles to ten second cadence`() = runTest {
+        val setup = setup()
+
+        // 1 Hz polls during a normal charge (soc below the 98% tail) collapse to one
+        // queued sample per 10s: seconds 1, 11, 21 enqueue; the rest are skipped.
+        for (second in 1..30) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.enqueue(snapshot(charging = true, soc = 60))
+        }
+
+        assertEquals(3, setup.queue.items.size)
+    }
+
+    @Test
+    fun `charging tail at or above ninety eight percent samples every second`() = runTest {
+        val setup = setup()
+
+        // Above the tail threshold the pack is balancing toward 100%, so we keep 1 Hz
+        // to capture a precise cell delta until the charge stops.
+        for (second in 1..10) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.enqueue(snapshot(charging = true, soc = 98))
+        }
+
+        assertEquals(10, setup.queue.items.size)
     }
 
     @Test
@@ -121,7 +149,7 @@ class CloudTelemetrySenderTest {
 
         for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.send(snapshot(charging = true))
+            setup.sender.send(snapshot(charging = true, soc = 98))
         }
 
         assertEquals(15, setup.queue.items.count { it.sentAt == null })
@@ -140,7 +168,7 @@ class CloudTelemetrySenderTest {
 
         for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.send(snapshot(charging = true))
+            setup.sender.send(snapshot(charging = true, soc = 98))
         }
 
         assertEquals(15, setup.queue.items.count { it.sentAt == null })
@@ -151,7 +179,7 @@ class CloudTelemetrySenderTest {
         val setup = setup()
         for (second in 1..30) {
             setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.enqueue(snapshot(charging = true))
+            setup.sender.enqueue(snapshot(charging = true, soc = 98))
         }
         assertEquals(30, setup.queue.items.count { it.sentAt == null })
 
@@ -168,7 +196,7 @@ class CloudTelemetrySenderTest {
 
         for (second in 1..15) {
             setup.now = BASE_TIME_MS + second * 1_000L
-            setup.sender.send(snapshot(charging = true))
+            setup.sender.send(snapshot(charging = true, soc = 98))
         }
 
         assertEquals(1, setup.client.payloads.size)

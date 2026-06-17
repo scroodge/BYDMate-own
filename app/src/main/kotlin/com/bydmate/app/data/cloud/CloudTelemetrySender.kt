@@ -268,7 +268,12 @@ class CloudTelemetrySender @Inject constructor(
 
         val minSampleIntervalMs = when (telemetryState) {
             IternioIntervalPolicy.TelemetryState.DRIVING -> MOVING_SAMPLE_INTERVAL_MS
-            IternioIntervalPolicy.TelemetryState.CHARGING -> CHARGING_SAMPLE_INTERVAL_MS
+            IternioIntervalPolicy.TelemetryState.CHARGING ->
+                if ((snapshot.soc ?: 0) >= CHARGING_TAIL_SOC_THRESHOLD_PERCENT) {
+                    CHARGING_TAIL_SAMPLE_INTERVAL_MS
+                } else {
+                    CHARGING_SAMPLE_INTERVAL_MS
+                }
             IternioIntervalPolicy.TelemetryState.PARKED -> PARKED_CLOUD_HEARTBEAT_MS
         }
 
@@ -381,7 +386,13 @@ class CloudTelemetrySender @Inject constructor(
         const val ACTIVE_BATCH_SIZE = 15
         const val BACKLOG_DRAIN_THRESHOLD = ACTIVE_BATCH_SIZE
         const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
-        const val CHARGING_SAMPLE_INTERVAL_MS = 1_000L
+        // Charging changes slowly, so sample at 10s for the bulk of the charge to cut
+        // stored telemetry volume ~10x. Above CHARGING_TAIL_SOC_THRESHOLD_PERCENT the
+        // pack is balancing toward 100% and cell delta moves fast, so fall back to 1s
+        // until the charge stops (state leaves CHARGING) to capture a precise tail.
+        const val CHARGING_SAMPLE_INTERVAL_MS = 10_000L
+        const val CHARGING_TAIL_SAMPLE_INTERVAL_MS = 1_000L
+        const val CHARGING_TAIL_SOC_THRESHOLD_PERCENT = 98
         const val ACTIVE_FLUSH_INTERVAL_MS = 15_000L
         /** Parked online heartbeat for VoltFlow live status (aligned with Iternio PARKED cadence). */
         const val PARKED_CLOUD_HEARTBEAT_MS = 30_000L
