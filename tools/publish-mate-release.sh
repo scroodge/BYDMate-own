@@ -25,8 +25,8 @@ if [[ -z "${SUPABASE_URL:-}" || -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
   exit 1
 fi
 
-VERSION_NAME="$(grep -E 'versionName\s*=' "$GRADLE" | head -1 | sed -E 's/.*versionName\s*=\s*"([^"]+)".*/\1/')"
-VERSION_CODE="$(grep -E 'versionCode\s*=' "$GRADLE" | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
+VERSION_NAME="$(grep -E 'versionName[[:space:]]*=' "$GRADLE" | head -1 | sed -E 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')"
+VERSION_CODE="$(grep -E 'versionCode[[:space:]]*=' "$GRADLE" | head -1 | sed -E 's/[^0-9]*([0-9]+).*/\1/')"
 
 if [[ -z "$VERSION_NAME" || -z "$VERSION_CODE" ]]; then
   echo "error: could not parse versionName/versionCode from $GRADLE" >&2
