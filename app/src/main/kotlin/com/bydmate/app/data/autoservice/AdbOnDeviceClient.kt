@@ -51,6 +51,11 @@ interface AdbOnDeviceClient {
      */
     suspend fun isCommandDaemonRunning(): Boolean
     /**
+     * Returns true only when the launcher watchdog that respawns [CommandDaemon]
+     * is alive. A daemon process without its watchdog is not sleep-safe.
+     */
+    suspend fun isCommandDaemonWatchdogRunning(): Boolean
+    /**
      * (Re)starts the shell-uid survival daemon by launching its watchdog script
      * detached via `setsid` (so it outlives BYD's quickboot force-stop and this one-shot
      * ADB session). [scriptPath] is an app-controlled absolute path to the bundled
@@ -162,6 +167,17 @@ class AdbOnDeviceClientImpl @Inject constructor(
         }
     }
 
+    override suspend fun isCommandDaemonWatchdogRunning(): Boolean = withContext(Dispatchers.IO) {
+        val p = protocol ?: return@withContext false
+        try {
+            val out = p.exec(WATCHDOG_HEALTH_CMD) ?: return@withContext false
+            out.trim() == "ok"
+        } catch (e: Exception) {
+            Log.w(TAG, "isCommandDaemonWatchdogRunning failed: ${e.message}")
+            false
+        }
+    }
+
     override suspend fun launchCommandDaemon(scriptPath: String): Boolean = withContext(Dispatchers.IO) {
         val p = protocol ?: return@withContext false
         try {
@@ -199,5 +215,10 @@ class AdbOnDeviceClientImpl @Inject constructor(
 
         // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
         private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"
+        private const val WATCHDOG_HEALTH_CMD =
+            "pid=\$(cat /data/local/tmp/voltflow_cmd_watchdog.pid 2>/dev/null); " +
+                "if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null && " +
+                "tr '\\0' ' ' < /proc/\"\$pid\"/cmdline 2>/dev/null | grep -q start_voltflow_cmd.sh; " +
+                "then echo ok; fi"
     }
 }

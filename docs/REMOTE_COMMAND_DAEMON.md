@@ -74,11 +74,38 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 |---|---|---|
 | `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + telemetry push every 60 s (only when the app is not sending) |
 | `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update |
+| `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
 | `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |
 | `voltflow_mate_heartbeat` | `<externalFilesDir>/` | app-alive beacon (epoch millis); daemon reads it to suppress its telemetry push while the app is sending |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
+
+### Launcher source of truth
+
+There are two copies of the watchdog launcher in the repository:
+
+- [`tools/start_voltflow_cmd.sh`](../tools/start_voltflow_cmd.sh) — the script pushed manually to
+  `/data/local/tmp/`.
+- [`app/src/main/assets/start_voltflow_cmd.sh`](../app/src/main/assets/start_voltflow_cmd.sh) —
+  the script bundled into the APK and copied by `TrackingService.deployDaemonLauncher()` to
+  `<externalFilesDir>/start_voltflow_cmd.sh`.
+
+Keep these files byte-for-byte in sync. If only `tools/start_voltflow_cmd.sh` is fixed, manual ADB
+installs may use the new watchdog, but app self-revival after boot/quickboot will still deploy the
+old asset. This is a real failure mode: on 2026-06-19 the car had stale launchers in both
+`/data/local/tmp/start_voltflow_cmd.sh` and
+`/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/start_voltflow_cmd.sh`, while the
+repo's `tools/start_voltflow_cmd.sh` had the v0.4.0 single-instance guard. The app revived the daemon
+with the stale asset.
+
+Before every APK release that touches the watchdog, verify:
+
+```sh
+cmp -s tools/start_voltflow_cmd.sh app/src/main/assets/start_voltflow_cmd.sh \
+  && echo "launcher copies match" \
+  || echo "launcher copies differ"
+```
 
 ## Network keep-alive (required for car-off operation)
 
@@ -148,6 +175,12 @@ adb -s $HOST push tools/start_voltflow_cmd.sh /data/local/tmp/
 adb -s $HOST shell "chmod 755 /data/local/tmp/start_voltflow_cmd.sh; setsid sh /data/local/tmp/start_voltflow_cmd.sh >/dev/null 2>&1 &"
 ```
 
+If the change must also apply to app self-revival after boot/quickboot, also copy the same script to
+`app/src/main/assets/start_voltflow_cmd.sh`, rebuild the APK, install it, open the app once, and
+confirm the deployed external-files launcher has the same content. The app does **not** read
+`/data/local/tmp/start_voltflow_cmd.sh` when it supervises the daemon; it deploys and starts the
+bundled asset.
+
 ## Boot persistence
 
 The daemon survives **power-off / sleep** (shell-uid) but **not a full reboot** — after a reboot
@@ -168,6 +201,12 @@ So a full reboot self-heals once DiLink finishes booting and the app autostarts 
 Requirement: **on-device wireless ADB enabled and the app's ADB key authorised once** (same
 "Allow USB debugging?" prompt the app already uses for D+ launch / usage-stats appop). If ADB is
 not authorised, `ensureCommandDaemonRunning()` logs a warning and no-ops — fall back below.
+
+> **Important gotcha:** `ensureCommandDaemonRunning()` currently checks only the daemon PID
+> (`pidof voltflow_cmd_daemon`). If the daemon is alive but the watchdog shell that should respawn it
+> is dead or stale, the app can report "daemon already running" and skip repair. For a robust
+> supervisor, verify the watchdog as well (`start_voltflow_cmd.sh`/lock PID) or restart the hardened
+> single-instance launcher when the watchdog is missing.
 
 **Fallbacks (if on-device ADB is unavailable):**
 
@@ -194,6 +233,69 @@ adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log"
 # expect: received 1 command(s) / executed 'tts' / ack HTTP 200
 ```
 
+### Verify daemon survival and telemetry
+
+Use these checks after an APK update, launcher update, or car sleep incident:
+
+```sh
+HOST=192.168.43.71:5555
+adb connect $HOST
+
+# Process health: need daemon, and ideally a parent watchdog shell too.
+adb -s $HOST shell "ps -A | grep -E 'voltflow_cmd_daemon|start_voltflow|app_process| sh$'"
+adb -s $HOST shell "pidof voltflow_cmd_daemon"
+
+# Watchdog files and disabled sentinel.
+adb -s $HOST shell "ls -l /data/local/tmp/voltflow_cmd* /data/local/tmp/start_voltflow_cmd.sh 2>/dev/null"
+adb -s $HOST shell "ls -l /data/local/tmp/voltflow_cmd_daemon.disabled 2>/dev/null || echo no-disabled-sentinel"
+
+# App-deployed launcher and heartbeat used by the app-alive guard.
+adb -s $HOST shell "ls -l /storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/start_voltflow_cmd.sh /storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_mate_heartbeat 2>/dev/null"
+
+# Recent daemon log.
+adb -s $HOST shell "tail -n 80 /data/local/tmp/voltflow_cmd_daemon.log"
+```
+
+Interpretation:
+
+- `voltflow_cmd_daemon` present + fresh log lines = daemon is alive.
+- Fresh app heartbeat + log line `telemetry push skipped (app alive ...)` = daemon is correctly
+  staying quiet because VoltFlow Mate is sending live telemetry.
+- No `voltflow_cmd_daemon`, stale watchdog PID, and old log timestamp = sleep/offline coverage is
+  broken until the app wakes and relaunches it.
+- Fresh server telemetry with `is_charging=true`, `charge_power_kw > 0`, and `charge_gun_state=2`
+  proves the app/car data path is healthy while the car is awake; it does not prove daemon survival
+  after car-off.
+
+### 2026-06-19 incident: stale launcher and missing watchdog
+
+Observed on the real car (`192.168.43.71:5555`):
+
+- ADB was connected and the head unit was reachable.
+- Before the car was turned on, there was no `voltflow_cmd_daemon` process and no matching
+  `start_voltflow`/`app_process` watchdog process.
+- `/data/local/tmp/voltflow_cmd_watchdog.pid` existed but pointed to a dead PID.
+- `/data/local/tmp/voltflow_cmd_daemon.log` showed telemetry HTTP 200 until 08:36, then
+  `telemetry push skipped (app alive ...)`, repeated `poll error: timeout`, and stopped at 08:55.
+- After the car was turned on, the app relaunched the daemon; DB telemetry became fresh again with
+  `SOC=79`, `is_charging=true`, `charge_power_kw=4`, `power_kw=-4`, and `charge_gun_state=2`.
+
+Root cause found in code/package state:
+
+- `tools/start_voltflow_cmd.sh` had the v0.4.0 lock/single-instance watchdog guard.
+- `app/src/main/assets/start_voltflow_cmd.sh` did **not** have that guard.
+- The app self-revival path deploys the asset, not the `tools/` script.
+- Both on-device launchers were stale, so the watchdog supervision was weaker than expected.
+
+Action items:
+
+1. Sync `tools/start_voltflow_cmd.sh` to `app/src/main/assets/start_voltflow_cmd.sh`.
+2. Rebuild and install the APK.
+3. Force-redeploy/restart the daemon launcher on the car.
+4. Improve `ensureCommandDaemonRunning()` to verify watchdog health, not only daemon PID.
+5. Run a car-off test at 2, 5, 10, and 20 minutes and confirm both process health and fresh DB
+   telemetry.
+
 ## Stop / disable
 
 ```sh
@@ -211,6 +313,8 @@ adb -s $HOST shell "pkill -f voltflow_cmd_daemon"                          # kil
 | Commands stay `pending` | daemon can't reach the cloud — check head-unit WiFi/`curl` to the URL; check api_key/vehicle_id |
 | Commands `rejected` `vehicle_moving`/`gear_not_park` | safety guard — car must be parked (speed 0, gear P) |
 | Old code still running after APK update | watchdog restarts within ~30 s; or `pkill -f voltflow_cmd_daemon` to force immediate respawn |
+| Daemon starts after car wakes but disappears during sleep | check for stale launcher asset, stale watchdog PID, missing watchdog shell, and whether `ensureCommandDaemonRunning()` only saw an already-running daemon |
+| `/data/local/tmp/start_voltflow_cmd.sh` fixed but app relaunch still old | `app/src/main/assets/start_voltflow_cmd.sh` is stale; sync the asset and rebuild APK |
 | Nothing after reboot | boot persistence not set up — see above |
 
 ## Safety

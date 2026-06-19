@@ -654,9 +654,10 @@ class TrackingService : Service(), LocationListener {
      * full reboot. This runs on every TrackingService start (incl. the boot/quickboot
      * autostart path) so the daemon is revived without a manual `adb` relaunch.
      *
-     * Path: connect on-device ADB (shell uid) → if the daemon is already alive, no-op →
-     * otherwise deploy the bundled launcher to a shell-readable path and start it
-     * detached via `setsid`. Safe no-op on any failure (e.g. ADB not authorised).
+     * Path: connect on-device ADB (shell uid) → deploy the bundled launcher to a
+     * shell-readable path → if the daemon and its watchdog are both alive, no-op →
+     * otherwise start the hardened launcher detached via `setsid`. Safe no-op on
+     * any failure (e.g. ADB not authorised).
      */
     private suspend fun ensureCommandDaemonRunning() {
         try {
@@ -664,14 +665,19 @@ class TrackingService : Service(), LocationListener {
                 Log.w(TAG, "Daemon supervisor: on-device ADB unavailable, daemon not (re)launched")
                 return
             }
-            if (adbOnDeviceClient.isCommandDaemonRunning()) {
-                Log.i(TAG, "Command daemon already running")
-                return
-            }
             val launcher = deployDaemonLauncher()
             if (launcher == null) {
                 Log.w(TAG, "Daemon supervisor: launcher not deployed, skipping")
                 return
+            }
+            val daemonRunning = adbOnDeviceClient.isCommandDaemonRunning()
+            val watchdogRunning = adbOnDeviceClient.isCommandDaemonWatchdogRunning()
+            if (daemonRunning && watchdogRunning) {
+                Log.i(TAG, "Command daemon and watchdog already running")
+                return
+            }
+            if (daemonRunning && !watchdogRunning) {
+                Log.w(TAG, "Command daemon running without watchdog; relaunching hardened supervisor")
             }
             val ok = adbOnDeviceClient.launchCommandDaemon(launcher)
             Log.i(TAG, "Command daemon launcher (re)start via on-device ADB: ok=$ok ($launcher)")

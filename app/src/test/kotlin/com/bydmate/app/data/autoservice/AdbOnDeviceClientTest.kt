@@ -28,7 +28,8 @@ class AdbOnDeviceClientTest {
     private class FakeProtocol(
         var connectResult: Boolean = true,
         var connectThrows: Throwable? = null,
-        var execResponses: Map<String, String?> = emptyMap()
+        var execResponses: Map<String, String?> = emptyMap(),
+        var execHandler: ((String) -> String?)? = null
     ) : AdbProtocol {
         var connectCalls = 0
         var disconnectCalls = 0
@@ -43,7 +44,7 @@ class AdbOnDeviceClientTest {
         }
         override fun exec(cmd: String): String? {
             execCalls += cmd
-            return execResponses[cmd]
+            return execHandler?.invoke(cmd) ?: execResponses[cmd]
         }
         override fun isConnected(): Boolean = connected
         override fun disconnect() {
@@ -125,5 +126,38 @@ class AdbOnDeviceClientTest {
         client.shutdown()
 
         assertEquals(1, fake.disconnectCalls)
+    }
+
+    @Test
+    fun `watchdog health is true only when shell prints ok`() = runTest {
+        val fake = FakeProtocol(
+            connectResult = true,
+            execHandler = { cmd ->
+                if (cmd.contains("voltflow_cmd_watchdog.pid")) "ok\n" else null
+            }
+        )
+        val client = newClient(fake)
+
+        client.connect()
+        val healthy = client.isCommandDaemonWatchdogRunning()
+
+        assertTrue(healthy)
+        assertTrue(fake.execCalls.single().contains("start_voltflow_cmd.sh"))
+    }
+
+    @Test
+    fun `watchdog health is false when lock is stale`() = runTest {
+        val fake = FakeProtocol(
+            connectResult = true,
+            execHandler = { cmd ->
+                if (cmd.contains("voltflow_cmd_watchdog.pid")) "" else null
+            }
+        )
+        val client = newClient(fake)
+
+        client.connect()
+        val healthy = client.isCommandDaemonWatchdogRunning()
+
+        assertEquals(false, healthy)
     }
 }

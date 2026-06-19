@@ -191,6 +191,7 @@ class SettingsViewModelTest {
         override suspend fun grantUsageStatsAppop(packageName: String): Boolean = false
         override suspend fun launchDiPlusService(): Boolean = false
         override suspend fun isCommandDaemonRunning(): Boolean = false
+        override suspend fun isCommandDaemonWatchdogRunning(): Boolean = false
         override suspend fun launchCommandDaemon(scriptPath: String): Boolean = false
         override suspend fun shutdown() {}
     }

@@ -8,6 +8,26 @@
 
 ## [Unreleased]
 
+### Fixed
+- **CommandDaemon watchdog self-revival:** bundled APK asset
+  `app/src/main/assets/start_voltflow_cmd.sh` is now synced with the hardened
+  `tools/start_voltflow_cmd.sh` launcher, including the v0.4.0 single-instance lock and
+  stale-daemon cleanup. The app self-revival path no longer deploys an old watchdog after
+  boot/quickboot.
+- **Daemon supervisor verifies watchdog health:** `TrackingService.ensureCommandDaemonRunning()`
+  now deploys the fresh launcher first and repairs the daemon when `voltflow_cmd_daemon` exists
+  without a live watchdog PID, instead of trusting `pidof` alone.
+
+### Documentation
+- Задокументирован инцидент с `CommandDaemon` от 2026-06-19: при спящей машине демон и watchdog
+  оказались не запущены, а после пробуждения приложение подняло демон заново. Добавлены признаки
+  проблемы (`stale` PID, старый лог, отсутствие `voltflow_cmd_daemon`), команды проверки через ADB
+  и план исправления.
+- Зафиксирован важный packaging-gotcha: `tools/start_voltflow_cmd.sh` и
+  `app/src/main/assets/start_voltflow_cmd.sh` должны быть синхронизированы. App self-revival
+  запускает asset-копию из APK, а не `/data/local/tmp/start_voltflow_cmd.sh`; если asset устарел,
+  приложение поднимает старый watchdog даже после исправления script в `tools/`.
+
 ## [0.3.9.5] - 2026-06-13
 
 ### Fixed
