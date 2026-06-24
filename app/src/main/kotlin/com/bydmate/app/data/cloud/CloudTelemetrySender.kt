@@ -31,6 +31,7 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastIdleCharging: Boolean? = null
     @Volatile private var lastIdlePowerKw: Double? = null
     @Volatile private var pendingFlushNow: Boolean = false
+    @Volatile private var lastChargingBelowTail: Boolean = false
     private val cadence = CloudTelemetryCadence()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
 
@@ -97,7 +98,17 @@ class CloudTelemetrySender @Inject constructor(
 
         val activeBatchMode = activeBatchStartedMs != 0L
         val flushIntervalMs = if (activeBatchMode) {
-            ACTIVE_FLUSH_INTERVAL_MS
+            // Charging-bulk (<98% SOC) changes slowly: flush every 60s so the long charge
+            // sends ~6-sample batches instead of ~4 tiny POSTs/min — ~4x fewer
+            // charging-phase backend invocations + verify reads. Driving and the >=98%
+            // balance tail stay at 15s (driving needs trip resolution; the tail samples
+            // at 1Hz and trips the 15-sample batch flush anyway). Live status still lands
+            // within the server's <=90s freshness target.
+            if (lastCharging == true && lastChargingBelowTail) {
+                CHARGING_BULK_FLUSH_INTERVAL_MS
+            } else {
+                ACTIVE_FLUSH_INTERVAL_MS
+            }
         } else {
             config.flushIntervalSec * 1000L
         }
@@ -265,6 +276,10 @@ class CloudTelemetrySender @Inject constructor(
         lastMoving = moving
         lastCharging = charging
         lastGear = gear
+        // Tracks charging-bulk vs the >=98% balance tail so flushPending can pick the
+        // flush cadence (bulk flushes less often — see CHARGING_BULK_FLUSH_INTERVAL_MS).
+        lastChargingBelowTail =
+            charging && (snapshot.soc ?: 0) < CHARGING_TAIL_SOC_THRESHOLD_PERCENT
 
         val minSampleIntervalMs = when (telemetryState) {
             IternioIntervalPolicy.TelemetryState.DRIVING -> MOVING_SAMPLE_INTERVAL_MS
@@ -394,6 +409,10 @@ class CloudTelemetrySender @Inject constructor(
         const val CHARGING_TAIL_SAMPLE_INTERVAL_MS = 1_000L
         const val CHARGING_TAIL_SOC_THRESHOLD_PERCENT = 98
         const val ACTIVE_FLUSH_INTERVAL_MS = 15_000L
+        // Charging-bulk (<CHARGING_TAIL_SOC_THRESHOLD_PERCENT) flush cadence. Bulk SOC
+        // moves slowly, so flushing every 60s instead of 15s cuts charging-phase POSTs
+        // ~4x while staying within the server's <=90s live-status freshness target.
+        const val CHARGING_BULK_FLUSH_INTERVAL_MS = 60_000L
         /** Parked online heartbeat for VoltFlow live status (aligned with Iternio PARKED cadence). */
         const val PARKED_CLOUD_HEARTBEAT_MS = 30_000L
         /** Disabled while parked heartbeat is 30s — unchanged SOC should still refresh VoltFlow status. */

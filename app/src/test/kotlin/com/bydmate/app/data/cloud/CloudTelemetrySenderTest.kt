@@ -65,6 +65,26 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
+    fun `charging below tail soc flushes every sixty seconds not fifteen`() = runTest {
+        val setup = setup()
+
+        // soc=60 (bulk) samples at 10s -> 5 queued samples over 45s. Under the old 15s
+        // active flush this would already have POSTed a few times; charging-bulk uses a
+        // 60s cadence, so nothing flushes before 60s.
+        for (second in 1..45) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60))
+        }
+        assertEquals(0, setup.client.payloads.size)
+
+        // 60s after the first queued sample, the accumulated bulk batch flushes once.
+        setup.now = BASE_TIME_MS + 61_000L
+        setup.sender.send(snapshot(charging = true, soc = 60))
+        assertEquals(1, setup.client.payloads.size)
+        assertEquals(0, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
     fun `moving samples enqueue every second`() = runTest {
         val setup = setup()
 

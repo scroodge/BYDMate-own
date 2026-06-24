@@ -1,0 +1,108 @@
+# Cloud Sync — reduce VoltFlow server load (Vercel CPU + Supabase egress)
+
+Context: the VoltFlow backend (EvAcChargeTimer) hit its **Vercel Fluid Active-CPU**
+and **Supabase egress** caps. This doc analyzes the APK's contribution and the one
+worthwhile change. Companion plan on the server side:
+`EvAcChargeTimer/docs/PHASE_0_EFFICIENCY.md`.
+
+## TL;DR
+
+The APK is **already well-optimized** — it batches and adapts sampling cadence. The
+naive "1 POST/sec" assumption was wrong. The only meaningful remaining win is
+**flushing less often during the charging-bulk phase**. Most of the backend egress is
+the server's *read* path, not APK uploads.
+
+## Current behavior (verified)
+
+`CloudTelemetrySender.kt` + `CloudTelemetryCadence.kt`. Local poll runs at 1 Hz
+(`TrackingService.POLL_INTERVAL_MS = 1000`), but enqueue + flush are throttled:
+
+**Sampling (rows queued):**
+| State | Interval | Constant |
+|---|---|---|
+| Driving | 1 s | `MOVING_SAMPLE_INTERVAL_MS` |
+| Charging < 98% | 10 s | `CHARGING_SAMPLE_INTERVAL_MS` |
+| Charging ≥ 98% (tail) | 1 s | `CHARGING_TAIL_SAMPLE_INTERVAL_MS` / `..._SOC_THRESHOLD_PERCENT` |
+| Parked | 30 s | `PARKED_CLOUD_HEARTBEAT_MS` |
+
+**Flush (HTTP POST, batched via `buildBatch` → server `bydmate_ingest_telemetry_batch`):**
+- Active (driving OR charging): every `ACTIVE_FLUSH_INTERVAL_MS = 15 s`, batch
+  `ACTIVE_BATCH_SIZE = 15`.
+- Parked / inactive: every `config.flushIntervalSec` (default 60 s), batch up to
+  `MAX_BATCH_SIZE = 120`.
+- `flushNow` on certain state transitions.
+
+**Effective POST rate per active vehicle: ~1 request / 15 s** (driving = batch ~15;
+charging-bulk = batch ~1–2; tail = batch ~15; parked = ~1 / 60 s).
+
+## The problem with charging-bulk
+
+A charge runs for hours. At 10 s sampling + 15 s flush, the bulk phase emits ~4
+POSTs/min each carrying only 1–2 samples. **Every POST pays the full server
+fixed cost** (key lookup, previous-snapshot read, verify re-read, auto-session,
+reconcile-if-changed). Example: a 5 h charge = ~1,200 POSTs; ×100 users = ~120k
+backend invocations/day from charging alone.
+
+## Proposed change — charging-bulk flush interval
+
+Decouple the flush cadence by state instead of one `ACTIVE_FLUSH_INTERVAL_MS` for all
+active states:
+
+- **Driving** → keep **15 s** (1 s sampling fills a batch of ~15; needed for trip resolution).
+- **Charging < 98%** → **60 s** (accumulate ~6 samples per POST).
+- **Charging ≥ 98% (tail)** → keep **15 s** (1 s sampling; want prompt completion/stop capture).
+- **Parked** → unchanged (60 s).
+
+Expected: ~**4× fewer** charging-phase POSTs → ~4× fewer backend invocations + verify
+re-reads during the longest phase of the day.
+
+### ✅ Implemented (2026-06-24)
+
+`CloudTelemetrySender.kt`:
+1. Added `const val CHARGING_BULK_FLUSH_INTERVAL_MS = 60_000L`.
+2. Added `@Volatile lastChargingBelowTail`, set in `decide()`:
+   `charging && (snapshot.soc ?: 0) < CHARGING_TAIL_SOC_THRESHOLD_PERCENT`.
+3. In `flushPending`, when `activeBatchMode`, the interval is now
+   `CHARGING_BULK_FLUSH_INTERVAL_MS` iff `lastCharging == true && lastChargingBelowTail`,
+   else `ACTIVE_FLUSH_INTERVAL_MS` (covers driving and the ≥98% tail).
+4. `ACTIVE_BATCH_SIZE` (15) remains the size-based safety flush — a 60 s bulk window
+   queues only ~6 samples, so it won't trip early.
+
+### Decision: NO prompt charging-start flush (revised)
+
+The earlier plan said to add a prompt flush when state enters CHARGING. **Dropped after
+tracing it through:** a prompt flush drains the queue and *resets* the active batch
+window, which pushes the *next* bulk flush ~60 s later — net-delaying the batch rather
+than helping. Auto-start needs **4 consecutive** `charge_power_kw` samples (~40 s at 10 s
+sampling) regardless, and the first 60 s bulk flush already carries them, so auto-start
+fires at ~t+60 s — within the documented acceptance and the server's ≤90 s freshness
+target. Not worth the added `decide()` complexity or the risk to the batching invariant.
+
+### Safety / acceptance
+
+- **Live status freshness:** 60 s charging flush is within the server's ≤90 s target.
+- **Auto-start:** fires at ~t+60 s of plug-in (first bulk flush carries the 4 consecutive
+  samples). Slightly later than the old ~t+35 s; negligible for a multi-hour charge.
+- **Charge-threshold push notifications:** may lag up to ~60 s. Accepted.
+- **Tail capture:** unchanged (≥98% → 15 s flush + 1 s sampling).
+
+### Tests — ✅ passing
+
+Added `CloudTelemetrySenderTest`:
+`charging below tail soc flushes every sixty seconds not fifteen` (asserts no POST
+before 60 s, one batch at 60 s). Existing flush tests use `soc = 98` (tail → 15 s, and
+they hit the 15-sample batch flush) so they're unaffected. Full debug suite:
+**417 tests, 0 failures** (`./gradlew testDebugUnitTest`).
+
+## Out of scope (server side — see EvAcChargeTimer/docs/PHASE_0_EFFICIENCY.md)
+
+- Trim the `raw_payload` verify re-read in the telemetry route (biggest egress item).
+- Tiered web session poll (done).
+- Reconcile gated to auto-session start/stop (done).
+
+## Risk note (carry forward from AGENTS.md)
+
+Changing `cloud_sync_vehicle_id` while old queue payloads exist can create a
+header/body `vehicle_id` mismatch and drop mixed batches. Any change that alters
+batching must not reintroduce that hazard — the server already rewrites body
+`vehicle_id` to the header, but verify mixed-batch behavior after edits.
