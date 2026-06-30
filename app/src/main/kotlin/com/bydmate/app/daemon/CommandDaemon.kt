@@ -231,10 +231,48 @@ object CommandDaemon {
             put("result", JSONObject(result))
         }
 
+    /**
+     * Read FID_CHARGING_CAPACITY (dev=1009, fid=666894360) from the autoservice Binder
+     * via a shell exec. The daemon runs as shell uid, so `service call autoservice` is
+     * accessible without ADB or Context — the same privilege path as [AdbOnDeviceClient].
+     * Returns null on sentinel (-1.0f / NaN / Infinite) or any exec failure.
+     */
+    /**
+     * BMS State of Health, percent (DEV_STATISTIC=1014, FID_SOH=1145045032, TX_GET_INT=5).
+     * Validates 0..100; collapses known sentinels to null.
+     */
+    private fun readSohPercent(): Int? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 5 i32 1014 i32 1145045032")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val v = PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt()
+            ?: return null
+        when (v) {
+            0x0000FFFF, 0x000FFFFF, -10013, -10011 -> null
+            else -> if (v in 0..100) v else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun readKwhCharged(): Float? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 7 i32 1009 i32 666894360")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val bits = PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt()
+            ?: return null
+        val f = java.lang.Float.intBitsToFloat(bits)
+        if (f.isNaN() || f.isInfinite() || f == -1.0f) null else f
+    } catch (_: Exception) {
+        null
+    }
+
     /** Push one telemetry sample to the cloud ingest endpoint (contract: docs/cloud-telemetry-contract-ru.md). */
     private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData) {
         try {
-            val payload = buildTelemetryPayload(conf.vehicleId, data).toString()
+            val kwhCharged = readKwhCharged()
+            val sohPercent = readSohPercent()
+            val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -251,7 +289,7 @@ object CommandDaemon {
         }
     }
 
-    private fun buildTelemetryPayload(vehicleId: String, d: DiParsData): JSONObject {
+    private fun buildTelemetryPayload(vehicleId: String, d: DiParsData, kwhCharged: Float? = null, sohPercent: Int? = null): JSONObject {
         val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
             d.maxCellVoltage!! - d.minCellVoltage!!
         } else {
@@ -295,6 +333,10 @@ object CommandDaemon {
             putN("cell_delta_v", cellDelta); putN("odometer_km", d.mileage)
             put("is_charging", isCharging)
             putN("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
+            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
+            putN("charge_type", if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
+            put("is_parked", d.gear == 1)
+            putN("soh_percent", sohPercent?.toDouble())
         }
 
         return JSONObject().apply {
@@ -328,6 +370,9 @@ object CommandDaemon {
     private fun JSONObject.putN(key: String, value: Any?) {
         put(key, value ?: JSONObject.NULL)
     }
+
+    /** Same regex as AutoserviceClientImpl — parses `Result: Parcel(00000000 <8hex> ...)`. */
+    private val PARCEL_REGEX = Regex("""Parcel\(00000000\s+([0-9a-fA-F]{8})""")
 
     private fun jsonObjectToMap(json: JSONObject): Map<String, Any?> {
         val map = mutableMapOf<String, Any?>()

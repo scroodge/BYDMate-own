@@ -97,6 +97,28 @@ open class DiParsClient @Inject constructor(
             "|AutoPark:{自动驻车}|Rain:{雨量}" +
             "|LightLow:{近光灯}|DRL:{日行灯}" +
             "|Sunshade:{遮阳帘打开百分比}|Sentry:{哨兵状态}|RemoteLock:{远程锁车状态}"
+
+        // di+ emits magic "no data" sentinels when a signal can't be read; forwarding
+        // them poisons cloud analytics. Values observed live on the head unit:
+        //   Power=3095   — engine-power PID unreadable (car OFF while AC charging)
+        //   InsideTemp=-2000
+        //   Rain=-2147482648 (~ Int.MIN_VALUE)
+        private const val MAX_PLAUSIBLE_POWER_KW = 350.0   // any BYD stays well within ±350 kW
+        private const val SENTINEL_INT_ABS = 1_000_000     // catches Int.MIN_VALUE-family magic numbers
+        private const val MIN_PLAUSIBLE_TEMP_C = -90
+        private const val MAX_PLAUSIBLE_TEMP_C = 90
+
+        /** Engine-power filter. di+ returns ~3095 kW when the PID is unreadable. */
+        internal fun sanitizePowerKw(raw: Double?): Double? =
+            raw?.takeIf { it.isFinite() && kotlin.math.abs(it) <= MAX_PLAUSIBLE_POWER_KW }
+
+        /** Drops Int.MIN_VALUE-family magic numbers (e.g. Rain=-2147482648). */
+        internal fun sanitizeSentinelInt(raw: Int?): Int? =
+            raw?.takeIf { kotlin.math.abs(it) < SENTINEL_INT_ABS }
+
+        /** Cabin/ambient/battery temps: di+ uses -2000 (and similar) as "no data". */
+        internal fun sanitizeTempC(raw: Int?): Int? =
+            raw?.takeIf { it in MIN_PLAUSIBLE_TEMP_C..MAX_PLAUSIBLE_TEMP_C }
     }
 
     open suspend fun fetch(): DiParsData? = withContext(Dispatchers.IO) {
@@ -185,21 +207,21 @@ open class DiParsClient @Inject constructor(
             soc = map["SOC"]?.toIntOrNull(),
             speed = map["Speed"]?.toIntOrNull(),
             mileage = map["Mileage"]?.toDoubleOrNull()?.let { it / 10.0 },
-            power = map["Power"]?.toDoubleOrNull(),
+            power = sanitizePowerKw(map["Power"]?.toDoubleOrNull()),
             chargeGunState = map["ChargeGun"]?.toIntOrNull(),
-            maxBatTemp = map["MaxBatTemp"]?.toIntOrNull(),
-            avgBatTemp = map["AvgBatTemp"]?.toIntOrNull(),
-            minBatTemp = map["MinBatTemp"]?.toIntOrNull(),
+            maxBatTemp = sanitizeTempC(map["MaxBatTemp"]?.toIntOrNull()),
+            avgBatTemp = sanitizeTempC(map["AvgBatTemp"]?.toIntOrNull()),
+            minBatTemp = sanitizeTempC(map["MinBatTemp"]?.toIntOrNull()),
             chargingStatus = map["ChargingStatus"]?.toIntOrNull(),
             batteryCapacityKwh = map["BatCapacity"]?.toDoubleOrNull(),
             totalElecConsumption = map["TotalElecCon"]?.toDoubleOrNull(),
             voltage12v = v12,
             maxCellVoltage = maxCell,
             minCellVoltage = minCell,
-            exteriorTemp = map["ExtTemp"]?.toIntOrNull(),
+            exteriorTemp = sanitizeTempC(map["ExtTemp"]?.toIntOrNull()),
             gear = map["Gear"]?.toIntOrNull(),
             powerState = map["PowerState"]?.toIntOrNull(),
-            insideTemp = map["InsideTemp"]?.toIntOrNull(),
+            insideTemp = sanitizeTempC(map["InsideTemp"]?.toIntOrNull()),
             acStatus = map["ACStatus"]?.toIntOrNull(),
             acTemp = map["ACTemp"]?.toIntOrNull(),
             fanLevel = map["FanLevel"]?.toIntOrNull(),
@@ -224,7 +246,7 @@ open class DiParsClient @Inject constructor(
             driveMode = map["DriveMode"]?.toIntOrNull(),
             workMode = map["WorkMode"]?.toIntOrNull(),
             autoPark = map["AutoPark"]?.toIntOrNull(),
-            rain = map["Rain"]?.toIntOrNull(),
+            rain = sanitizeSentinelInt(map["Rain"]?.toIntOrNull()),
             lightLow = map["LightLow"]?.toIntOrNull(),
             drl = map["DRL"]?.toIntOrNull(),
             sunshade = map["Sunshade"]?.toIntOrNull(),
