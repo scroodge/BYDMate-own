@@ -519,6 +519,11 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(exportStatus = null) }
     }
 
+    /** Hide the storage diagnostics report. */
+    fun clearDiagnosticLog() {
+        _uiState.update { it.copy(diagnosticLog = null) }
+    }
+
     /** Import trip history from BYD energydata database. */
     fun importBydHistory() {
         viewModelScope.launch {

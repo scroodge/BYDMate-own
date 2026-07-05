@@ -58,7 +58,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
@@ -389,6 +392,46 @@ fun SettingsScreen(
                                 color = if (state.logSaveStatus!!.startsWith("Ошибка")) SocRed else PrimaryColor,
                                 fontSize = 12.sp
                             )
+                        }
+
+                        // Storage diagnostics: permissions + BYD energydata + local DB.
+                        // Runs without ADB (plain File API) — lets remote users report
+                        // whether their DiLink writes the BYD energydata database.
+                        Button(
+                            onClick = { viewModel.runDiagnostics() },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
+                        ) {
+                            Text("Диагностика хранилища BYD", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        }
+                        if (state.diagnosticLog != null) {
+                            val clipboard = LocalClipboardManager.current
+                            SelectionContainer {
+                                Text(
+                                    state.diagnosticLog!!,
+                                    color = TextSecondary,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { clipboard.setText(AnnotatedString(state.diagnosticLog ?: "")) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryColor, contentColor = Color.White)
+                                ) {
+                                    Text("Копировать", fontSize = 12.sp)
+                                }
+                                Button(
+                                    onClick = { viewModel.clearDiagnosticLog() },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextSecondary)
+                                ) {
+                                    Text("Скрыть", fontSize = 12.sp)
+                                }
+                            }
                         }
                     }
                 }
