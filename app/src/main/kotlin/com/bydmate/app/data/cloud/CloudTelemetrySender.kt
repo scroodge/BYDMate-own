@@ -37,7 +37,7 @@ class CloudTelemetrySender @Inject constructor(
 
     /** Fast path: queue a sample without blocking on HTTP flush. */
     suspend fun enqueue(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
-        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") != "true") {
+        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) != "true") {
             return Result.success(Unit)
         }
         val config = readConfig().getOrElse { error ->
@@ -75,7 +75,7 @@ class CloudTelemetrySender @Inject constructor(
 
     /** Flush queued samples when interval/batch thresholds are met. Safe to skip if already flushing. */
     suspend fun flushPending(): Result<Unit> {
-        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") != "true") {
+        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) != "true") {
             return Result.success(Unit)
         }
         val config = readConfig().getOrElse { error ->

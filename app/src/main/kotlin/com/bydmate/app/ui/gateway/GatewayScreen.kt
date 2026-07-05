@@ -536,19 +536,24 @@ private fun CloudSyncCard(
             Switch(checked = enabled, onCheckedChange = onEnabled, colors = bydSwitchColors())
         }
         Spacer(modifier = Modifier.height(10.dp))
-        GatewayTextField(
-            label = strings.endpointUrl,
-            value = url,
-            onValueChange = onUrl,
-            keyboardType = KeyboardType.Uri,
-            placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
-        )
-        GatewayHint(strings.endpointHint)
+        val vehicleNameMissing = vehicleId.trim().isBlank()
         GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
         GatewayHint(strings.linkCodeHint)
+        GatewayTextField(
+            label = strings.carName,
+            value = vehicleId,
+            onValueChange = onVehicleId,
+            keyboardType = KeyboardType.Text,
+            isError = vehicleNameMissing,
+        )
+        if (vehicleNameMissing) {
+            Text(strings.carNameRequired, color = AccentOrange, fontSize = 11.sp)
+        } else {
+            GatewayHint(strings.carNameHint)
+        }
         Button(
             onClick = onConnect,
-            enabled = !linking && linkCode.length == 6,
+            enabled = !linking && linkCode.length == 6 && !vehicleNameMissing,
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(8.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
@@ -569,11 +574,17 @@ private fun CloudSyncCard(
         }
         if (advancedOpen) {
             Spacer(modifier = Modifier.height(8.dp))
+            GatewayTextField(
+                label = strings.endpointUrl,
+                value = url,
+                onValueChange = onUrl,
+                keyboardType = KeyboardType.Uri,
+                placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
+            )
+            GatewayHint(strings.endpointHint)
             GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
             GatewayHint(strings.apiKeyHint)
         }
-        GatewayTextField(strings.carName, vehicleId, onVehicleId, KeyboardType.Text)
-        GatewayHint(strings.carNameHint)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -601,6 +612,7 @@ private fun CloudSyncCard(
             }
             Button(
                 onClick = onTest,
+                enabled = !vehicleNameMissing,
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
@@ -632,6 +644,7 @@ private fun GatewayTextField(
     keyboardType: KeyboardType,
     password: Boolean = false,
     placeholder: String? = null,
+    isError: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
@@ -640,6 +653,7 @@ private fun GatewayTextField(
         placeholder = placeholder?.let { { Text(it) } },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
+        isError = isError,
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         colors = OutlinedTextFieldDefaults.colors(
@@ -650,6 +664,9 @@ private fun GatewayTextField(
             focusedBorderColor = AccentGreen,
             unfocusedBorderColor = TextMuted,
             cursorColor = AccentGreen,
+            errorBorderColor = AccentOrange,
+            errorLabelColor = AccentOrange,
+            errorCursorColor = AccentOrange,
         )
     )
 }
@@ -726,6 +743,7 @@ private data class GatewayStrings(
     val advanced: String,
     val carName: String,
     val carNameHint: String,
+    val carNameRequired: String,
     val wifiOnly: String,
     val gpsPrivacy: String,
     val save: String,
@@ -786,8 +804,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             connect = "Подключить",
             connecting = "Подключение…",
             advanced = "Дополнительно",
-            carName = "Ваше имя авто",
+            carName = "Имя авто (обязательно)",
             carNameHint = "Например: Tang, Seal, Leopard 3 или любое удобное имя машины.",
+            carNameRequired = "Без имени авто синхронизация не запустится. Например: Tang, Seal, Leopard 3.",
             wifiOnly = "Только Wi-Fi",
             gpsPrivacy = "Скрывать GPS",
             save = "Сохранить",
@@ -845,8 +864,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             connect = "Connect",
             connecting = "Connecting…",
             advanced = "Advanced",
-            carName = "Your car name",
+            carName = "Car name (required)",
             carNameHint = "For example: Tang, Seal, Leopard 3, or any convenient car name.",
+            carNameRequired = "Without a car name sync won't start. For example: Tang, Seal, Leopard 3.",
             wifiOnly = "Wi-Fi only",
             gpsPrivacy = "Hide GPS",
             save = "Save",
@@ -904,8 +924,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             connect = "Злучыць",
             connecting = "Падключэнне…",
             advanced = "Дадаткова",
-            carName = "Ваша імя аўто",
+            carName = "Імя аўто (абавязкова)",
             carNameHint = "Напрыклад: Tang, Seal, Leopard 3 або любое зручнае імя машыны.",
+            carNameRequired = "Без імя аўто сінхранізацыя не запусціцца. Напрыклад: Tang, Seal, Leopard 3.",
             wifiOnly = "Толькі Wi-Fi",
             gpsPrivacy = "Хаваць GPS",
             save = "Захаваць",

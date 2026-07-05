@@ -134,7 +134,7 @@ data class SettingsUiState(
     val autoserviceEnabled: Boolean = false,
     val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled,
     val adbStatus: AdbStatus = AdbStatus.UNKNOWN,
-    val cloudSyncEnabled: Boolean = false,
+    val cloudSyncEnabled: Boolean = true,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
     val cloudSyncVehicleId: String = "",
@@ -226,7 +226,7 @@ class SettingsViewModel @Inject constructor(
 
             val autoserviceEnabled = settingsRepository.isAutoserviceEnabled()
 
-            val cloudSyncEnabled = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") == "true"
+            val cloudSyncEnabled = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) == "true"
             val cloudSyncUrl = settingsRepository.getString(
                 SettingsRepository.KEY_CLOUD_SYNC_URL,
                 SettingsRepository.DEFAULT_CLOUD_SYNC_URL
@@ -860,10 +860,13 @@ class SettingsViewModel @Inject constructor(
         val state = _uiState.value
         viewModelScope.launch {
             val url = state.cloudSyncUrl.trim().ifBlank { SettingsRepository.DEFAULT_CLOUD_SYNC_URL }
-            val enabled = state.cloudSyncEnabled && url.startsWith("https://", ignoreCase = true)
+            val vehicleId = state.cloudSyncVehicleId.trim()
+            val enabled = state.cloudSyncEnabled &&
+                url.startsWith("https://", ignoreCase = true) &&
+                vehicleId.isNotBlank()
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_URL, url)
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_API_KEY, state.cloudSyncApiKey)
-            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, state.cloudSyncVehicleId.trim())
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, vehicleId)
             settingsRepository.setString(
                 SettingsRepository.KEY_CLOUD_SYNC_INTERVAL_SEC,
                 SettingsRepository.DEFAULT_CLOUD_SYNC_INTERVAL_SEC,
@@ -875,6 +878,8 @@ class SettingsViewModel @Inject constructor(
                 cloudText("Endpoint URL пустой", "Endpoint URL пусты", "Endpoint URL is empty")
             } else if (!url.startsWith("https://", ignoreCase = true)) {
                 cloudText("Endpoint должен начинаться с https://", "Endpoint мусіць пачынацца з https://", "Endpoint must start with https://")
+            } else if (vehicleId.isBlank()) {
+                cloudText("Укажите имя авто", "Увядзіце імя аўто", "Enter the car name")
             } else {
                 cloudText("Сохранено", "Захавана", "Saved")
             }

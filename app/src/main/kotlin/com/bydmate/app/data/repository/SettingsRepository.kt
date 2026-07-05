@@ -43,6 +43,13 @@ open class SettingsRepository @Inject constructor(
         /** Необязательный код модели автомобиля из библиотеки ABRP. */
         const val KEY_ABRP_CAR_MODEL = "abrp_car_model"
         const val KEY_CLOUD_SYNC_ENABLED = "cloud_sync_enabled"
+        /**
+         * Cloud Sync is ON by default: the master switch reflects intent, while the
+         * actual upload paths still hard-gate on a linked API key + car name (see
+         * CloudTelemetrySender.readConfig / VehicleCommandPoller.pollOnce), so nothing
+         * is transmitted until the user has linked VoltFlow and named the car.
+         */
+        const val DEFAULT_CLOUD_SYNC_ENABLED = "true"
         const val KEY_CLOUD_SYNC_URL = "cloud_sync_url"
         const val KEY_CLOUD_SYNC_API_KEY = "cloud_sync_api_key"
         const val KEY_CLOUD_SYNC_VEHICLE_ID = "cloud_sync_vehicle_id"

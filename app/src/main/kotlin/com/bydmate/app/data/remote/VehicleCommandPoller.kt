@@ -68,7 +68,7 @@ class VehicleCommandPoller @Inject constructor(
     val isRunning: Boolean get() = pollingJob?.isActive == true
 
     private suspend fun pollOnce(): Long {
-        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false") != "true") {
+        if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) != "true") {
             return BASE_POLL_MS
         }
 

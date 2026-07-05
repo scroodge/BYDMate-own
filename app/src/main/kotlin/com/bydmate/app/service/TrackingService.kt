@@ -307,7 +307,7 @@ class TrackingService : Service(), LocationListener {
 
         serviceScope.launch {
             val cloudEnabled = settingsRepository.getString(
-                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED, "false"
+                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED, com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
             ) == "true"
             if (cloudEnabled) {
                 vehicleCommandPoller.start()
@@ -473,7 +473,7 @@ class TrackingService : Service(), LocationListener {
             try {
                 if (settingsRepository.getString(
                         com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                        "false"
+                        com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
                     ) != "true"
                 ) {
                     return@launch
@@ -501,7 +501,7 @@ class TrackingService : Service(), LocationListener {
                     pendingCloudFlush.set(false)
                     if (settingsRepository.getString(
                             com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                            "false"
+                            com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
                         ) != "true"
                     ) {
                         return@launch
@@ -845,7 +845,7 @@ class TrackingService : Service(), LocationListener {
                         renewWakeLockIfNeeded()
                         val cloudEnabled = settingsRepository.getString(
                             com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                            "false"
+                            com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
                         ) == "true"
                         if (cloudEnabled) {
                             var autoserviceOn = settingsRepository.isAutoserviceEnabled()
