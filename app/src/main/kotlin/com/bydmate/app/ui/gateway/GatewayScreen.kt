@@ -37,6 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -169,6 +173,9 @@ fun GatewayScreen(
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onSave = viewModel::saveCloudSyncSettings,
             onTest = viewModel::sendCloudTestPayload,
+            diagnosticLog = state.diagnosticLog,
+            onDiagnostics = viewModel::runDiagnostics,
+            onClearDiagnostics = viewModel::clearDiagnosticLog,
             strings = strings,
         )
 
@@ -521,6 +528,9 @@ private fun CloudSyncCard(
     onOmitGps: (Boolean) -> Unit,
     onSave: () -> Unit,
     onTest: () -> Unit,
+    diagnosticLog: String?,
+    onDiagnostics: () -> Unit,
+    onClearDiagnostics: () -> Unit,
     strings: GatewayStrings,
 ) {
     GatewayCard {
@@ -618,6 +628,46 @@ private fun CloudSyncCard(
                 colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
             ) {
                 Text(strings.sendTest)
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        // Storage diagnostics: works without ADB (plain File API). Lets remote
+        // users report whether their DiLink writes the BYD energydata database.
+        Button(
+            onClick = onDiagnostics,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
+        ) {
+            Text(strings.storageDiag)
+        }
+        if (diagnosticLog != null) {
+            val clipboard = LocalClipboardManager.current
+            Spacer(modifier = Modifier.height(6.dp))
+            SelectionContainer {
+                Text(
+                    diagnosticLog,
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 14.sp,
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { clipboard.setText(AnnotatedString(diagnosticLog)) },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
+                ) {
+                    Text(strings.copyReport, fontSize = 12.sp)
+                }
+                Button(
+                    onClick = onClearDiagnostics,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextSecondary)
+                ) {
+                    Text(strings.hideReport, fontSize = 12.sp)
+                }
             }
         }
         status?.let {
@@ -748,6 +798,9 @@ private data class GatewayStrings(
     val gpsPrivacy: String,
     val save: String,
     val sendTest: String,
+    val storageDiag: String,
+    val copyReport: String,
+    val hideReport: String,
     val updates: String,
     val checkUpdates: String,
     val checkUpdatesHint: String,
@@ -811,6 +864,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Скрывать GPS",
             save = "Сохранить",
             sendTest = "Отправить тест",
+            storageDiag = "Диагностика BYD",
+            copyReport = "Копировать",
+            hideReport = "Скрыть",
             updates = "Обновления",
             checkUpdates = "Проверять обновления",
             checkUpdatesHint = "При запуске проверять GitHub и предлагать обновиться",
@@ -871,6 +927,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Hide GPS",
             save = "Save",
             sendTest = "Send test",
+            storageDiag = "BYD storage check",
+            copyReport = "Copy",
+            hideReport = "Hide",
             updates = "Updates",
             checkUpdates = "Check for updates",
             checkUpdatesHint = "On launch, check GitHub and offer to update",
@@ -931,6 +990,9 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Хаваць GPS",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
+            storageDiag = "Дыягностыка BYD",
+            copyReport = "Капіяваць",
+            hideReport = "Схаваць",
             updates = "Абнаўленні",
             checkUpdates = "Правяраць абнаўленні",
             checkUpdatesHint = "Пры запуску правяраць GitHub і прапаноўваць абнавіцца",
