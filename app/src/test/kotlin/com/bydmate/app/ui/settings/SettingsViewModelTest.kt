@@ -3,6 +3,9 @@ package com.bydmate.app.ui.settings
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.cloud.CloudSendResult
+import com.bydmate.app.data.cloud.CloudTelemetryClientApi
+import com.bydmate.app.data.cloud.TripSummaryCloudSync
 import com.bydmate.app.data.cloud.VoltflowLinkClient
 import com.bydmate.app.data.autoservice.AutoserviceClient
 import com.bydmate.app.data.autoservice.BatteryReading
@@ -100,6 +103,7 @@ class SettingsViewModelTest {
         override suspend fun getPeriodSummary(from: Long, to: Long): TripSummary = TripSummary(0.0, 0.0)
         override suspend fun getLiveTrips(): List<TripEntity> = emptyList()
         override suspend fun getByStartTsRange(minTs: Long, maxTs: Long): TripEntity? = null
+        override suspend fun getEnergydataTripsSince(sinceTsMs: Long): List<TripEntity> = emptyList()
         override suspend fun getAllSnapshot(): List<TripEntity> = emptyList()
         override suspend fun deleteById(id: Long) {}
         override suspend fun deleteZeroKmTrips(): Int = 0
@@ -218,9 +222,18 @@ class SettingsViewModelTest {
         val updateChecker = UpdateChecker(httpClient)
 
         val energyReader = EnergyDataReader(ctx)
+        val stubCloudClient = object : CloudTelemetryClientApi {
+            override suspend fun send(
+                url: String,
+                apiKey: String,
+                vehicleId: String,
+                payloadJson: String,
+            ): CloudSendResult = CloudSendResult.Success(null)
+        }
+        val tripSummaryCloudSync = TripSummaryCloudSync(ctx, settingsRepo, tripDao, stubCloudClient)
         val historyImporter = HistoryImporter(
             ctx, energyReader, tripRepo, tripDao, tripPointDao, idleDrainDao,
-            DiPlusDbReader(), settingsRepo
+            DiPlusDbReader(), settingsRepo, tripSummaryCloudSync
         )
 
         val openRouterClient = OpenRouterClient(httpClient)

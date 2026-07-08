@@ -68,6 +68,10 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE start_ts >= :minTs AND start_ts <= :maxTs LIMIT 1")
     suspend fun getByStartTsRange(minTs: Long, maxTs: Long): TripEntity?
 
+    /** Energydata imports newer than the cloud trip-summary sync watermark, oldest first. */
+    @Query("SELECT * FROM trips WHERE source = 'energydata' AND start_ts > :sinceTsMs ORDER BY start_ts ASC")
+    suspend fun getEnergydataTripsSince(sinceTsMs: Long): List<TripEntity>
+
     @Query("SELECT * FROM trips ORDER BY start_ts")
     suspend fun getAllSnapshot(): List<TripEntity>
 

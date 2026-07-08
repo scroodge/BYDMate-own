@@ -61,6 +61,10 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"
         const val KEY_CLOUD_SYNC_LAST_ACK = "cloud_sync_last_ack"
+        /** Max trips.start_ts (ms) already acknowledged by /api/bydmate/trip-summaries. */
+        const val KEY_TRIP_SUMMARY_SYNC_TS = "trip_summary_sync_ts"
+        const val KEY_TRIP_SUMMARY_SYNC_LAST_RESULT = "trip_summary_sync_last_result"
+        const val KEY_TRIP_SUMMARY_SYNC_LAST_TS = "trip_summary_sync_last_ts"
         const val KEY_APP_LANGUAGE = "app_language"
         const val KEY_DATA_SOURCE = "data_source"
         const val KEY_AUTOSERVICE_ENABLED = "autoservice_enabled"

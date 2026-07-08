@@ -5,6 +5,7 @@ import android.util.Log
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
+import com.bydmate.app.data.cloud.TripSummaryCloudSync
 import com.bydmate.app.data.local.entity.IdleDrainEntity
 import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.remote.DiPlusDbReader
@@ -26,7 +27,8 @@ class HistoryImporter @Inject constructor(
     private val tripPointDao: TripPointDao,
     private val idleDrainDao: IdleDrainDao,
     private val diPlusDbReader: DiPlusDbReader,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val tripSummaryCloudSync: TripSummaryCloudSync
 ) {
     companion object {
         private const val TAG = "HistoryImporter"
@@ -518,6 +520,10 @@ class HistoryImporter @Inject constructor(
             recalculateConsumptionFromEnergyData()
             calculateMissingCosts(settingsRepository.getTripCostTariff())
             attachGpsPoints()
+            // Push freshly imported energydata trips to VoltFlow (never throws,
+            // gated on Cloud Sync being linked; retries pending records even
+            // when the local import found nothing new).
+            tripSummaryCloudSync.syncNewTrips()
             r
         }
     }
