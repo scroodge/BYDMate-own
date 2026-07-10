@@ -35,6 +35,15 @@ data class VehicleTelemetrySnapshot(
     val tirePressRL: Int?,
     val tirePressRR: Int?,
     val location: TelemetryLocation?,
+    val autoserviceSocPercent: Float? = null,
+    val autoservicePowerKw: Int? = null,
+    val autoserviceGunState: Int? = null,
+    val autoserviceBmsState: Int? = null,
+    val autoserviceChargeCapacityKwh: Float? = null,
+    val autoserviceChargeBatteryVolt: Int? = null,
+    val autoserviceBatteryType: Int? = null,
+    val autoserviceLifetimeMileageKm: Float? = null,
+    val autoserviceLifetimeKwh: Float? = null,
 ) {
     companion object {
         private const val POWER_MIN_KW = -300
@@ -107,6 +116,15 @@ data class VehicleTelemetrySnapshot(
                         bearingDeg = it.bearing.takeIf { _ -> it.hasBearing() }?.toDouble(),
                     )
                 },
+                autoserviceSocPercent = battery?.socPercent,
+                autoservicePowerKw = enginePowerKw,
+                autoserviceGunState = charging?.gunConnectState,
+                autoserviceBmsState = charging?.bmsState,
+                autoserviceChargeCapacityKwh = charging?.chargingCapacityKwh,
+                autoserviceChargeBatteryVolt = charging?.chargeBatteryVoltV,
+                autoserviceBatteryType = charging?.batteryType,
+                autoserviceLifetimeMileageKm = battery?.lifetimeMileageKm,
+                autoserviceLifetimeKwh = battery?.lifetimeKwh,
             )
         }
     }

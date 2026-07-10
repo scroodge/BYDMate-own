@@ -17,7 +17,8 @@ data class BydTripRecord(
     val endTimestamp: Long,
     val duration: Long,       // seconds
     val tripKm: Double,       // distance
-    val electricityKwh: Double // BYD's own estimate
+    val electricityKwh: Double, // BYD's own estimate
+    val fuelLiters: Double = 0.0 // PHEV fuel consumption (liters); 0 for pure EVs
 )
 
 /**
@@ -214,7 +215,7 @@ class EnergyDataReader @Inject constructor(
         val db = SQLiteDatabase.openDatabase(localDb.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
         db.use { database ->
             val cursor = database.rawQuery(
-                """SELECT _id, start_timestamp, end_timestamp, duration, trip, electricity
+                """SELECT _id, start_timestamp, end_timestamp, duration, trip, electricity, fuel
                    FROM EnergyConsumption
                    WHERE is_deleted = 0 AND start_timestamp > ?
                    ORDER BY start_timestamp""",
@@ -229,7 +230,8 @@ class EnergyDataReader @Inject constructor(
                         endTimestamp = c.getLong(2),
                         duration = c.getLong(3),
                         tripKm = c.getDouble(4),
-                        electricityKwh = c.getDouble(5)
+                        electricityKwh = c.getDouble(5),
+                        fuelLiters = c.getDouble(6)
                     ))
                 }
             }
@@ -282,7 +284,7 @@ class EnergyDataReader @Inject constructor(
         )
         return db.use { database ->
             val cursor = database.rawQuery(
-                """SELECT _id, start_timestamp, end_timestamp, duration, trip, electricity
+                """SELECT _id, start_timestamp, end_timestamp, duration, trip, electricity, fuel
                    FROM EnergyConsumption
                    WHERE is_deleted = 0
                    ORDER BY start_timestamp DESC""",
@@ -296,6 +298,7 @@ class EnergyDataReader @Inject constructor(
                 val colDuration = c.getColumnIndexOrThrow("duration")
                 val colTrip = c.getColumnIndexOrThrow("trip")
                 val colElectricity = c.getColumnIndexOrThrow("electricity")
+                val colFuel = c.getColumnIndex("fuel")
 
                 while (c.moveToNext()) {
                     results.add(
@@ -305,7 +308,8 @@ class EnergyDataReader @Inject constructor(
                             endTimestamp = c.getLong(colEnd),
                             duration = c.getLong(colDuration),
                             tripKm = c.getDouble(colTrip),
-                            electricityKwh = c.getDouble(colElectricity)
+                            electricityKwh = c.getDouble(colElectricity),
+                            fuelLiters = if (colFuel >= 0) c.getDouble(colFuel) else 0.0
                         )
                     )
                 }

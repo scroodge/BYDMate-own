@@ -91,6 +91,18 @@ object CloudTelemetryPayload {
                 snapshot.diPlusData != null && !idleOnly ->
                     put("diplus", snapshot.diPlusData.toJson(includePower = moving || charging))
             }
+            val autoservice = JSONObject().apply {
+                putIfPresent("soc_percent", snapshot.autoserviceSocPercent?.toDouble())
+                putIfPresent("power_kw", snapshot.autoservicePowerKw)
+                putIfPresent("gun_state", snapshot.autoserviceGunState)
+                putIfPresent("bms_state", snapshot.autoserviceBmsState)
+                putIfPresent("charge_capacity_kwh", snapshot.autoserviceChargeCapacityKwh?.toDouble())
+                putIfPresent("charge_battery_volt", snapshot.autoserviceChargeBatteryVolt)
+                putIfPresent("battery_type", snapshot.autoserviceBatteryType)
+                putIfPresent("lifetime_mileage_km", snapshot.autoserviceLifetimeMileageKm?.toDouble())
+                putIfPresent("lifetime_kwh", snapshot.autoserviceLifetimeKwh?.toDouble())
+            }
+            if (autoservice.length() > 0) put("autoservice", autoservice)
             put("location", location)
         }.toString()
     }

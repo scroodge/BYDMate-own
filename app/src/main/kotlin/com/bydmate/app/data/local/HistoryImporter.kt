@@ -153,7 +153,8 @@ class HistoryImporter @Inject constructor(
                     kwhPer100km = kwhPer100km,
                     avgSpeedKmh = avgSpeed,
                     source = "energydata",
-                    bydId = byd.id
+                    bydId = byd.id,
+                    fuelLiters = byd.fuelLiters.takeIf { it > 0.0 }
                 )
             )
             tripsImported++
@@ -284,7 +285,8 @@ class HistoryImporter @Inject constructor(
                         kwhConsumed = byd.electricityKwh,
                         kwhPer100km = kwhPer100km,
                         source = "energydata",
-                        bydId = byd.id
+                        bydId = byd.id,
+                        fuelLiters = byd.fuelLiters.takeIf { it > 0.0 }
                     ))
                     inserted++
                 }

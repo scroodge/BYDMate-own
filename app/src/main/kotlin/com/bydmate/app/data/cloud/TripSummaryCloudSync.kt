@@ -186,6 +186,8 @@ class TripSummaryCloudSync @Inject constructor(
             put("energy_kwh", energyKwh)
             val durationSec = endSec - startSec
             if (durationSec in 0..MAX_DURATION_SEC) put("duration_seconds", durationSec)
+            val fuel = trip.fuelLiters
+            if (fuel != null && fuel > 0.0) put("fuel_kwh", fuel)
         }
     }
 

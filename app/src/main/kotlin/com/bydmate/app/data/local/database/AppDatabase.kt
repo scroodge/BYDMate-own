@@ -42,7 +42,7 @@ import com.bydmate.app.data.local.entity.TripPointEntity
         OdometerSampleEntity::class,
         CloudSyncQueueEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {

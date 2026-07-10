@@ -26,5 +26,6 @@ data class TripEntity(
     val cost: Double? = null,
     @ColumnInfo(name = "exterior_temp") val exteriorTemp: Int? = null,
     @ColumnInfo(name = "source", defaultValue = "live") val source: String = "live",
-    @ColumnInfo(name = "byd_id") val bydId: Long? = null
+    @ColumnInfo(name = "byd_id") val bydId: Long? = null,
+    @ColumnInfo(name = "fuel_liters") val fuelLiters: Double? = null
 )
