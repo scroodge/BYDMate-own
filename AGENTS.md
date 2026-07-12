@@ -46,6 +46,7 @@ charge energy + derived float charge power".
 
 - VoltFlow Mate is a Kotlin/Compose Android app for BYD DiLink telemetry to VoltFlow.
 - Build/install preference is **debug APK only** for this project. Use `./gradlew testDebugUnitTest assembleDebug` and install `app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk`; do not build or install release APKs unless the user explicitly overrides this rule.
+- **Releases:** follow `.claude/skills/release-apk/SKILL.md` (the `/release-apk` skill). A release is not done until fresh rows appear in `bydmate_telemetry_samples` / `bydmate_live_snapshots` **after** the install — an APK that builds and installs but stops sending telemetry is a failed release (this shipped in v0.4.1).
 - For Cloud Sync work, start with `CloudTelemetrySender`, `CloudTelemetryPayload`, `CloudTelemetryCadence`, `TrackingService`, and tests in `app/src/test/kotlin/com/bydmate/app/data/cloud/`.
 - For parked/off remote command work, start with `CommandDaemon`, `VehicleCommandPoller`, `CommandAllowlist`, `DiParsControlClient`, `tools/start_voltflow_cmd.sh`, and `docs/REMOTE_COMMAND_DAEMON.md`.
 - Preserve the open risk note: changing `cloud_sync_vehicle_id` while old queue payloads exist can create header/body vehicle_id mismatch and drop mixed batches unless fixed.
