@@ -212,8 +212,18 @@ class CloudTelemetrySender @Inject constructor(
     ): FlushQueueResult {
         var lastAck: CloudTelemetryAck? = null
         while (true) {
-            val items = queueDao.getUnsent(batchSize)
-            if (items.isEmpty()) return FlushQueueResult(success = true, lastAck = lastAck)
+            val pending = queueDao.getUnsent(batchSize)
+            if (pending.isEmpty()) return FlushQueueResult(success = true, lastAck = lastAck)
+
+            // The X-Vehicle-Id header must match the vehicle_id inside every sample of the
+            // batch, or the server rejects the batch whole — good rows included. A queued row
+            // carries the id it was recorded with, so rows enqueued before the user edited
+            // their vehicle id in Settings would otherwise go out under the new id. Send one
+            // batch per id instead of stamping the current id onto older bodies.
+            val (batchVehicleId, items) = pending
+                .groupBy { CloudTelemetryPayload.vehicleIdOf(it.payloadJson) ?: config.vehicleId }
+                .entries.first()
+                .let { it.key to it.value }
 
             val payload = if (items.size == 1) {
                 items.first().payloadJson
@@ -221,7 +231,7 @@ class CloudTelemetrySender @Inject constructor(
                 CloudTelemetryPayload.buildBatch(items.map { it.payloadJson })
             }
 
-            when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
+            when (val result = client.send(config.url, config.apiKey, batchVehicleId, payload)) {
                 is CloudSendResult.Success -> {
                     val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = items.size)
                     lastAck = ack

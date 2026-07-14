@@ -127,6 +127,18 @@ object CloudTelemetryPayload {
             .toString()
     }
 
+    /**
+     * The `vehicle_id` a queued payload was recorded with. Queued rows keep the id configured
+     * at enqueue time, which can differ from the current setting — the sender must send each
+     * batch under the id its bodies actually carry, or the server rejects the whole batch.
+     * Returns null for malformed or id-less payloads so the caller can fall back.
+     */
+    fun vehicleIdOf(payloadJson: String): String? = try {
+        JSONObject(payloadJson).optString("vehicle_id").takeIf { it.isNotBlank() }
+    } catch (_: Exception) {
+        null
+    }
+
     private fun JSONObject.putIfPresent(name: String, value: Any?) {
         if (value == null) return
         put(name, value)

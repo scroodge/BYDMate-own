@@ -234,6 +234,43 @@ class CloudTelemetrySenderTest {
         assertEquals(0, setup.queue.items.count { it.sentAt == null })
     }
 
+    /**
+     * Regression: a queued row carries the vehicle_id it was recorded with. If the user edits
+     * their vehicle id in Settings while rows are still queued, those older rows must NOT be
+     * sent under the new id — the server compares the X-Vehicle-Id header against the
+     * vehicle_id in each sample and rejects the whole batch on a mismatch, silently losing
+     * good rows along with the stale ones.
+     */
+    @Test
+    fun `queued rows are sent under the vehicle id in their body, not the current setting`() = runTest {
+        val setup = setup()   // current setting is "way"
+        setup.queue.insert(queueRow(vehicleId = "old-car", createdAt = 1L))
+        setup.queue.insert(queueRow(vehicleId = "old-car", createdAt = 2L))
+        setup.setNow(10 * 60_000L)   // past the flush interval
+
+        setup.sender.flushPending()
+
+        assertTrue("expected at least one send", setup.client.payloads.isNotEmpty())
+        assertEquals("old-car", setup.client.vehicleIds.first())
+
+        // and the header agrees with every body in that batch
+        val first = JSONObject(setup.client.payloads.first())
+        val samples = if (first.has("samples")) first.getJSONArray("samples")
+            else org.json.JSONArray().put(first)
+        for (i in 0 until samples.length()) {
+            assertEquals("old-car", samples.getJSONObject(i).getString("vehicle_id"))
+        }
+    }
+
+    /** A queue row as it looks after being enqueued under [vehicleId]. */
+    private fun queueRow(vehicleId: String, createdAt: Long) = CloudSyncQueueEntity(
+        createdAt = createdAt,
+        payloadJson = JSONObject()
+            .put("vehicle_id", vehicleId)
+            .put("soc", 55)
+            .toString(),
+    )
+
     private fun setup(
         results: ArrayDeque<CloudSendResult> = ArrayDeque(),
     ): TestSetup {
@@ -367,6 +404,8 @@ class CloudTelemetrySenderTest {
         val results: ArrayDeque<CloudSendResult>,
     ) : CloudTelemetryClientApi {
         val payloads = mutableListOf<String>()
+        /** X-Vehicle-Id sent with each request, parallel to [payloads]. */
+        val vehicleIds = mutableListOf<String>()
 
         override suspend fun send(
             url: String,
@@ -375,6 +414,7 @@ class CloudTelemetrySenderTest {
             payloadJson: String,
         ): CloudSendResult {
             payloads += payloadJson
+            vehicleIds += vehicleId
             return results.removeFirstOrNull() ?: CloudSendResult.Success(fullAckJson(300))
         }
     }
