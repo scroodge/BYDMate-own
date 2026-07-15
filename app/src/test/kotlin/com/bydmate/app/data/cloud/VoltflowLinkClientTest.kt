@@ -8,9 +8,9 @@ class VoltflowLinkClientTest {
 
     @Test
     fun redeemUrlFromDefaultTelemetryEndpoint() {
-        val url = "https://volt-flow-beige.vercel.app/api/bydmate/telemetry"
+        val url = "https://voltflow.life/api/bydmate/telemetry"
         assertEquals(
-            "https://volt-flow-beige.vercel.app/api/bydmate/link-code/redeem",
+            "https://voltflow.life/api/bydmate/link-code/redeem",
             VoltflowLinkClient.redeemUrlFromTelemetryEndpoint(url),
         )
     }

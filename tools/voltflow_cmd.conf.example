@@ -3,6 +3,6 @@
 #
 # url: the telemetry endpoint (…/api/bydmate/telemetry) OR the commands endpoint directly.
 #      The daemon derives <base>/commands and <base>/commands/ack from it.
-url=https://volt-flow-beige.vercel.app/api/bydmate/telemetry
+url=https://voltflow.life/api/bydmate/telemetry
 api_key=REPLACE_WITH_CLOUD_SYNC_API_KEY
 vehicle_id=REPLACE_WITH_VEHICLE_ID

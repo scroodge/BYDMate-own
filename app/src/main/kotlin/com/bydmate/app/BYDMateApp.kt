@@ -53,6 +53,11 @@ class BYDMateApp : Application(), Configuration.Provider {
                 settingsRepository.setMigrationV2_4_17Done()
                 android.util.Log.i("BYDMateApp", "v2.4.17 migration: removed $removed phantom autoservice rows")
             }
+            // One-shot: move an already-paired car off the retired volt-flow-beige.vercel.app
+            // host onto voltflow.life, without requiring a re-link. Custom endpoints untouched.
+            if (settingsRepository.migrateCloudSyncDomainIfNeeded()) {
+                android.util.Log.i("BYDMateApp", "domain migration: cloud_sync_url moved to voltflow.life")
+            }
             // One-time cleanup of existing duplicates from v2.0.0
             historyImporter.cleanupDuplicates()
             // Only sync if setup is completed (prevents duplicates during first wizard run)

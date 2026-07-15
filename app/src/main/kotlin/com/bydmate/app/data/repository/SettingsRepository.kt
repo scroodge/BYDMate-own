@@ -78,6 +78,7 @@ open class SettingsRepository @Inject constructor(
         // runCatchUp can compute a real SOC delta on cold start.
         const val KEY_CHARGING_BASELINE_SOC = "charging_baseline_soc"
         const val KEY_MIGRATION_V2_4_17 = "migration_v2_4_17_done"
+        const val KEY_MIGRATION_DOMAIN_VOLTFLOW = "migration_domain_voltflow_done"
         /** User explicitly started Gateway from UI; BootReceiver respects this. */
         const val KEY_GATEWAY_WANTED = "gateway_wanted"
 
@@ -90,8 +91,17 @@ open class SettingsRepository @Inject constructor(
         const val DEFAULT_CONSUMPTION_BAD = "30"
         const val DEFAULT_CLOUD_SYNC_INTERVAL_SEC = "60"
         const val DEFAULT_CLOUD_SYNC_URL =
-            "https://volt-flow-beige.vercel.app/api/bydmate/telemetry"
+            "https://voltflow.life/api/bydmate/telemetry"
         const val CLOUD_SYNC_ENDPOINT_PLACEHOLDER = DEFAULT_CLOUD_SYNC_URL
+
+        /**
+         * Hosts a previous default pointed at. On upgrade, a stored cloud_sync_url whose host
+         * is one of these is rewritten to [DEFAULT_CLOUD_SYNC_URL] (see the domain migration in
+         * BYDMateApp). A user's own custom/self-hosted endpoint is never in this set, so it is
+         * left untouched. The old Vercel host still serves via a 308, so a car that never
+         * upgrades keeps working — this just moves upgraders off it without a re-link.
+         */
+        val LEGACY_CLOUD_SYNC_HOSTS = setOf("volt-flow-beige.vercel.app")
         const val LANGUAGE_BE = "be"
         const val LANGUAGE_RU = "ru"
         const val LANGUAGE_EN = "en"
@@ -266,6 +276,25 @@ open class SettingsRepository @Inject constructor(
 
     suspend fun setMigrationV2_4_17Done() =
         setString(KEY_MIGRATION_V2_4_17, "true")
+
+    /**
+     * One-shot: move an install off a retired cloud-sync host onto [DEFAULT_CLOUD_SYNC_URL].
+     * The stored URL is only rewritten when it is blank or its host is a known legacy default
+     * ([LEGACY_CLOUD_SYNC_HOSTS]); a user's custom endpoint is left alone. Idempotent via the
+     * [KEY_MIGRATION_DOMAIN_VOLTFLOW] flag. Returns true if a rewrite happened.
+     */
+    suspend fun migrateCloudSyncDomainIfNeeded(): Boolean {
+        if (getString(KEY_MIGRATION_DOMAIN_VOLTFLOW, "false") == "true") return false
+        val current = getString(KEY_CLOUD_SYNC_URL, "").trim()
+        val legacy = current.isEmpty() || hostOf(current) in LEGACY_CLOUD_SYNC_HOSTS
+        val rewritten = legacy && current != DEFAULT_CLOUD_SYNC_URL
+        if (rewritten) setString(KEY_CLOUD_SYNC_URL, DEFAULT_CLOUD_SYNC_URL)
+        setString(KEY_MIGRATION_DOMAIN_VOLTFLOW, "true")
+        return rewritten
+    }
+
+    private fun hostOf(url: String): String? =
+        try { java.net.URI(url).host } catch (_: Exception) { null }
 
     suspend fun isGatewayWanted(): Boolean =
         getString(KEY_GATEWAY_WANTED, "false") == "true"

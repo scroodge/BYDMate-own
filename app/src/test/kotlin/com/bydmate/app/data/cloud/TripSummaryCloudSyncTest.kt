@@ -41,7 +41,7 @@ class TripSummaryCloudSyncTest {
         assertEquals(1800L, entry.getLong("duration_seconds"))
         assertEquals(T0.toString(), setup.settings.map[SettingsRepository.KEY_TRIP_SUMMARY_SYNC_TS])
         assertEquals(
-            "https://volt-flow-beige.vercel.app/api/bydmate/trip-summaries",
+            "https://voltflow.life/api/bydmate/trip-summaries",
             setup.client.urls.single(),
         )
     }
