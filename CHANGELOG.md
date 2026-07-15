@@ -38,7 +38,26 @@
 
 ## [Unreleased]
 
+### Added
+- **Расход топлива в поездках и телеметрии** (`e9fd89a`): сбор и передача расхода
+  топлива в данных поездки и телеметрии.
+
+### Changed
+- **Спаренные авто переведены на постоянный домен `voltflow.life`** (`e2cd59b`):
+  миграция с `volt-flow-beige.vercel.app`.
+- **Удалён мёртвый код (~280 строк)** в рамках правки vehicle_id (`7b37366`):
+  `IdleDrainTracker` (заменён `historyImporter.cleanupIdleDrainV2()` в v2.1.4),
+  `BatteryHealthViewModel`, `ConsumptionCalculator`, legacy-заглушки
+  `domain/model/Models.kt`, ресурс `ic_cloudev_mate`. Idle-drain по-прежнему работает
+  через импорт истории.
+
 ### Fixed
+- **Смена `cloud_sync_vehicle_id` при непустой очереди больше не теряет батч**
+  (`7b37366`): `flushQueue` штамповал каждый батч ТЕКУЩИМ `vehicle_id` из настроек, поэтому
+  при переименовании авто заголовок `X-Vehicle-Id` не совпадал с `vehicle_id` в теле и
+  сервер отклонял весь батч целиком, теряя и валидные строки. Теперь строки очереди
+  группируются по `vehicle_id` из их payload и отправляются по одному батчу на id —
+  заголовок всегда равен телу. Добавлен регресс-тест (падал на старом коде).
 - **CommandDaemon watchdog self-revival:** bundled APK asset
   `app/src/main/assets/start_voltflow_cmd.sh` is now synced with the hardened
   `tools/start_voltflow_cmd.sh` launcher, including the v0.4.0 single-instance lock and
