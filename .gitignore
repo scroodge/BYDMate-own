@@ -36,3 +36,12 @@ screen/
 .scratch/
 .local/
 .codex/
+.claude/
+.codegraph/
+.cursor/
+.codex/
+.gemini/
+.kiro/
+.windsurfrules
+.clinerules
+opencode.json
