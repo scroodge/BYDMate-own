@@ -28,10 +28,15 @@ awake while parked; it is the only actuation channel `127.0.0.1:8988/api/sendCmd
   power impossible; energy/SoH already captured), and di+ still can't be removed. High
   effort, ~zero benefit.
 
-**→ No Android work needed.** The remaining win is in the **cloud (EvAcChargeTimer)**:
-it receives the accurate `kwh_charged` but ignores it for the session total/cost (uses
-SOC×capacity÷efficiency). See EvAcChargeTimer `AGENTS.md` → Pending plan "BMS-measured
-charge energy + derived float charge power".
+**→ No Android work needed, and no cloud work either.** An earlier version of this note
+proposed that the cloud adopt `kwh_charged` for the session total/cost. **That was tried in
+EvAcChargeTimer and reverted**, because the BMS `kwh_charged` counter is **cell-only —
+roughly 47% low versus grid-metered energy** — so it is wrong for cost and for the power
+display, and is kept for diagnostics only. The cloud deliberately computes cost from
+`SOC_delta% × capacity ÷ efficiency` (per-tariff efficiency), which is the correct,
+grid-side figure. Do **not** re-propose BMS-for-cost. Authoritative rule: EvAcChargeTimer
+`AGENTS.md` → "Charging sessions" and `docs/CHARGING_SESSIONS.md`. Mate keeps sending
+`kwh_charged` in the payload as a diagnostic; that is fine and unchanged.
 
 ---
 
