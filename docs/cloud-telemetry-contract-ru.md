@@ -71,7 +71,7 @@ APK отправляет `POST` на настроенный HTTPS endpoint. URL 
 Default endpoint:
 
 ```text
-https://volt-flow-beige.vercel.app/api/bydmate/telemetry
+https://voltflow.life/api/bydmate/telemetry
 ```
 
 Headers:
@@ -128,7 +128,7 @@ APK может отправить один telemetry sample:
   "vehicle_id": "way",
   "device_time": "2026-05-25T12:34:56Z",
   "source": "BYDMate",
-  "mate_version": "0.3.9.5",
+  "mate_version": "0.4.7",
   "telemetry": {
     "soc": 73,
     "speed_kmh": 0.0,
@@ -241,9 +241,10 @@ Backend должен принимать оба варианта: одиночн�
 | `vehicle_id` | string | yes | Имя/ID автомобиля из настроек APK. |
 | `device_time` | string | yes | ISO-8601 UTC timestamp, например `2026-05-25T12:34:56Z`. |
 | `source` | string | yes | Сейчас всегда `BYDMate`. |
-| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, например `0.3.9.5`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. Добавлено в v0.3.9.4. |
+| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, сейчас `0.4.7`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. |
 | `telemetry` | object | yes | Нормализованный набор основных метрик. |
-| `diplus` | object/null | yes | Сырые/расширенные данные DiPlus после парсинга APK. Может быть `null`. |
+| `diplus` | object/null | no | Сырые/расширенные данные DiPlus после парсинга APK. Может быть `null` или отсутствовать, когда Di+ недоступен. |
+| `autoservice` | object | no | BMS-direct поля, доступные только при ADB/autoservice Binder; отсутствие блока нормально. |
 | `location` | object | yes | GPS-данные. Объект есть всегда, поля внутри могут быть `null` или отсутствовать по смыслу. |
 
 Все неизвестные будущие поля backend должен игнорировать.
@@ -334,6 +335,22 @@ DiPlus API. Если DiPlus недоступен, весь объект буде
 | `light_low` | number/null | `0=OFF`, `1=ON` |
 | `drl` | number/null | `0=invalid`, `1=ON`, `2=OFF` |
 
+## `autoservice` (optional)
+
+Эти BMS-direct поля появляются только когда APK может читать autoservice Binder через
+ADB. Их отсутствие не делает telemetry sample неполным:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `soc_percent`, `power_kw` | number/null | BMS SOC и signed engine power. |
+| `gun_state`, `bms_state` | integer/null | Состояние подключения пистолета и BMS зарядки. |
+| `charge_capacity_kwh` | number/null | Счётчик энергии в ячейки за текущую зарядку; диагностика, не источник цены в VoltFlow. |
+| `charge_battery_volt`, `battery_type` | number/null | HV напряжение и химия батареи. |
+| `lifetime_mileage_km`, `lifetime_kwh` | number/null | Lifetime BMS counters. |
+
+VoltFlow материализует эти значения в live snapshot и history rows; live snapshot
+сохраняет последнее известное значение, если следующий slim payload не содержит блока.
+
 ## `location`
 
 | Field | Type | Unit | Description |
@@ -354,17 +371,21 @@ APK не отправляет каждый poll напрямую. Сначала
 Правила постановки в очередь:
 
 - Авто движется: sample раз в **1 секунду** (локальный poll 1 s).
-- Авто заряжается: sample раз в **10 секунд** до SOC `95%`; от **95%** и до остановки
+- Авто заряжается: sample раз в **10 секунд** до SOC `98%`; от **98%** и до остановки
   зарядки — раз в **1 секунду**, чтобы точно снять cell delta на балансировочном «хвосте».
 - Авто стоит (P / parked): heartbeat примерно раз в **30 секунд**; slim `diplus` с `gear`.
-- Смена передачи (P/D/R): sample и flush сразу.
+- Смена передачи (P/D/R): sample добавляется сразу; переход в parked может flush'иться
+  сразу, а driving/charging сохраняют active-batch cadence.
 - Изменение состояния движения/зарядки также добавляет sample.
 
 Правила отправки:
 
-- Во время движения или зарядки samples копятся и отправляются batch'ем каждые **15 секунд**
-  (до **15** samples за batch).
-- В idle режиме HTTP flush batch — фиксированно **60 секунд** (настройки в UI нет).
+- Во время движения и charging tail (SOC ≥98%) samples копятся и отправляются batch'ем каждые
+  **15 секунд** (до **15** samples за batch).
+- В charging bulk (SOC <98%) batch отправляется раз в **60 секунд**: это уменьшает число
+  backend invocations, оставаясь в пределах 90-секундной свежести live состояния.
+- В idle режиме HTTP flush использует настройку Cloud Sync; по умолчанию **60 секунд**
+  (допустимый диапазон 5–300 s).
 - Максимальный batch size в idle: `120` samples.
 - Максимум локальной очереди: `1000` rows; старые записи обрезаются.
 - Если включен Wi-Fi-only и Wi-Fi недоступен, samples остаются в очереди.
@@ -380,12 +401,19 @@ APK не отправляет каждый poll напрямую. Сначала
 
 ## Payload tiers
 
-- **Idle-only:** slim JSON — в основном `soc`, `is_charging`, иногда cell voltage; без `diplus`, без `power_kw`.
-- **Moving/charging:** включает `power_kw`, температуры, полный `diplus` при наличии Di+.
+- **Idle-only:** slim JSON — SOC, charging/SoH и compact `diplus` status (`gear`, gun,
+  power-state, 12V) при наличии; без traction `power_kw`.
+- **Moving/charging:** включает `power_kw`, температуры, odometer/trip fields и расширенный
+  `diplus` при наличии Di+.
 - Null-поля **не сериализуются** (omit nulls).
 - GPS с accuracy > 30 m отбрасывается до enqueue (отправляется `{}`).
 
 Backend должен быть готов к batch из десятков samples, особенно при зарядке.
+
+`CommandDaemon` не использует Room queue: при car-off он best-effort отправляет один
+сокращённый Di+ sample без GPS раз в 60 s и пишет HTTP-код в daemon log. Его задача —
+сохранить current live state и command path до следующего запуска основного приложения,
+а не заменить надёжную app-очередь.
 
 ## vehicle_id — неизменяемый идентификатор сессии
 
@@ -394,14 +422,12 @@ Backend должен быть готов к batch из десятков samples,
 
 ### Что происходит при смене vehicle_id в настройках APK
 
-1. **Сломанная очередь (критично).**
-   Payload каждого sample бакуется с текущим `vehicle_id` в момент постановки в очередь.
-   Заголовок `X-Vehicle-Id` берётся из актуальных настроек в момент отправки.
-   Если пользователь меняет `vehicle_id` между enqueue и flush:
-   - Заголовок = `new_name`, тело payload = `old_name` → backend возвращает `400 Vehicle ID mismatch`.
-   - HTTP 4xx — non-retryable: все items текущего batch помечаются как failed и **удаляются из очереди**.
-   - В переходный период новые samples тоже могут попасть в смешанный batch с
-     старыми и тоже потеряться.
+1. **Очередь сохраняет старый ID безопасно.**
+   Payload каждого sample получает `vehicle_id` в момент постановки в очередь. При flush
+   `CloudTelemetrySender` группирует pending rows по ID, записанному в самом payload, и
+   отправляет каждый такой batch с совпадающим `X-Vehicle-Id`. Поэтому переименование
+   между enqueue и flush не должно само по себе вызвать `400 Vehicle ID mismatch` или
+   потерю старого batch.
 
 2. **Разорванная история телеметрии.**
    Все таблицы `bydmate_telemetry_samples`, `bydmate_telemetry_hourly`,
@@ -421,9 +447,9 @@ Backend должен быть готов к batch из десятков samples,
   латинский slug без пробелов, например `byd_seal_123`.
 - Если переименование всё же необходимо — **сначала** обновите `cars.vehicle_alias`
   в VoltFlow, **затем** меняйте имя в APK.
-- После смены в APK дождитесь, пока очередь очистится от старых samples
-  (или переустановите приложение, чтобы обнулить локальную очередь). Поступление
-  данных восстановится само при следующей отправке с новым именем.
+- Старые queued samples безопасно уйдут под старым ID, затем новые — под новым. Это
+  сохраняет доставку, но **не объединяет** уже существующую серверную историю: смена
+  `vehicle_id` всё равно создаёт новый логический поток данных.
 
 ## Backend Validation Recommendations
 
@@ -434,6 +460,7 @@ Backend должен быть готов к batch из десятков samples,
 - `device_time` парсится как ISO-8601 timestamp.
 - `telemetry`, `location` являются объектами.
 - `diplus` является объектом или `null`.
+- `mate_version` и `autoservice` принимаются как необязательные additive fields.
 
 Для batch:
 

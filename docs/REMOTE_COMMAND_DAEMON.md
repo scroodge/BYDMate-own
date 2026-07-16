@@ -38,7 +38,8 @@ DiPlus 127.0.0.1:8988 /api/getDiPars ──read──> CommandDaemon
 ### Telemetry: the daemon and the app never send at the same time
 
 The daemon's reason to exist is the window when BYD force-stops the app. While the app **is**
-alive it already streams telemetry (1 Hz driving / 8 s charging / 30 s parked), so a parallel
+alive it already streams telemetry (1 Hz driving / 10 s charging bulk / 1 s charging tail /
+30 s parked), so a parallel
 60 s daemon heartbeat would only duplicate samples — and because each source stamps its own
 `device_time`, the duplicates never dedup, which raised the risk of phantom trips on D→R→P
 parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetry:
@@ -191,8 +192,8 @@ something must re-run `start_voltflow_cmd.sh`.
 On every start (when cloud sync is on) it calls `ensureCommandDaemonRunning()`:
 
 1. connect to **on-device ADB** (127.0.0.1:5555) via `AdbOnDeviceClient` (shell uid),
-2. `pidof voltflow_cmd_daemon` — if alive, no-op,
-3. otherwise deploy the bundled launcher (`assets/start_voltflow_cmd.sh` →
+2. verify both `voltflow_cmd_daemon` **and** its watchdog shell,
+3. if either is missing, deploy the bundled launcher (`assets/start_voltflow_cmd.sh` →
    `getExternalFilesDir()/start_voltflow_cmd.sh`, shell-readable) and start it detached with
    `setsid`.
 
@@ -202,11 +203,9 @@ Requirement: **on-device wireless ADB enabled and the app's ADB key authorised o
 "Allow USB debugging?" prompt the app already uses for D+ launch / usage-stats appop). If ADB is
 not authorised, `ensureCommandDaemonRunning()` logs a warning and no-ops — fall back below.
 
-> **Important gotcha:** `ensureCommandDaemonRunning()` currently checks only the daemon PID
-> (`pidof voltflow_cmd_daemon`). If the daemon is alive but the watchdog shell that should respawn it
-> is dead or stale, the app can report "daemon already running" and skip repair. For a robust
-> supervisor, verify the watchdog as well (`start_voltflow_cmd.sh`/lock PID) or restart the hardened
-> single-instance launcher when the watchdog is missing.
+> **Supervisor guard:** `ensureCommandDaemonRunning()` checks both the daemon PID and the
+> watchdog shell. If either is missing it relaunches the hardened launcher. Keep the two
+> launcher copies in sync; a stale asset can still recreate an old watchdog after quickboot.
 
 **Fallbacks (if on-device ADB is unavailable):**
 
