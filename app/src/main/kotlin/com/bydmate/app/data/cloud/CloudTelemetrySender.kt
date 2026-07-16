@@ -25,6 +25,8 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastMoving: Boolean? = null
     @Volatile private var lastCharging: Boolean? = null
     @Volatile private var lastGear: Int? = null
+    /** Last explicit DiPars ignition state; null means that DiPars did not report one yet. */
+    @Volatile private var lastPowerOn: Boolean? = null
     @Volatile private var activeBatchStartedMs: Long = 0L
     @Volatile private var idleUnchangedCycles: Int = 0
     @Volatile private var lastIdleSoc: Int? = null
@@ -275,10 +277,20 @@ class CloudTelemetrySender @Inject constructor(
         val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
         val active = moving || charging
         val gear = snapshot.diPlusData?.gear
+        val speedKmh = snapshot.speedKmh ?: snapshot.diPlusData?.speed?.toDouble() ?: 0.0
+        val powerOn = snapshot.diPlusData?.powerState?.let { it >= 1 }
         val previousMoving = lastMoving
         val previousCharging = lastCharging
         val previousGear = lastGear
+        val previousPowerOn = lastPowerOn
         val gearChanged = previousGear != null && gear != null && previousGear != gear
+        // A deliberate D → P → power-off is different from a brief P blip in traffic.
+        // The drive latch must still keep the latter at 1 Hz, but when the next DiPars
+        // read confirms ignition-off while the car remains stationary in P, flush the
+        // just-queued final sample before BYD force-stops the app process.
+        val parkedPowerOff = previousPowerOn == true && powerOn == false &&
+            previousGear == 1 && gear == 1 &&
+            speedKmh <= CloudTelemetryCadence.MOVING_SPEED_THRESHOLD_KMH
         val stateChanged = previousMoving?.let { it != moving } == true ||
             previousCharging?.let { it != charging } == true ||
             gearChanged ||
@@ -286,6 +298,7 @@ class CloudTelemetrySender @Inject constructor(
         lastMoving = moving
         lastCharging = charging
         lastGear = gear
+        if (powerOn != null) lastPowerOn = powerOn
         // Tracks charging-bulk vs the >=98% balance tail so flushPending can pick the
         // flush cadence (bulk flushes less often — see CHARGING_BULK_FLUSH_INTERVAL_MS).
         lastChargingBelowTail =
@@ -332,7 +345,7 @@ class CloudTelemetrySender @Inject constructor(
         val activeTransition = stateChanged && (active || previousCharging == true || previousMoving == true)
         return QueueDecision(
             enqueue = enqueue,
-            flushNow = (gearChanged && !active) || (stateChanged && !activeTransition),
+            flushNow = parkedPowerOff || (gearChanged && !active) || (stateChanged && !activeTransition),
             activeBatchMode = active || previousCharging == true || previousMoving == true,
             activeSample = active,
         )

@@ -51,6 +51,20 @@ parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetr
 - A second guard skips the push while `classifyFromDiPars == DRIVING`, belt-and-suspenders
   against a reduced-payload `gear=1` heartbeat splitting a live trip.
 
+### Fast D → P → power-off handoff
+
+The cloud sender retains its 10-minute drive latch after D/R/N or movement so a brief P blip
+does not split a trip. It nevertheless recognizes a real shutdown separately: when an already
+parked `gear=P` sample is followed by an explicit DiPars `powerState` transition from on to off,
+the final sample is queued and flushed immediately. `TrackingService` serializes that enqueue
+before the flush; it must not launch them as independent coroutines, because the flush could run
+first and leave the final P/off sample in Room until the next boot.
+
+If BYD kills the process before the HTTP acknowledgement, Room retains the row and the shell daemon
+remains the fallback. Verify this path after an APK update by driving, parking, then switching off
+within a few seconds; confirm a fresh P/off `bydmate_live_snapshots` row within the live flush
+window, and then confirm daemon telemetry still arrives after the app is force-stopped.
+
 **Command polling stays always-on** regardless of app liveness — commands are idempotent and
 server-acked, so a brief double-poll is harmless and maximizes control reliability.
 

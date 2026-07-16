@@ -486,35 +486,41 @@ class TrackingService : Service(), LocationListener {
                 // duplicate samples and risk phantom trips). The daemon reads this file
                 // and skips its push when the timestamp is fresh.
                 writeAppAliveHeartbeat()
+                flushCloudTelemetryQueue()
             } catch (e: Exception) {
                 Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
             }
         }
+    }
 
+    /**
+     * Keep the enqueue-before-flush order. In particular, a confirmed P → power-off edge
+     * marks the sender for an immediate flush; launching enqueue and flush separately could
+     * let the flush run first and strand that final parked sample until the next boot.
+     */
+    private suspend fun flushCloudTelemetryQueue() {
         if (!flushInFlight.compareAndSet(false, true)) {
             pendingCloudFlush.set(true)
             return
         }
-        serviceScope.launch {
-            try {
-                do {
-                    pendingCloudFlush.set(false)
-                    if (settingsRepository.getString(
-                            com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                            com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
-                        ) != "true"
-                    ) {
-                        return@launch
-                    }
-                    cloudTelemetrySender.flushPending().onFailure { e ->
-                        Log.w(TAG, "Cloud Sync flush: ${e.message}")
-                    }
-                } while (pendingCloudFlush.compareAndSet(true, false))
-            } catch (e: Exception) {
-                Log.w(TAG, "Cloud Sync flush: ${e.message}")
-            } finally {
-                flushInFlight.set(false)
-            }
+        try {
+            do {
+                pendingCloudFlush.set(false)
+                if (settingsRepository.getString(
+                        com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                        com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
+                    ) != "true"
+                ) {
+                    return
+                }
+                cloudTelemetrySender.flushPending().onFailure { e ->
+                    Log.w(TAG, "Cloud Sync flush: ${e.message}")
+                }
+            } while (pendingCloudFlush.compareAndSet(true, false))
+        } catch (e: Exception) {
+            Log.w(TAG, "Cloud Sync flush: ${e.message}")
+        } finally {
+            flushInFlight.set(false)
         }
     }
 

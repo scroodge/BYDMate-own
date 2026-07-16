@@ -156,6 +156,24 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
+    fun `confirmed P to power off flushes final queued telemetry immediately`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 4, speedKmh = 30.0, powerState = 1))
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.send(snapshot(gear = 1, speedKmh = 0.0, powerState = 1))
+        // The drive latch remains active here, so this must not flush just because gear is P.
+        assertEquals(0, setup.client.payloads.size)
+
+        setup.now = BASE_TIME_MS + 3_000L
+        setup.sender.send(snapshot(gear = 1, speedKmh = 0.0, powerState = 0))
+
+        assertEquals(1, setup.client.payloads.size)
+        assertEquals(0, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
     fun `incomplete ack with skipped stale keeps queue`() = runTest {
         val setup = setup(
             results = ArrayDeque(
@@ -303,6 +321,7 @@ class CloudTelemetrySenderTest {
         speedKmh: Double = 0.0,
         soc: Int = 50,
         gear: Int? = null,
+        powerState: Int? = null,
     ) = VehicleTelemetrySnapshot(
         capturedAtMs = 1_700_000_000_000L,
         deviceTimeIso = "2023-11-14T22:13:20Z",
@@ -324,7 +343,7 @@ class CloudTelemetrySenderTest {
                 minCellVoltage = null,
                 exteriorTemp = null,
                 gear = gear,
-                powerState = null,
+                powerState = powerState,
                 insideTemp = null,
                 acStatus = null,
                 acTemp = null,
