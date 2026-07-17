@@ -19,6 +19,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.math.min
 
 /**
@@ -51,6 +52,17 @@ object CommandDaemon {
 
     /** How often the daemon pushes a telemetry sample to the cloud (keeps data flowing when the app is dead). */
     private const val TELEMETRY_PUSH_MS = 60_000L
+
+    /**
+     * Longest a parked `live_only` run may last before a full sample is forced. Car-off is the
+     * daemon's whole reason to exist, so without this an overnight park with flat SOC would store
+     * no parked rows at all and leave a single >6h gap — which `bydmate_phantom_drain_daily`
+     * discards, zeroing `idle_hours` for the day. Mirrors CloudTelemetrySender.LIVE_ONLY_MAX_RUN_MS.
+     */
+    private const val LIVE_ONLY_MAX_RUN_MS = 15 * 60 * 1000L
+
+    /** 12V drift below this is noise, not a state change worth a history row. */
+    private const val LIVE_ONLY_12V_EPSILON_V = 0.3
 
     /**
      * App-liveness beacon written by [com.bydmate.app.service.TrackingService.writeAppAliveHeartbeat]
@@ -93,6 +105,13 @@ object CommandDaemon {
         var latestData: DiParsData? = null
         var latestDataAt = 0L
         var lastTelemetryPushAt = 0L
+        // Baseline for the parked live_only decision, mirroring CloudTelemetrySender.decide().
+        // Only a *full* push refreshes these, so the comparison stays against the last stored row.
+        var lastFullPushAt = 0L
+        var baseSoc: Int? = null
+        var baseGun: Int? = null
+        var baseGear: Int? = null
+        var base12v: Double? = null
 
         runBlocking {
             while (true) {
@@ -123,7 +142,33 @@ object CommandDaemon {
                                     log("telemetry push skipped (app alive — VoltFlow Mate is sending)")
                                 state == IternioIntervalPolicy.TelemetryState.DRIVING ->
                                     log("telemetry push skipped (driving — VoltFlow Mate is active)")
-                                else -> pushTelemetry(ok, conf, data)
+                                else -> {
+                                    // Parked + nothing material moved => live_only: the server refreshes
+                                    // live state and skips the history/hourly/trip writes. Charging is
+                                    // deliberately excluded — its SOC curve and cell-delta tail need
+                                    // every row. Any change, or an expired run, sends a full sample and
+                                    // re-baselines.
+                                    val v12 = data.voltage12v
+                                    val b12 = base12v
+                                    val unchanged =
+                                        state == IternioIntervalPolicy.TelemetryState.PARKED &&
+                                            data.soc != null && data.soc == baseSoc &&
+                                            data.chargeGunState == baseGun &&
+                                            data.gear == baseGear &&
+                                            v12 != null && b12 != null &&
+                                            abs(v12 - b12) < LIVE_ONLY_12V_EPSILON_V
+                                    val runExpired = lastFullPushAt != 0L &&
+                                        now - lastFullPushAt >= LIVE_ONLY_MAX_RUN_MS
+                                    val liveOnly = unchanged && !runExpired
+                                    if (!liveOnly) {
+                                        baseSoc = data.soc
+                                        baseGun = data.chargeGunState
+                                        baseGear = data.gear
+                                        base12v = v12
+                                        lastFullPushAt = now
+                                    }
+                                    pushTelemetry(ok, conf, data, liveOnly)
+                                }
                             }
                         }
                         lastTelemetryPushAt = now
@@ -268,11 +313,11 @@ object CommandDaemon {
     }
 
     /** Push one telemetry sample to the cloud ingest endpoint (contract: docs/cloud-telemetry-contract-ru.md). */
-    private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData) {
+    private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData, liveOnly: Boolean = false) {
         try {
             val kwhCharged = readKwhCharged()
             val sohPercent = readSohPercent()
-            val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent).toString()
+            val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent, liveOnly).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -282,14 +327,21 @@ object CommandDaemon {
                 .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
             ok.newCall(request).execute().use {
-                log("telemetry HTTP ${it.code} (soc=${data.soc} pwr_state=${data.powerState})")
+                val mode = if (liveOnly) " live_only" else ""
+                log("telemetry HTTP ${it.code} (soc=${data.soc} pwr_state=${data.powerState}$mode)")
             }
         } catch (e: Exception) {
             log("telemetry push failed: ${e.message}")
         }
     }
 
-    private fun buildTelemetryPayload(vehicleId: String, d: DiParsData, kwhCharged: Float? = null, sohPercent: Int? = null): JSONObject {
+    private fun buildTelemetryPayload(
+        vehicleId: String,
+        d: DiParsData,
+        kwhCharged: Float? = null,
+        sohPercent: Int? = null,
+        liveOnly: Boolean = false,
+    ): JSONObject {
         val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
             d.maxCellVoltage!! - d.minCellVoltage!!
         } else {
@@ -345,6 +397,9 @@ object CommandDaemon {
             put("device_time", isoNow())
             put("source", "BYDMate")
             put("mate_version", BuildConfig.VERSION_NAME)
+            // Parked heartbeat with nothing material changed: server refreshes live state only.
+            // Omitted (not false) when unset so a normal sample keeps its exact current shape.
+            if (liveOnly) put("live_only", true)
             put("telemetry", telemetry)
             put("diplus", diplus)
             // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
