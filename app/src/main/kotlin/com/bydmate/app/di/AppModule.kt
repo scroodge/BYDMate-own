@@ -10,6 +10,7 @@ import com.bydmate.app.data.local.dao.BatterySnapshotDao
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.ChargePointDao
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.local.dao.OdometerSampleDao
 import com.bydmate.app.data.local.dao.PlaceDao
@@ -249,6 +250,37 @@ object AppModule {
         }
     }
 
+    /** Internal, not private, so Migration14to15Test validates the migration that actually ships. */
+    internal val MIGRATION_14_15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS cloud_hourly_rollup (
+                    vehicleId TEXT NOT NULL,
+                    hourStart INTEGER NOT NULL,
+                    sampleCount INTEGER NOT NULL,
+                    socMin REAL,
+                    socMax REAL,
+                    socLast REAL,
+                    speedMax REAL,
+                    powerSum REAL NOT NULL,
+                    powerSampleCount INTEGER NOT NULL,
+                    batteryTempSum REAL NOT NULL,
+                    batteryTempSampleCount INTEGER NOT NULL,
+                    cabinTempSum REAL NOT NULL,
+                    cabinTempSampleCount INTEGER NOT NULL,
+                    outsideTempSum REAL NOT NULL,
+                    outsideTempSampleCount INTEGER NOT NULL,
+                    regenKwhSum REAL NOT NULL,
+                    tractionKwhSum REAL NOT NULL,
+                    dirty INTEGER NOT NULL,
+                    updatedAt INTEGER NOT NULL,
+                    PRIMARY KEY(vehicleId, hourStart)
+                )
+            """)
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_cloud_hourly_rollup_dirty ON cloud_hourly_rollup(dirty)")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
@@ -257,7 +289,7 @@ object AppModule {
             AppDatabase::class.java,
             "bydmate.db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15)
             .build()
     }
 
@@ -273,6 +305,7 @@ object AppModule {
     @Provides fun providePlaceDao(db: AppDatabase): PlaceDao = db.placeDao()
     @Provides fun provideOdometerSampleDao(db: AppDatabase): OdometerSampleDao = db.odometerSampleDao()
     @Provides fun provideCloudSyncQueueDao(db: AppDatabase): CloudSyncQueueDao = db.cloudSyncQueueDao()
+    @Provides fun provideHourlyRollupDao(db: AppDatabase): HourlyRollupDao = db.hourlyRollupDao()
     @Provides fun provideCloudTelemetryClientApi(client: CloudTelemetryClient): CloudTelemetryClientApi = client
 
     @Provides

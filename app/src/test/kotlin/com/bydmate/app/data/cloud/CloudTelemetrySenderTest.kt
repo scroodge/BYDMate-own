@@ -3,8 +3,10 @@ package com.bydmate.app.data.cloud
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
+import com.bydmate.app.data.local.entity.HourlyRollupEntity
 import com.bydmate.app.data.local.entity.SettingEntity
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
@@ -303,12 +305,14 @@ class CloudTelemetrySenderTest {
             )
         )
         val queue = FakeCloudSyncQueueDao()
+        val hourly = FakeHourlyRollupDao()
         val client = FakeCloudTelemetryClient(results)
         var now = 0L
         val sender = CloudTelemetrySender(
             context = ApplicationProvider.getApplicationContext<Context>(),
             settingsRepository = SettingsRepository(settingsDao),
             queueDao = queue,
+            hourlyDao = hourly,
             client = client,
         ).apply {
             nowProvider = { now }
@@ -472,6 +476,32 @@ class CloudTelemetrySenderTest {
         private fun update(id: Long, transform: (CloudSyncQueueEntity) -> CloudSyncQueueEntity) {
             val index = items.indexOfFirst { it.id == id }
             if (index >= 0) items[index] = transform(items[index])
+        }
+    }
+
+    private class FakeHourlyRollupDao : HourlyRollupDao {
+        val items = mutableListOf<HourlyRollupEntity>()
+
+        override suspend fun upsert(entity: HourlyRollupEntity) {
+            val index = items.indexOfFirst { it.vehicleId == entity.vehicleId && it.hourStart == entity.hourStart }
+            if (index >= 0) items[index] = entity else items += entity
+        }
+
+        override suspend fun find(vehicleId: String, hourStart: Long): HourlyRollupEntity? =
+            items.firstOrNull { it.vehicleId == vehicleId && it.hourStart == hourStart }
+
+        override suspend fun getDirty(limit: Int): List<HourlyRollupEntity> =
+            items.filter { it.dirty }.sortedBy { it.hourStart }.take(limit)
+
+        override suspend fun markClean(vehicleId: String, hourStart: Long, sampleCount: Int) {
+            val index = items.indexOfFirst {
+                it.vehicleId == vehicleId && it.hourStart == hourStart && it.sampleCount == sampleCount
+            }
+            if (index >= 0) items[index] = items[index].copy(dirty = false)
+        }
+
+        override suspend fun pruneCleanBefore(hourStart: Long) {
+            items.removeAll { !it.dirty && it.hourStart < hourStart }
         }
     }
 

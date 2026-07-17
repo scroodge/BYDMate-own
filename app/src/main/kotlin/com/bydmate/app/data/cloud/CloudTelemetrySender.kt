@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
@@ -18,6 +19,7 @@ class CloudTelemetrySender @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsRepository: SettingsRepository,
     private val queueDao: CloudSyncQueueDao,
+    private val hourlyDao: HourlyRollupDao,
     private val client: CloudTelemetryClientApi,
 ) {
     @Volatile private var lastQueuedSampleMs: Long = 0L
@@ -45,6 +47,15 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var pendingFlushNow: Boolean = false
     @Volatile private var lastChargingBelowTail: Boolean = false
     @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
+    /**
+     * Power and device time of the last sample folded into an hourly rollup, i.e. the last one
+     * the server will have stored. The energy integration needs the previous reading to form an
+     * interval; the server gets it by querying bydmate_telemetry_samples on every sample, which
+     * is the lookup this phase removes. Held in memory only — a restart loses one interval, and
+     * that interval's gap would exceed the 180s cap and be discarded server-side anyway.
+     */
+    @Volatile private var lastRollupPowerKw: Double? = null
+    @Volatile private var lastRollupDeviceTimeMs: Long? = null
     private val cadence = CloudTelemetryCadence()
     private val gpsCorridorFilter = GpsCorridorFilter()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
@@ -87,8 +98,14 @@ class CloudTelemetrySender @Inject constructor(
                 telemetryState = telemetryState,
                 dropLocationForThinning = dropLocationForThinning,
                 liveOnly = decision.liveOnly,
+                // A live_only sample never reaches the hourly rollup server-side, so there is
+                // nothing to take over for it and no flag to set.
+                clientHourly = !decision.liveOnly,
             )
             queueDao.insert(pendingQueueEntity(payload, now))
+            if (!decision.liveOnly) {
+                accumulateHourly(config.vehicleId, payload, now)
+            }
             lastQueuedSampleMs = now
             if (decision.activeSample && activeBatchStartedMs == 0L) {
                 activeBatchStartedMs = now
@@ -171,6 +188,7 @@ class CloudTelemetrySender @Inject constructor(
             }
             saveStatus(ok = true, message = message, ack = ack)
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
+            hourlyDao.pruneCleanBefore(HourlyRollupAccumulator.hourStartOf(now - HOURLY_RETENTION_MS))
             Result.success(Unit)
         } else {
             if (activeBatchMode) activeBatchStartedMs = now
@@ -252,10 +270,20 @@ class CloudTelemetrySender @Inject constructor(
                 .entries.first()
                 .let { it.key to it.value }
 
-            val payload = if (items.size == 1) {
+            // Cumulative aggregates for every hour still owed to the server, for this batch's
+            // vehicle. Re-sent in full each flush: the server replaces its row only when the
+            // incoming sample_count is at least what it holds, so a retry is a no-op rather
+            // than a double-count, and a block lost to a failed flush heals on the next one.
+            val hourlyBlocks = hourlyDao.getDirty(MAX_HOURLY_BLOCKS)
+                .filter { it.vehicleId == batchVehicleId }
+
+            val payload = if (items.size == 1 && hourlyBlocks.isEmpty()) {
                 items.first().payloadJson
             } else {
-                CloudTelemetryPayload.buildBatch(items.map { it.payloadJson })
+                CloudTelemetryPayload.buildBatch(
+                    items.map { it.payloadJson },
+                    hourlyBlocks.map { HourlyRollupAccumulator.toJson(it) },
+                )
             }
 
             when (val result = client.send(config.url, config.apiKey, batchVehicleId, payload)) {
@@ -264,6 +292,9 @@ class CloudTelemetrySender @Inject constructor(
                     lastAck = ack
                     if (ack.isFullyAcknowledged()) {
                         items.forEach { queueDao.markFinished(it.id, null, now) }
+                        // Guarded by sampleCount: if a sample folded into the hour while this
+                        // flush was in flight, the row stays dirty and goes again next time.
+                        hourlyBlocks.forEach { hourlyDao.markClean(it.vehicleId, it.hourStart, it.sampleCount) }
                         if (!drainAll) return FlushQueueResult(success = true, lastAck = ack)
                     } else {
                         val reason = ack.parseError ?: ack.error ?: "incomplete ack"
@@ -405,6 +436,27 @@ class CloudTelemetrySender @Inject constructor(
     }
 
     /**
+     * Fold one stored sample into its hour's running aggregate. Reads the built payload rather
+     * than the snapshot so the fields counted are exactly the ones the server would have seen.
+     */
+    private suspend fun accumulateHourly(vehicleId: String, payloadJson: String, now: Long) {
+        val deviceTimeMs = HourlyRollupAccumulator.deviceTimeMsOf(payloadJson) ?: return
+        val hourStart = HourlyRollupAccumulator.hourStartOf(deviceTimeMs)
+        val updated = HourlyRollupAccumulator.fold(
+            existing = hourlyDao.find(vehicleId, hourStart),
+            vehicleId = vehicleId,
+            payloadJson = payloadJson,
+            deviceTimeMs = deviceTimeMs,
+            previousPowerKw = lastRollupPowerKw,
+            previousDeviceTimeMs = lastRollupDeviceTimeMs,
+            now = now,
+        )
+        hourlyDao.upsert(updated)
+        lastRollupPowerKw = HourlyRollupAccumulator.powerKwOf(payloadJson)
+        lastRollupDeviceTimeMs = deviceTimeMs
+    }
+
+    /**
      * 12V sags slowly while parked and D+ quantizes it, so compare against a baseline with a
      * tolerance rather than exactly — otherwise ordinary noise would defeat live_only. A null
      * on either side counts as changed so the sample falls back to a full one.
@@ -485,6 +537,13 @@ class CloudTelemetrySender @Inject constructor(
 
     private companion object {
         const val MAX_QUEUE_ROWS = 1000
+        /**
+         * Hour blocks per flush. Only the current hour is normally dirty; more than a handful
+         * means a long offline stretch, and those settle across successive flushes.
+         */
+        const val MAX_HOURLY_BLOCKS = 12
+        /** How long a settled hour is kept for debugging before it is pruned. */
+        const val HOURLY_RETENTION_MS = 24 * 60 * 60 * 1000L
         const val MAX_BATCH_SIZE = 120
         const val ACTIVE_BATCH_SIZE = 15
         const val BACKLOG_DRAIN_THRESHOLD = ACTIVE_BATCH_SIZE

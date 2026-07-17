@@ -15,6 +15,7 @@ object CloudTelemetryPayload {
         telemetryState: IternioIntervalPolicy.TelemetryState? = null,
         dropLocationForThinning: Boolean = false,
         liveOnly: Boolean = false,
+        clientHourly: Boolean = false,
     ): String {
         val telemetryState = telemetryState ?: classifyPayloadState(snapshot)
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
@@ -92,6 +93,11 @@ object CloudTelemetryPayload {
             // (rather than sent as false) so normal samples keep their exact
             // current shape on the wire.
             if (liveOnly) put("live_only", true)
+            // The hourly rollup for this sample is accumulated on-device and shipped once per
+            // flush in the batch envelope's "hourly" block, so the server must not also fold
+            // the sample in per-sample or the hour would be counted twice. Omitted (never
+            // false) so a sample's shape is unchanged when the client isn't doing rollups.
+            if (clientHourly) put("client_hourly", true)
             put("telemetry", telemetry)
             when {
                 snapshot.diPlusData != null && idleOnly ->
@@ -125,14 +131,22 @@ object CloudTelemetryPayload {
         return IternioIntervalPolicy.classify(charging = charging, parked = !moving && !charging)
     }
 
-    fun buildBatch(payloads: List<String>): String {
+    /**
+     * The flush envelope. [hourly] carries the cumulative per-hour aggregates for the samples
+     * marked `client_hourly`; it can only be attached here, at flush time, because a block spans
+     * the whole hour while a payload is built per sample at enqueue time.
+     */
+    fun buildBatch(payloads: List<String>, hourly: List<JSONObject> = emptyList()): String {
         val samples = JSONArray()
         payloads.forEach { payload ->
             samples.put(JSONObject(payload))
         }
-        return JSONObject()
-            .put("samples", samples)
-            .toString()
+        return JSONObject().apply {
+            put("samples", samples)
+            if (hourly.isNotEmpty()) {
+                put("hourly", JSONArray().also { array -> hourly.forEach { array.put(it) } })
+            }
+        }.toString()
     }
 
     /**

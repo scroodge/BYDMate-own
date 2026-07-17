@@ -6,6 +6,7 @@ import com.bydmate.app.data.local.dao.BatterySnapshotDao
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.ChargePointDao
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.local.dao.OdometerSampleDao
 import com.bydmate.app.data.local.dao.PlaceDao
@@ -18,6 +19,7 @@ import com.bydmate.app.data.local.entity.BatterySnapshotEntity
 import com.bydmate.app.data.local.entity.ChargeEntity
 import com.bydmate.app.data.local.entity.ChargePointEntity
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
+import com.bydmate.app.data.local.entity.HourlyRollupEntity
 import com.bydmate.app.data.local.entity.IdleDrainEntity
 import com.bydmate.app.data.local.entity.OdometerSampleEntity
 import com.bydmate.app.data.local.entity.PlaceEntity
@@ -40,9 +42,10 @@ import com.bydmate.app.data.local.entity.TripPointEntity
         RuleLogEntity::class,
         PlaceEntity::class,
         OdometerSampleEntity::class,
-        CloudSyncQueueEntity::class
+        CloudSyncQueueEntity::class,
+        HourlyRollupEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -58,4 +61,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun placeDao(): PlaceDao
     abstract fun odometerSampleDao(): OdometerSampleDao
     abstract fun cloudSyncQueueDao(): CloudSyncQueueDao
+    abstract fun hourlyRollupDao(): HourlyRollupDao
 }
