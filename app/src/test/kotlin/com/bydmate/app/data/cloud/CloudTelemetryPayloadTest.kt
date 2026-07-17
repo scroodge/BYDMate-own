@@ -160,6 +160,77 @@ class CloudTelemetryPayloadTest {
         assertEquals(4, diPlus.getInt("gear"))
     }
 
+    @Test
+    fun `live_only flag is omitted by default and set when requested`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val normal = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        assertEquals(false, normal.has("live_only"))
+
+        val liveOnly = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
+        assertEquals(true, liveOnly.getBoolean("live_only"))
+    }
+
+    @Test
+    fun `live_only payload still carries the status diplus block the live view reads`() {
+        // The server's live-snapshot persistence check asserts diplus survives, so a
+        // live_only heartbeat must keep sending it even though no history row is stored.
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val diPlus = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
+            .getJSONObject("diplus")
+
+        assertEquals(1, diPlus.getInt("gear"))
+        assertEquals(1, diPlus.getInt("charge_gun_state"))
+        assertEquals(12.6, diPlus.getDouble("voltage_12v"), 0.0001)
+    }
+
+    @Test
+    fun `cell delta is rounded rather than carrying raw double noise`() {
+        // 3.31 - 3.30 in IEEE doubles is 0.010000000000000231; unrounded that
+        // serializes to ~20 characters on every sample.
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = 3.31, minCellVoltage = 3.30, speed = 12, gear = 4),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val raw = CloudTelemetryPayload.build("way", snapshot)
+
+        assertEquals(false, raw.contains("0.010000000000000"))
+        assertEquals(
+            0.01,
+            JSONObject(raw).getJSONObject("telemetry").getDouble("cell_delta_v"),
+            0.00001,
+        )
+    }
+
     private fun diPlusData(
         maxCellVoltage: Double?,
         minCellVoltage: Double?,

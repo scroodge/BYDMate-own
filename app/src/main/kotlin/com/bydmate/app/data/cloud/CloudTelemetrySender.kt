@@ -32,9 +32,21 @@ class CloudTelemetrySender @Inject constructor(
     @Volatile private var lastIdleSoc: Int? = null
     @Volatile private var lastIdleCharging: Boolean? = null
     @Volatile private var lastIdlePowerKw: Double? = null
+    @Volatile private var lastIdleGunState: Int? = null
+    @Volatile private var lastIdle12v: Double? = null
+    /**
+     * Gear as of the last *full* parked sample. Distinct from [lastGear], which decide()
+     * advances to the current gear on every call for transition detection and so can never
+     * serve as a stable baseline to compare against.
+     */
+    @Volatile private var lastGearBaseline: Int? = null
+    /** Device time of the last *full* parked sample; bounds how long a live_only run may last. */
+    @Volatile private var lastFullParkedSampleMs: Long = 0L
     @Volatile private var pendingFlushNow: Boolean = false
     @Volatile private var lastChargingBelowTail: Boolean = false
+    @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
     private val cadence = CloudTelemetryCadence()
+    private val gpsCorridorFilter = GpsCorridorFilter()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
 
     /** Fast path: queue a sample without blocking on HTTP flush. */
@@ -52,16 +64,29 @@ class CloudTelemetrySender @Inject constructor(
 
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
         val telemetryState = cadence.effectiveState(snapshot, now)
+        if (telemetryState != lastTelemetryState) {
+            // Fresh drive (or leaving one): don't corridor-thin across the boundary —
+            // the first point of a new leg must always be kept as the new anchor.
+            gpsCorridorFilter.reset()
+        }
+        lastTelemetryState = telemetryState
         val decision = decide(snapshot, now, telemetryState)
         if (decision.flushNow) {
             pendingFlushNow = true
         }
         if (decision.enqueue) {
+            val loc = snapshot.location
+            val dropLocationForThinning = !omitGps &&
+                telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING &&
+                loc != null &&
+                !gpsCorridorFilter.shouldKeep(loc.lat, loc.lon, now)
             val payload = CloudTelemetryPayload.build(
                 config.vehicleId,
                 snapshot,
                 omitGps = omitGps,
                 telemetryState = telemetryState,
+                dropLocationForThinning = dropLocationForThinning,
+                liveOnly = decision.liveOnly,
             )
             queueDao.insert(pendingQueueEntity(payload, now))
             lastQueuedSampleMs = now
@@ -317,14 +342,32 @@ class CloudTelemetrySender @Inject constructor(
 
         var enqueue = stateChanged || lastQueuedSampleMs == 0L || now - lastQueuedSampleMs >= minSampleIntervalMs
 
+        val gunState = snapshot.diPlusData?.chargeGunState
+        val volts12 = snapshot.diPlusData?.voltage12v ?: snapshot.auxVoltageV
+        // Parked + nothing material moved => refresh live state only; the server
+        // skips the history/hourly/trip writes for these. Any material change
+        // (SOC, gun, gear, 12V) falls through to a full sample, so history still
+        // gets a row at every real transition.
+        var liveOnly = false
+
         if (!active && enqueue && !stateChanged) {
             val soc = snapshot.soc?.toInt()
             val power = snapshot.powerKw ?: 0.0
             val unchanged = soc != null &&
                 soc == lastIdleSoc &&
                 charging == (lastIdleCharging ?: false) &&
-                abs(power - (lastIdlePowerKw ?: 0.0)) < 0.05
-            if (unchanged) {
+                abs(power - (lastIdlePowerKw ?: 0.0)) < 0.05 &&
+                gunState == lastIdleGunState &&
+                gear == lastGearBaseline &&
+                volts12Unchanged(volts12)
+            // bydmate_phantom_drain_daily sums the gaps between consecutive parked
+            // samples but discards any gap >= 6h. An unbounded live_only run over a
+            // flat-SOC overnight park would collapse to one such gap and zero out
+            // idle_hours, so force a full sample periodically to keep the gaps small.
+            val runExpired = lastFullParkedSampleMs != 0L &&
+                now - lastFullParkedSampleMs >= LIVE_ONLY_MAX_RUN_MS
+            if (unchanged && !runExpired) {
+                liveOnly = true
                 idleUnchangedCycles += 1
                 if (idleUnchangedCycles <= IDLE_UNCHANGED_SKIP_CYCLES) {
                     enqueue = false
@@ -334,12 +377,21 @@ class CloudTelemetrySender @Inject constructor(
                 lastIdleSoc = soc
                 lastIdleCharging = charging
                 lastIdlePowerKw = power
+                lastIdleGunState = gunState
+                lastGearBaseline = gear
+                lastIdle12v = volts12
+                lastFullParkedSampleMs = now
             }
         } else if (active || stateChanged) {
             idleUnchangedCycles = 0
             lastIdleSoc = snapshot.soc?.toInt()
             lastIdleCharging = charging
             lastIdlePowerKw = snapshot.powerKw ?: 0.0
+            lastIdleGunState = gunState
+            lastGearBaseline = gear
+            lastIdle12v = volts12
+            // Leaving parked (or a state change) restarts the live_only run budget.
+            lastFullParkedSampleMs = if (active) 0L else now
         }
 
         val activeTransition = stateChanged && (active || previousCharging == true || previousMoving == true)
@@ -348,7 +400,19 @@ class CloudTelemetrySender @Inject constructor(
             flushNow = parkedPowerOff || (gearChanged && !active) || (stateChanged && !activeTransition),
             activeBatchMode = active || previousCharging == true || previousMoving == true,
             activeSample = active,
+            liveOnly = liveOnly,
         )
+    }
+
+    /**
+     * 12V sags slowly while parked and D+ quantizes it, so compare against a baseline with a
+     * tolerance rather than exactly — otherwise ordinary noise would defeat live_only. A null
+     * on either side counts as changed so the sample falls back to a full one.
+     */
+    private fun volts12Unchanged(volts12: Double?): Boolean {
+        val baseline = lastIdle12v ?: return false
+        if (volts12 == null) return false
+        return abs(volts12 - baseline) < LIVE_ONLY_12V_EPSILON_V
     }
 
     private suspend fun readConfig(): Result<Config> {
@@ -410,6 +474,7 @@ class CloudTelemetrySender @Inject constructor(
         val flushNow: Boolean,
         val activeBatchMode: Boolean,
         val activeSample: Boolean,
+        val liveOnly: Boolean = false,
     )
 
     private data class FlushQueueResult(
@@ -438,7 +503,20 @@ class CloudTelemetrySender @Inject constructor(
         const val CHARGING_BULK_FLUSH_INTERVAL_MS = 60_000L
         /** Parked online heartbeat for VoltFlow live status (aligned with Iternio PARKED cadence). */
         const val PARKED_CLOUD_HEARTBEAT_MS = 30_000L
-        /** Disabled while parked heartbeat is 30s — unchanged SOC should still refresh VoltFlow status. */
+        /**
+         * Disabled: an unchanged parked heartbeat must still reach the server to refresh
+         * VoltFlow live status. It now goes as a live_only sample, which refreshes the live
+         * snapshot without the history/hourly/trip writes — so there is no reason to drop it.
+         */
         const val IDLE_UNCHANGED_SKIP_CYCLES = 0
+        /**
+         * Longest a live_only run may last before a full parked sample is forced. Keeps the gap
+         * between consecutive stored parked samples well under the 6h window
+         * bydmate_phantom_drain_daily uses to accumulate idle time. At the 30s parked heartbeat
+         * this still stores 4 rows/hour instead of 120.
+         */
+        const val LIVE_ONLY_MAX_RUN_MS = 15 * 60 * 1000L
+        /** 12V drift below this is noise, not a state change worth a history row. */
+        const val LIVE_ONLY_12V_EPSILON_V = 0.3
     }
 }

@@ -13,6 +13,8 @@ object CloudTelemetryPayload {
         snapshot: VehicleTelemetrySnapshot,
         omitGps: Boolean = false,
         telemetryState: IternioIntervalPolicy.TelemetryState? = null,
+        dropLocationForThinning: Boolean = false,
+        liveOnly: Boolean = false,
     ): String {
         val telemetryState = telemetryState ?: classifyPayloadState(snapshot)
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
@@ -31,7 +33,7 @@ object CloudTelemetryPayload {
             if (charging) {
                 putIfPresent("charge_power_kw", snapshot.chargePowerKw)
                 putIfPresent("charge_type", snapshot.chargeType)
-                putIfPresent("kwh_charged", snapshot.kwhCharged)
+                putRounded("kwh_charged", snapshot.kwhCharged, 3)
             }
             if (!idleOnly) {
                 putIfPresent("battery_temp_c", snapshot.batteryTempC)
@@ -41,24 +43,25 @@ object CloudTelemetryPayload {
                 putIfPresent("aux_voltage_v", snapshot.auxVoltageV)
             }
             if (!idleOnly || snapshot.cellVoltageMinV != null || snapshot.cellVoltageMaxV != null) {
-                putIfPresent("cell_voltage_min_v", snapshot.cellVoltageMinV)
-                putIfPresent("cell_voltage_max_v", snapshot.cellVoltageMaxV)
-                putIfPresent("cell_delta_v", snapshot.cellDeltaV)
+                putRounded("cell_voltage_min_v", snapshot.cellVoltageMinV, CELL_VOLTAGE_DECIMALS)
+                putRounded("cell_voltage_max_v", snapshot.cellVoltageMaxV, CELL_VOLTAGE_DECIMALS)
+                putRounded("cell_delta_v", snapshot.cellDeltaV, CELL_VOLTAGE_DECIMALS)
             }
             // SoH changes slowly — include cached BMS value even when parked.
             putIfPresent("soh_percent", snapshot.sohPercent)
             if (!idleOnly) {
                 putIfPresent("odometer_km", snapshot.odometerKm)
-                putIfPresent("range_est_km", snapshot.rangeEstKm)
-                putIfPresent("current_trip_distance_km", snapshot.currentTripDistanceKm)
-                putIfPresent(
+                putRounded("range_est_km", snapshot.rangeEstKm, 1)
+                putRounded("current_trip_distance_km", snapshot.currentTripDistanceKm, 3)
+                putRounded(
                     "current_trip_consumption_kwh_100km",
                     snapshot.currentTripConsumptionKwh100km,
+                    2,
                 )
             }
         }
 
-        val location = if (omitGps) {
+        val location = if (omitGps || dropLocationForThinning) {
             JSONObject()
         } else {
             val loc = snapshot.location
@@ -84,6 +87,11 @@ object CloudTelemetryPayload {
             put("device_time", snapshot.deviceTimeIso)
             put("source", "BYDMate")
             put("mate_version", BuildConfig.VERSION_NAME)
+            // Parked heartbeat with nothing material changed: the server refreshes
+            // live state only and skips the history/hourly/trip writes. Omitted
+            // (rather than sent as false) so normal samples keep their exact
+            // current shape on the wire.
+            if (liveOnly) put("live_only", true)
             put("telemetry", telemetry)
             when {
                 snapshot.diPlusData != null && idleOnly ->
@@ -144,6 +152,19 @@ object CloudTelemetryPayload {
         put(name, value)
     }
 
+    /**
+     * Round before serializing so raw-double artifacts (e.g. a subtraction like
+     * maxCellVoltage - minCellVoltage producing "0.019999999999999") don't bloat the
+     * JSON payload and the cloud's telemetry jsonb column. Mirrors the decimal places
+     * the cloud sanitizer (telemetry-sanitizer.ts) already applies server-side, so
+     * rounding here is a no-op for the server and only saves bytes on the wire.
+     */
+    private fun JSONObject.putRounded(name: String, value: Double?, decimals: Int) {
+        if (value == null || !value.isFinite()) return
+        val factor = Math.pow(10.0, decimals.toDouble())
+        put(name, Math.round(value * factor) / factor)
+    }
+
     private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
         putIfPresent("soc", soc)
         putIfPresent("gear", gear)
@@ -171,13 +192,17 @@ object CloudTelemetryPayload {
         putIfPresent("battery_capacity_kwh", batteryCapacityKwh)
         putIfPresent("total_elec_consumption_kwh", totalElecConsumption)
         putIfPresent("voltage_12v", voltage12v)
-        putIfPresent("max_cell_voltage_v", maxCellVoltage)
-        putIfPresent("min_cell_voltage_v", minCellVoltage)
-        putIfPresent("cell_delta_v", if (maxCellVoltage != null && minCellVoltage != null) {
-            maxCellVoltage - minCellVoltage
-        } else {
-            null
-        })
+        putRounded("max_cell_voltage_v", maxCellVoltage, CELL_VOLTAGE_DECIMALS)
+        putRounded("min_cell_voltage_v", minCellVoltage, CELL_VOLTAGE_DECIMALS)
+        putRounded(
+            "cell_delta_v",
+            if (maxCellVoltage != null && minCellVoltage != null) {
+                maxCellVoltage - minCellVoltage
+            } else {
+                null
+            },
+            CELL_VOLTAGE_DECIMALS,
+        )
         putIfPresent("sunshade_percent", sunshade)
         putIfPresent("sentry_state", sentryState)
         putIfPresent("remote_lock_state", remoteLockState)
@@ -195,4 +220,5 @@ object CloudTelemetryPayload {
     private const val MOVING_SPEED_THRESHOLD_KMH = 0.5
     private const val CHARGING_POWER_THRESHOLD_KW = 0.1
     private const val MAX_GPS_ACCURACY_M = 30.0
+    private const val CELL_VOLTAGE_DECIMALS = 4
 }
