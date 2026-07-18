@@ -4,21 +4,13 @@ Actionable, prioritized task list. Milestone-level view lives in
 [`ROADMAP.md`](ROADMAP.md); shipped detail in [`CHANGELOG.md`](../CHANGELOG.md);
 engineering notes in [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-07-15 · база: `main` @ `0.4.7` (`versionCode 332`).
+- **Обновлено:** 2026-07-17 · база: `main` @ `0.4.8` (`versionCode 333`).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `done`.
 - Оценка: S (<½ дня) · M (1–2 дня) · L (>2 дня / кросс-репо).
 
 > Нет формального внешнего бэклога — пункты выведены из кода, git и заметок.
 > Владелец расставляет приоритеты; спорные помечены **[verify]**.
-
----
-
-## P0 — блокеры / готово к отгрузке
-
-| ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
-|----|--------|------|-----|--------|---------------------|
-| B-01 | Выпустить `0.4.8` со всем из `[Unreleased]` | release | S | `todo` | Тег + APK в GitHub Releases; CHANGELOG-секция переименована из `[Unreleased]` в `[0.4.8]`; post-install телеметрия проверена против prod (skill `release-apk`). |
 
 ---
 
@@ -34,7 +26,7 @@ engineering notes in [`project-notes.md`](project-notes.md).
 
 | ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
 |----|--------|------|-----|--------|---------------------|
-| B-05 | Гард синхронности `start_voltflow_cmd.sh` | tooling / ci | S | `done` | ✅ Тест `LauncherAssetSyncTest` падает, если `tools/…` ≠ `app/src/main/assets/…`. Зелёный при текущих (идентичных) файлах; проверено `./gradlew :app:testDebugUnitTest`. Войдёт в `0.4.8`. |
+| B-05 | Гард синхронности `start_voltflow_cmd.sh` | tooling / ci | S | `done` | ✅ Тест `LauncherAssetSyncTest` падает, если `tools/…` ≠ `app/src/main/assets/…`. Зелёный при текущих (идентичных) файлах; проверено `./gradlew :app:testDebugUnitTest`. Выпущен в `0.4.8`. |
 
 > **Принцип (2026-07-16):** APK — **шлюз для облака**. Речь о *продуктовой поверхности,
 > не о вычислениях*:
@@ -54,11 +46,13 @@ engineering notes in [`project-notes.md`](project-notes.md).
 
 ## Done (недавно закрыто)
 
+- ✅ **B-01** Выпуск `0.4.8` — опубликован тег `v0.4.8` (`versionCode 333`) 2026-07-16;
+  раздел релиза зафиксирован в CHANGELOG.
 - ✅ **B-02** Источник обновлений: решено оставить GitHub Releases — in-app обновление
   (`UpdateChecker` → `.../releases/latest`, `UpdateDialog`, авто-download) уже работает;
   `mate_app_releases` — только для VoltFlow-web. Кода менять не нужно.
 - ✅ **B-05** Гард `LauncherAssetSyncTest` — тест падает при рассинхроне двух копий
-  `start_voltflow_cmd.sh`. Войдёт в `0.4.8`.
+  `start_voltflow_cmd.sh`. Выпущен в `0.4.8`.
 - ✅ **B-00** Потеря батча при смене `cloud_sync_vehicle_id` — `7b37366`, с регресс-тестом.
 - ✅ Чистка мёртвого кода (~280 строк) — `7b37366`.
 - ✅ Переезд спаренных авто на `voltflow.life` — `e2cd59b`.
