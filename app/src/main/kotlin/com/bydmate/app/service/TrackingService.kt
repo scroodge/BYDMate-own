@@ -284,6 +284,13 @@ class TrackingService : Service(), LocationListener {
             Log.d(TAG, "Initial cachedLastTripAvg on service start: $cachedLastTripAvg")
         }
 
+        // Cloud trip-rollup next-boot finalization marker: if the process died mid-drive and the
+        // open trip hasn't seen a sample in a while, close it using its own last known device
+        // time. A restart within the window instead resumes the same trip. No-op otherwise.
+        serviceScope.launch {
+            cloudTelemetrySender.finalizeStaleOpenTrip()
+        }
+
         // Start the network monitor BEFORE polling so the first evaluate() tick
         // already has access to the latest VALIDATED edge state.
         networkAvailableMonitor.start()

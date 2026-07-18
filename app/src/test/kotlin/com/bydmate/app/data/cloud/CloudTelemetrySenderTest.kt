@@ -5,9 +5,11 @@ import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.SettingsDao
+import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
 import com.bydmate.app.data.local.entity.HourlyRollupEntity
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.data.local.entity.TripRollupEntity
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.SettingsRepository
@@ -282,6 +284,68 @@ class CloudTelemetrySenderTest {
         }
     }
 
+    @Test
+    fun `driving samples open and extend a trip, gear P closes it without joining`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.enqueue(snapshot(gear = 4, speedKmh = 40.0))
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.enqueue(snapshot(gear = 4, speedKmh = 45.0))
+
+        assertEquals(1, setup.trips.items.size)
+        val open = setup.trips.items.single()
+        assertEquals(2, open.sampleCount)
+        assertEquals(null, open.endedAt)
+        assertTrue(open.dirty)
+
+        setup.now = BASE_TIME_MS + 3_000L
+        setup.sender.enqueue(snapshot(gear = 1, speedKmh = 0.0))
+
+        assertEquals(1, setup.trips.items.size)
+        val closed = setup.trips.items.single()
+        // The gear->P sample that triggered the close did not itself join the trip.
+        assertEquals(2, closed.sampleCount)
+        assertEquals(open.lastDeviceTime, closed.endedAt)
+        assertTrue(closed.dirty)
+    }
+
+    @Test
+    fun `a resumed drive after gear P opens a new trip, not the closed one`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.enqueue(snapshot(gear = 4, speedKmh = 40.0))
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.enqueue(snapshot(gear = 1, speedKmh = 0.0))
+        val firstTripId = setup.trips.items.single().tripId
+
+        setup.now = BASE_TIME_MS + 3_000L
+        setup.sender.enqueue(snapshot(gear = 4, speedKmh = 30.0))
+
+        assertEquals(2, setup.trips.items.size)
+        val second = setup.trips.items.first { it.tripId != firstTripId }
+        assertEquals(null, second.endedAt)
+        assertEquals(1, second.sampleCount)
+    }
+
+    @Test
+    fun `flush attaches the dirty trip block alongside samples once it flushes`() = runTest {
+        val setup = setup()
+
+        for (second in 1..15) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(gear = 4, speedKmh = 40.0))
+        }
+
+        assertEquals(1, setup.client.payloads.size)
+        val batch = JSONObject(setup.client.payloads.single())
+        val trips = batch.getJSONArray("trips")
+        assertEquals(1, trips.length())
+        assertEquals(15, trips.getJSONObject(0).getInt("sample_count"))
+        assertTrue(setup.trips.items.single().dirty.not())
+    }
+
     /** A queue row as it looks after being enqueued under [vehicleId]. */
     private fun queueRow(vehicleId: String, createdAt: Long) = CloudSyncQueueEntity(
         createdAt = createdAt,
@@ -306,6 +370,7 @@ class CloudTelemetrySenderTest {
         )
         val queue = FakeCloudSyncQueueDao()
         val hourly = FakeHourlyRollupDao()
+        val trips = FakeTripRollupDao()
         val client = FakeCloudTelemetryClient(results)
         var now = 0L
         val sender = CloudTelemetrySender(
@@ -313,11 +378,12 @@ class CloudTelemetrySenderTest {
             settingsRepository = SettingsRepository(settingsDao),
             queueDao = queue,
             hourlyDao = hourly,
+            tripDao = trips,
             client = client,
         ).apply {
             nowProvider = { now }
         }
-        return TestSetup(sender, queue, client, getNow = { now }, setNow = { now = it })
+        return TestSetup(sender, queue, trips, client, getNow = { now }, setNow = { now = it })
     }
 
     private fun snapshot(
@@ -414,6 +480,7 @@ class CloudTelemetrySenderTest {
     private data class TestSetup(
         val sender: CloudTelemetrySender,
         val queue: FakeCloudSyncQueueDao,
+        val trips: FakeTripRollupDao,
         val client: FakeCloudTelemetryClient,
         val getNow: () -> Long,
         val setNow: (Long) -> Unit,
@@ -502,6 +569,33 @@ class CloudTelemetrySenderTest {
 
         override suspend fun pruneCleanBefore(hourStart: Long) {
             items.removeAll { !it.dirty && it.hourStart < hourStart }
+        }
+    }
+
+    private class FakeTripRollupDao : TripRollupDao {
+        val items = mutableListOf<TripRollupEntity>()
+
+        override suspend fun upsert(entity: TripRollupEntity) {
+            val index = items.indexOfFirst { it.tripId == entity.tripId }
+            if (index >= 0) items[index] = entity else items += entity
+        }
+
+        override suspend fun find(tripId: String): TripRollupEntity? =
+            items.firstOrNull { it.tripId == tripId }
+
+        override suspend fun findOpen(vehicleId: String): TripRollupEntity? =
+            items.firstOrNull { it.vehicleId == vehicleId && it.endedAt == null }
+
+        override suspend fun getDirty(limit: Int): List<TripRollupEntity> =
+            items.filter { it.dirty }.sortedBy { it.startedAt }.take(limit)
+
+        override suspend fun markClean(tripId: String, sampleCount: Int) {
+            val index = items.indexOfFirst { it.tripId == tripId && it.sampleCount == sampleCount }
+            if (index >= 0) items[index] = items[index].copy(dirty = false)
+        }
+
+        override suspend fun pruneCleanBefore(updatedAt: Long) {
+            items.removeAll { !it.dirty && it.endedAt != null && it.updatedAt < updatedAt }
         }
     }
 

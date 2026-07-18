@@ -16,6 +16,8 @@ object CloudTelemetryPayload {
         dropLocationForThinning: Boolean = false,
         liveOnly: Boolean = false,
         clientHourly: Boolean = false,
+        tripId: String? = null,
+        clientTrip: Boolean = false,
     ): String {
         val telemetryState = telemetryState ?: classifyPayloadState(snapshot)
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
@@ -98,6 +100,14 @@ object CloudTelemetryPayload {
             // the sample in per-sample or the hour would be counted twice. Omitted (never
             // false) so a sample's shape is unchanged when the client isn't doing rollups.
             if (clientHourly) put("client_hourly", true)
+            // The trip rollup for this sample is accumulated on-device and shipped once per flush
+            // in the batch envelope's "trips" block, so the server must not also run its own trip
+            // open/extend logic for it. Omitted (never false) so a sample's shape is unchanged
+            // when the client isn't tracking a trip (parked/charging/idle samples).
+            if (clientTrip && tripId != null) {
+                put("trip_id", tripId)
+                put("client_trip", true)
+            }
             put("telemetry", telemetry)
             when {
                 snapshot.diPlusData != null && idleOnly ->
@@ -133,10 +143,15 @@ object CloudTelemetryPayload {
 
     /**
      * The flush envelope. [hourly] carries the cumulative per-hour aggregates for the samples
-     * marked `client_hourly`; it can only be attached here, at flush time, because a block spans
-     * the whole hour while a payload is built per sample at enqueue time.
+     * marked `client_hourly`; [trips] carries the cumulative trip aggregates for samples marked
+     * `client_trip`. Both can only be attached here, at flush time, because a block spans multiple
+     * samples while a payload is built per sample at enqueue time.
      */
-    fun buildBatch(payloads: List<String>, hourly: List<JSONObject> = emptyList()): String {
+    fun buildBatch(
+        payloads: List<String>,
+        hourly: List<JSONObject> = emptyList(),
+        trips: List<JSONObject> = emptyList(),
+    ): String {
         val samples = JSONArray()
         payloads.forEach { payload ->
             samples.put(JSONObject(payload))
@@ -145,6 +160,9 @@ object CloudTelemetryPayload {
             put("samples", samples)
             if (hourly.isNotEmpty()) {
                 put("hourly", JSONArray().also { array -> hourly.forEach { array.put(it) } })
+            }
+            if (trips.isNotEmpty()) {
+                put("trips", JSONArray().also { array -> trips.forEach { array.put(it) } })
             }
         }.toString()
     }

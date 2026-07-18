@@ -4,10 +4,22 @@ Goal: cut cloud DB write work by doing arithmetic on-device and shipping pre-agg
 instead of having the ingest RPC recompute it per sample. The APK stays a **gateway** — no
 analytics or UI move; only arithmetic.
 
-Status as of **2026-07-17**: phases 0–2 shipped and verified in prod. Phase 3 is half-built — the
-APK side is written and unit-tested but **not yet installed on the car**, and the cloud side is not
-started. Nothing is deployed, and the APK half is inert until the cloud half lands (see Deploy
-notes: an unknown `client_hourly` key and an extra `hourly` envelope member are both ignored today).
+Status as of **2026-07-18**: phases 0–3 shipped. Phase 3's cloud side (`bydmate_apply_client_hourly`,
+the `client_hourly` skip guard in `bydmate_ingest_telemetry`, `ingest-payload.ts`/`route.ts` wiring)
+is now applied to prod — verified via a rolled-back dry-run transaction (cumulative replace, stale
+retry guard, skip-vs-normal sample paths all matched spec) before the real apply, then confirmed
+live ingest was unaffected across the fleet afterward. The APK side has been on the car since
+2026-07-17 16:32 (daemon auto-restarted on the new build). **Not yet independently verified**: an
+actual driving hour producing a `client_hourly`-tagged block that lands via the new RPC — the app's
+`TrackingService` (the only writer of hourly blocks; the daemon deliberately stays on the per-sample
+path) hasn't run since the cloud side went live, because the car has been parked. Confirm on the next
+drive: query `bydmate_telemetry_hourly` for an hour with `sample_count` matching the block rather than
+per-sample increments.
+
+Phase 4's APK side (client-owned trip rollups) is also now built and unit-tested — **not yet
+installed on the car**, and its cloud side (`bydmate_apply_client_trip`) is not started. Same
+pattern as Phase 3's split: nothing is deployed, and the APK half is inert until the cloud half
+lands (`trip_id`/`client_trip` are unknown fields to today's ingest, ignored under `.passthrough()`).
 
 ## Measured baseline (prod, 2026-07-17, 14 cars, trailing 7 days)
 
@@ -38,8 +50,8 @@ hourly rollup upsert (4 weighted averages), trip create/extend, track-point inse
 | 0 | Baseline queries | — | ✅ shipped (local-only file) |
 | 1 | Float rounding + GPS corridor thinning | wire bytes, 55 MB track points | ✅ shipped |
 | 2 | Parked `live_only` fast path | 16 % of samples | ✅ shipped + verified in prod |
-| 3 | Client-side hourly rollups | **100 % of samples** | 🟡 APK side done; cloud side next |
-| 4 | APK-owned trips | 73 % (driving) | ⬜ |
+| 3 | Client-side hourly rollups | **100 % of samples** | ✅ shipped — driving-hour end-to-end not yet observed |
+| 4 | APK-owned trips | 73 % (driving) | 🟡 APK side done; cloud side next |
 | 5 | Charging hints | ~11 % | ⬜ likely skip |
 | 6 | Retire server-side paths | — | ⬜ gated on fleet `mate_version` |
 
@@ -85,7 +97,7 @@ no version gating anywhere. Confirmed on the real fleet: `way` (new build) sent 
 the full path. Only Phase 6 would break old clients, and it's gated on
 `bydmate_live_snapshots.mate_version` showing the fleet migrated.
 
-### Phase 3 — client-side hourly rollups 🟡 (APK side done, cloud side next)
+### Phase 3 — client-side hourly rollups ✅ (shipped 2026-07-18)
 
 The hourly upsert (4 weighted averages) runs on **every** sample, so this is the largest remaining
 lever. Maintain the per-hour aggregate in Room (updated each poll, persisted continuously so
@@ -149,24 +161,47 @@ margin ever matters, the clean fix is **additive deltas plus a monotonic `block_
 composes with the daemon's additive writes *and* stays retry-safe, which cumulative-replace only
 achieves by assuming it is the sole writer.
 
-#### Cloud side ⬜ (next — start here in a fresh session)
+#### Cloud side ✅ (applied to prod 2026-07-18, `EvAcChargeTimer` @ `8488eb6`)
 
 **The change is purely additive; the existing per-sample path is not modified.** An earlier draft of
 this plan said the count-weighted merge had to be fixed first. That was true only for additive
 deltas. Cumulative-replace blocks get their **own new RPC with their own merge**, so the merge that
-old APKs and the daemon run through stays byte-identical. Do **not** "fix" it — leave it alone.
+old APKs and the daemon run through stays byte-identical. It was left alone, per plan.
+
+Implemented in `supabase/migrations/20260717120000_bydmate_client_hourly_rollup.sql`:
 
 1. `bydmate_apply_client_hourly(p_user_id, p_vehicle_id, p_hour_start, p_block)` — new function,
-   cumulative replace guarded by `excluded.sample_count >= existing.sample_count`. Compute
+   cumulative replace guarded by `excluded.sample_count >= existing.sample_count`. Computes
    `v_hour_start := date_trunc('hour', p_hour_start at time zone 'utc')` — the **same expression** as
    the per-sample path, so both land on the identical `timestamptz` (the column is `timestamptz`; the
    client sends the truncated hour as an ISO instant, e.g. `"2026-07-17T10:00:00Z"`).
-2. Skip the per-sample hourly upsert **and** the `bydmate_update_hourly_energy` call when
-   `p_raw_payload->>'client_hourly'` is true.
-3. `ingest-payload.ts`: add `client_hourly: booleanSchema` to `payloadSchema` and an optional `hourly`
-   array to the batch envelope schema.
-4. `route.ts`: call the new RPC once per hour block after the samples land. It must **not** count
-   blocks as samples — the ack accounting (`sentCount = items.size`) assumes samples only.
+2. The per-sample hourly upsert was extracted into its own function,
+   `bydmate_apply_hourly_rollup_sample(p_user_id, p_vehicle_id, p_device_time, p_telemetry)`, exactly
+   as planned so Phase 4 doesn't have to re-copy the 468-line ingest function again.
+   `bydmate_ingest_telemetry` (9-arg) now skips calling it — and skips
+   `bydmate_update_hourly_energy` with it — when `p_raw_payload->>'client_hourly'` is true.
+3. `ingest-payload.ts`: added `client_hourly: booleanSchema` to `payloadSchema`, a new
+   `hourlyBlockSchema` (mirrors `HourlyRollupAccumulator.toJson()` field-for-field), and an optional
+   `hourly: hourlyBlockSchema[]` on the batch envelope object variant of `batchPayloadSchema`.
+4. `route.ts`: applies each `hourly` block via `bydmate_apply_client_hourly` after the samples land,
+   under `headerVehicleId` (blocks carry no `vehicle_id` of their own — `HourlyRollupAccumulator.toJson()`
+   omits it, and a batch is always single-vehicle since every sample is already normalized to the
+   header). Best-effort: wrapped in its own promise, failure is logged and returns `0`, never fails
+   the request. Reported back as `hourly_rollup_applied` in the response, kept separate from
+   `sentCount`/`inserted_count` so ack accounting still counts samples only, per plan.
+
+**Verification before the real apply:** ran the migration inside a transaction, exercised
+`bydmate_apply_client_hourly` (fresh block, stale-retry rejection, newer-block acceptance) and
+`bydmate_ingest_telemetry` with and without `client_hourly` against a real vehicle row, then rolled
+back — all five checks matched spec exactly. Applied for real, then confirmed the fleet's live
+snapshots kept updating (5 cars, all sub-minute-fresh) — the redefined ingest function didn't break
+anything.
+
+**Still open:** no driving hour has gone through the new path yet (car parked since the cloud side
+shipped; the daemon, which is what's currently running, deliberately never sets `client_hourly`). Next
+drive should be checked: `bydmate_telemetry_hourly.sample_count` for that hour should jump in the
+block's increments rather than by 1 per sample, and `hourly_rollup_applied` in the flush response
+should be non-zero.
 
 **Why old APKs keep working.** An old payload has no `client_hourly` key, so
 `coalesce(nullif(p_raw_payload->>'client_hourly', '')::boolean, false)` is false and step 2's branch
@@ -195,14 +230,68 @@ non-retryable failure is still counted in the block, so the hour's `sample_count
 rows actually stored. An app restart loses one energy interval — the same interval the server would
 discard anyway, since a restart gap almost always exceeds the 180 s cap.
 
-### Phase 4 — APK-owned trips ⬜
+### Phase 4 — APK-owned trips 🟡 (APK side done 2026-07-18, cloud side next)
 
-Mint a trip UUID at the confirmed IDLE→DRIVING transition (`TripTracker` already has 5 s
-hysteresis), persist the running summary each sample, stamp samples with `trip_id`. Close via three
-redundant markers: the gear→P sample, the daemon's post-car-off heartbeat, and lazy next-boot
-finalization. Nothing is computed at shutdown — close is a marker, not a computation, which is why
-the < 5 s Drive→P→off window is safe. Keep the server's 5-min gap detection as a fallback until
-Phase 6.
+Mint a trip UUID at the confirmed IDLE→DRIVING transition, persist the running summary each
+sample, stamp samples with `trip_id`. Close via three redundant markers: the gear→P sample, the
+daemon's post-car-off heartbeat, and lazy next-boot finalization. Nothing is computed at
+shutdown — close is a marker, not a computation, which is why the < 5 s Drive→P→off window is
+safe. Keep the server's 5-min gap detection as a fallback until Phase 6.
+
+**One correction found while implementing: `TripTracker` is not the trip-summary owner.** It's a
+pure GPS-point collector for a *different* local concept (`TripEntity`/`TripPointEntity`, tied to
+BYD's own `energydata` import via `HistoryImporter`), unrelated to the cloud `bydmate_trips` this
+phase targets. `TrackingService`'s "widget session" is a third, also-unrelated boundary. So
+`CloudTelemetrySender` — which already independently owns `live_only`/`client_hourly` — owns the
+cloud-trip lifecycle too, keyed off its own `decide()` classification (open on the DRIVING
+transition, close on gear=P or charging-start, same guards the server's `v_is_gear_p`/`v_is_charging`
+use) rather than reusing `TripTracker`'s state machine.
+
+**Also a correction to the distance/consumption source:** rather than integrating GPS or reading
+BYD's own internal trip meter (which the server's current logic has to guard against resetting
+mid-drive), the client captures the vehicle's real **odometer** and **lifetime consumption**
+readings as baselines at trip-open — both monotonic, so `last − baseline` is exact. Average
+consumption is derived as energy-over-distance at serialization rather than a running mean of the
+per-sample instantaneous rate, which is more accurate than the server's current weighted-mean
+approach.
+
+Named `TripRollup*` (mirroring `HourlyRollup*`), not `TripSummary*` — `TripSummaryCloudSync.kt`
+already exists for an unrelated feature (energydata-imported trip history for ADB-less cars).
+
+#### APK side ✅ (built, tests green — not yet on the car)
+
+- `TripRollupEntity` (Room table `cloud_trip_rollup`, PK `tripId`) — cumulative fields mirroring
+  `bydmate_trips`, same cumulative-not-delta convention as Phase 3's hourly block (retry-safe: the
+  full running trip is resent every flush, guarded by `sample_count` server-side once the RPC
+  exists).
+- `TripRollupAccumulator` — pure, mirrors `HourlyRollupAccumulator`'s `open`/`fold`/`close`/`toJson`
+  shape and reuses its `intervalEnergy()` for the regen/traction split, with its own continuity pair
+  scoped to the trip so energy never carries across a trip boundary.
+- `CloudTelemetrySender` — plans trip open/extend/close per sample in `decide()`/`enqueue()`
+  (mirroring `accumulateHourly`); lazily hydrates the open trip id from Room on first use so a
+  process restart resumes the same trip instead of forking a new one; the closing sample itself
+  does **not** join the trip (matches the server's early-return close triggers, which insert no
+  track point for it either).
+- Wire: samples carry `"trip_id"` + `"client_trip": true` (omitted, never `false` — same convention
+  as `live_only`/`client_hourly`) while a trip is open; the flush envelope gains a `"trips": [...]`
+  sibling array next to `"hourly"`.
+- **Single writer, unlike the hourly block**: `CommandDaemon` has no Room access and never sets
+  `client_trip`, so there's no two-writer margin-not-construction concern here — only
+  `CloudTelemetrySender` ever opens/extends/closes a client-tagged trip. This makes marker #2 (the
+  daemon's post-car-off heartbeat) a zero-APK-code fallback: the daemon's un-tagged samples simply
+  keep running through the server's existing, unmodified gear-P/charging/gap-close logic regardless
+  of who opened the trip row.
+- Marker #3 (lazy next-boot finalization) **is** APK-side: `TrackingService.onCreate()` calls
+  `CloudTelemetrySender.finalizeStaleOpenTrip()`, which closes a trip orphaned by a process death
+  mid-drive using its own last known device time (not "now") once it's gone quiet for 20 minutes. A
+  restart within that window instead resumes the same trip via the lazy-hydration path above.
+- Room 15 → 16 (`MIGRATION_15_16`).
+
+**Deliberately out of scope this pass:** the cloud RPC (`bydmate_apply_client_trip`, mirroring
+`bydmate_apply_client_hourly`) and `route.ts`/`ingest-payload.ts` wiring — same APK-first/cloud-second
+split as Phase 3. Track-point ownership also stays server-side per-sample for now (unaffected,
+cheap, idempotent); moving it client-side is an open question for the cloud-side session, not
+decided here.
 
 ## Deploy notes
 

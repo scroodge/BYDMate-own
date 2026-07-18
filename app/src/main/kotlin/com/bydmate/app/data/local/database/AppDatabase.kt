@@ -15,6 +15,7 @@ import com.bydmate.app.data.local.dao.RuleLogDao
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
+import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.entity.BatterySnapshotEntity
 import com.bydmate.app.data.local.entity.ChargeEntity
 import com.bydmate.app.data.local.entity.ChargePointEntity
@@ -28,6 +29,7 @@ import com.bydmate.app.data.local.entity.RuleLogEntity
 import com.bydmate.app.data.local.entity.SettingEntity
 import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.local.entity.TripPointEntity
+import com.bydmate.app.data.local.entity.TripRollupEntity
 
 @Database(
     entities = [
@@ -43,9 +45,10 @@ import com.bydmate.app.data.local.entity.TripPointEntity
         PlaceEntity::class,
         OdometerSampleEntity::class,
         CloudSyncQueueEntity::class,
-        HourlyRollupEntity::class
+        HourlyRollupEntity::class,
+        TripRollupEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -62,4 +65,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun odometerSampleDao(): OdometerSampleDao
     abstract fun cloudSyncQueueDao(): CloudSyncQueueDao
     abstract fun hourlyRollupDao(): HourlyRollupDao
+    abstract fun tripRollupDao(): TripRollupDao
 }

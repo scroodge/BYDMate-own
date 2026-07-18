@@ -231,6 +231,81 @@ class CloudTelemetryPayloadTest {
         )
     }
 
+    @Test
+    fun `trip_id and client_trip are omitted by default and set when a trip is open`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 40, gear = 4),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val normal = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        assertEquals(false, normal.has("trip_id"))
+        assertEquals(false, normal.has("client_trip"))
+
+        val tripped = JSONObject(
+            CloudTelemetryPayload.build("way", snapshot, tripId = "abc-123", clientTrip = true),
+        )
+        assertEquals("abc-123", tripped.getString("trip_id"))
+        assertEquals(true, tripped.getBoolean("client_trip"))
+    }
+
+    @Test
+    fun `client_trip is not set when a trip id is missing even if requested`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 40, gear = 4),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val json = JSONObject(CloudTelemetryPayload.build("way", snapshot, tripId = null, clientTrip = true))
+        assertEquals(false, json.has("trip_id"))
+        assertEquals(false, json.has("client_trip"))
+    }
+
+    @Test
+    fun `buildBatch attaches a trips array alongside hourly`() {
+        val samples = listOf(CloudTelemetryPayload.build("way", sampleSnapshot()))
+        val hourly = JSONObject().apply { put("hour_start", "2026-07-17T10:00:00Z") }
+        val trip = JSONObject().apply { put("trip_id", "abc-123") }
+
+        val batch = JSONObject(CloudTelemetryPayload.buildBatch(samples, listOf(hourly), listOf(trip)))
+        assertEquals(1, batch.getJSONArray("samples").length())
+        assertEquals("2026-07-17T10:00:00Z", batch.getJSONArray("hourly").getJSONObject(0).getString("hour_start"))
+        assertEquals("abc-123", batch.getJSONArray("trips").getJSONObject(0).getString("trip_id"))
+    }
+
+    @Test
+    fun `buildBatch omits the trips array when there are no trip blocks`() {
+        val samples = listOf(CloudTelemetryPayload.build("way", sampleSnapshot()))
+        val batch = JSONObject(CloudTelemetryPayload.buildBatch(samples))
+        assertEquals(false, batch.has("trips"))
+    }
+
+    private fun sampleSnapshot() = VehicleTelemetrySnapshot.from(
+        data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
+        battery = null,
+        charging = null,
+        enginePowerKw = null,
+        capturedAtMs = 1_700_000_000_000L,
+        rangeEstKm = null,
+        currentTripDistanceKm = null,
+        currentTripConsumptionKwh100km = null,
+        location = null,
+    )
+
     private fun diPlusData(
         maxCellVoltage: Double?,
         minCellVoltage: Double?,
