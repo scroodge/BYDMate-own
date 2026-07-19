@@ -346,6 +346,79 @@ class CloudTelemetrySenderTest {
         assertTrue(setup.trips.items.single().dirty.not())
     }
 
+    @Test
+    fun `charging start pings the live snapshot immediately without draining the queue`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 1))   // parked baseline; flushes as batch #1
+        assertEquals(1, setup.client.payloads.size)
+
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+
+        // The transition ping went out at once as a single live_only payload…
+        assertEquals(2, setup.client.payloads.size)
+        val ping = JSONObject(setup.client.payloads.last())
+        assertTrue(ping.optBoolean("live_only"))
+        assertTrue(!ping.has("samples"))
+        // …while the full charging sample stays queued for the 60s bulk batch.
+        assertEquals(1, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
+    fun `charging stop pings the live snapshot immediately`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 1))
+        setup.now = BASE_TIME_MS + 2_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        setup.now = BASE_TIME_MS + 3_000L
+        setup.sender.send(snapshot(charging = false, gear = 1))
+
+        // batch #1 (parked), ping (charge start), ping (unplug)
+        assertEquals(3, setup.client.payloads.size)
+        val ping = JSONObject(setup.client.payloads.last())
+        assertTrue(ping.optBoolean("live_only"))
+        assertTrue(!ping.has("samples"))
+    }
+
+    @Test
+    fun `status ping does not reset the sixty second charging bulk flush`() = runTest {
+        val setup = setup()
+
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(gear = 1))   // parked baseline; batch #1
+
+        // Charging at 10s cadence; the start-transition ping is payload #2 and must not
+        // push back the bulk batch that carries the samples auto-start needs.
+        for (second in 2..61) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        }
+        assertEquals(2, setup.client.payloads.size)
+
+        setup.now = BASE_TIME_MS + 62_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        assertEquals(3, setup.client.payloads.size)
+        val bulk = JSONObject(setup.client.payloads.last())
+        assertTrue(bulk.getJSONArray("samples").length() >= 4)
+    }
+
+    @Test
+    fun `steady states never ping`() = runTest {
+        val setup = setup()
+
+        for (second in 1..90 step 10) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        }
+        setup.client.payloads.forEach { payload ->
+            assertTrue("unexpected single-sample ping", JSONObject(payload).has("samples"))
+        }
+    }
+
     /** A queue row as it looks after being enqueued under [vehicleId]. */
     private fun queueRow(vehicleId: String, createdAt: Long) = CloudSyncQueueEntity(
         createdAt = createdAt,

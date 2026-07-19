@@ -48,6 +48,14 @@ class CloudTelemetrySender @Inject constructor(
     /** Device time of the last *full* parked sample; bounds how long a live_only run may last. */
     @Volatile private var lastFullParkedSampleMs: Long = 0L
     @Volatile private var pendingFlushNow: Boolean = false
+    /**
+     * Single live_only payload staged by a moving/charging transition, sent by the next
+     * [flushPending] outside the batch queue. Charge start/stop otherwise waits out the 60s
+     * charging-bulk / parked flush before the live snapshot moves, so the PWA status badge
+     * lags a state change by up to a minute. The ping refreshes the snapshot within seconds
+     * while the queued full sample stays the durable history record.
+     */
+    @Volatile private var pendingStatusPingPayload: String? = null
     @Volatile private var lastChargingBelowTail: Boolean = false
     @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
     /**
@@ -95,6 +103,17 @@ class CloudTelemetrySender @Inject constructor(
         val decision = decide(snapshot, now, telemetryState)
         if (decision.flushNow) {
             pendingFlushNow = true
+        }
+        if (decision.statusPing) {
+            // live_only: the server's fast path only upserts the live snapshot, so the ping
+            // never duplicates a history row — the queued full sample below is the record.
+            pendingStatusPingPayload = CloudTelemetryPayload.build(
+                config.vehicleId,
+                snapshot,
+                omitGps = omitGps,
+                telemetryState = telemetryState,
+                liveOnly = true,
+            )
         }
         if (decision.enqueue) {
             val loc = snapshot.location
@@ -145,6 +164,7 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         val now = nowProvider()
+        sendPendingStatusPing(config)
         val unsentCount = queueDao.countUnsent()
         if (unsentCount == 0) {
             pendingFlushNow = false
@@ -221,6 +241,20 @@ class CloudTelemetrySender @Inject constructor(
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.failure(IllegalStateException(message))
         }
+    }
+
+    /**
+     * Fire-and-forget: a full prompt flush here was measured to net-DELAY delivery — it
+     * drains the queue and resets activeBatchStartedMs, pushing back the bulk batch that
+     * carries the 4 consecutive charging samples auto-start needs. The ping therefore must
+     * not touch the queue, activeBatchStartedMs, lastFlushAttemptMs, or the saved sync
+     * status; a lost ping costs nothing because the batch still delivers the transition.
+     */
+    private suspend fun sendPendingStatusPing(config: Config) {
+        val payload = pendingStatusPingPayload ?: return
+        pendingStatusPingPayload = null
+        if (config.wifiOnly && !isWifiConnected()) return
+        client.send(config.url, config.apiKey, config.vehicleId, payload)
     }
 
     suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
@@ -372,8 +406,9 @@ class CloudTelemetrySender @Inject constructor(
         val parkedPowerOff = previousPowerOn == true && powerOn == false &&
             previousGear == 1 && gear == 1 &&
             speedKmh <= CloudTelemetryCadence.MOVING_SPEED_THRESHOLD_KMH
-        val stateChanged = previousMoving?.let { it != moving } == true ||
-            previousCharging?.let { it != charging } == true ||
+        val movingChanged = previousMoving?.let { it != moving } == true
+        val chargingChanged = previousCharging?.let { it != charging } == true
+        val stateChanged = movingChanged || chargingChanged ||
             gearChanged ||
             (previousGear == null && gear != null && lastQueuedSampleMs > 0L)
         lastMoving = moving
@@ -451,12 +486,17 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         val activeTransition = stateChanged && (active || previousCharging == true || previousMoving == true)
+        val flushNow = parkedPowerOff || (gearChanged && !active) || (stateChanged && !activeTransition)
         return QueueDecision(
             enqueue = enqueue,
-            flushNow = parkedPowerOff || (gearChanged && !active) || (stateChanged && !activeTransition),
+            flushNow = flushNow,
             activeBatchMode = active || previousCharging == true || previousMoving == true,
             activeSample = active,
             liveOnly = liveOnly,
+            // Effective moving/charging edges only — a bare gear change during the drive
+            // latch (a P blip at a red light) is not a status change and must not ping.
+            // Transitions that already flushNow deliver promptly through the queue.
+            statusPing = !flushNow && (movingChanged || chargingChanged),
         )
     }
 
@@ -667,6 +707,8 @@ class CloudTelemetrySender @Inject constructor(
         val activeBatchMode: Boolean,
         val activeSample: Boolean,
         val liveOnly: Boolean = false,
+        /** Stage an immediate queue-independent live_only POST (see [pendingStatusPingPayload]). */
+        val statusPing: Boolean = false,
     )
 
     private data class FlushQueueResult(
