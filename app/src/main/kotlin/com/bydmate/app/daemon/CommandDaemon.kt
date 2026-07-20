@@ -65,6 +65,14 @@ object CommandDaemon {
     @Volatile private var liveFastUntilMs = 0L
 
     /**
+     * Latest DiPars read, published by the status loop and consumed by the command loop
+     * (commands are evaluated against current vehicle state). `@Volatile` because those are
+     * two threads — see [main].
+     */
+    @Volatile private var latestData: DiParsData? = null
+    @Volatile private var latestDataAt = 0L
+
+    /**
      * Why this iteration is pushing, and what that implies. Extracted from the loop so the
      * gating can be unit-tested — the loop itself is unreachable from tests (it blocks on
      * DiPars, HTTP and Thread.sleep forever).
@@ -112,11 +120,22 @@ object CommandDaemon {
     }
 
     /**
-     * The loop period is the real floor on status latency: a 3s push interval is meaningless
-     * if the thread only wakes every 6s. Measured before this clamp, pushes landed 8-9s apart.
+     * How often the status loop should wake. The wake rate — not the push interval — is the
+     * real floor on latency: a 3s push interval is meaningless if the thread only wakes every
+     * 6s. Off fast mode this stays at [BASE_POLL_MS] rather than the 60s push cadence, so
+     * DiPars stays fresh for the command loop and a plug/unplug edge is still caught quickly.
      */
-    internal fun loopSleepMs(waited: Long, now: Long, liveFastUntilMs: Long): Long =
-        if (now < liveFastUntilMs) minOf(waited, LIVE_FAST_PUSH_MS) else waited
+    internal fun statusIntervalMs(now: Long, liveFastUntilMs: Long): Long =
+        if (now < liveFastUntilMs) LIVE_FAST_PUSH_MS else BASE_POLL_MS
+
+    /**
+     * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
+     * interval + work — measured 8-9s for a 3s interval once DiPars, the telemetry POST and
+     * the command poll were all counted. Never returns negative (a slow iteration simply
+     * runs the next one immediately).
+     */
+    internal fun pacedSleepMs(intervalMs: Long, elapsedMs: Long): Long =
+        (intervalMs - elapsedMs).coerceAtLeast(0L)
 
     /**
      * Longest a parked `live_only` run may last before a full sample is forced. Car-off is the
@@ -166,9 +185,15 @@ object CommandDaemon {
         val diPars = DiParsClient(ok)
         val control = DiParsControlClient(ok)
 
-        var backoffMs = BASE_POLL_MS
-        var latestData: DiParsData? = null
-        var latestDataAt = 0L
+        // Commands poll on their own thread. Previously a single loop did DiPars + telemetry
+        // POST + command poll in series, so every one of those round trips was added to the
+        // status period — which is why a 3s push interval measured 8-9s on the car. Split,
+        // the status loop only pays for its own work, and the command poll can stay at its
+        // relaxed 6s even while the live view is open.
+        Thread({ runBlocking { commandLoop(ok, control, confPath) } }, "voltflow-commands")
+            .apply { isDaemon = true }
+            .start()
+
         var lastTelemetryPushAt = 0L
         // Separate from [lastTelemetryPushAt] on purpose: fast-mode status pushes must not
         // keep resetting the history rhythm, or a car watched for an hour would store no
@@ -193,9 +218,10 @@ object CommandDaemon {
                     continue
                 }
 
-                val waited = try {
+                val startedAt = System.currentTimeMillis()
+                try {
                     // Refresh telemetry for guards if stale (cheap localhost call).
-                    val now = System.currentTimeMillis()
+                    val now = startedAt
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
                         diPars.fetch()?.let { latestData = it; latestDataAt = now }
                     }
@@ -262,19 +288,45 @@ object CommandDaemon {
                         if (plan.advancesIntervalTimer) lastIntervalPushAt = now
                     }
 
-                    val result = pollOnce(ok, conf, control, latestData)
-                    backoffMs = if (result) BASE_POLL_MS else min(backoffMs * 2, MAX_BACKOFF_MS)
-                    if (result) BASE_POLL_MS else backoffMs
                 } catch (e: Exception) {
-                    log("poll error: ${e.message}")
-                    backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
-                    backoffMs
+                    log("status error: ${e.message}")
                 }
-                // While the live view is open, wake at the push interval instead of the poll
-                // interval. This also runs the command poll at that rate, which is the
-                // accepted cost of a short, viewer-gated window. See [loopSleepMs].
-                Thread.sleep(loopSleepMs(waited, System.currentTimeMillis(), liveFastUntilMs))
+                // Fixed-rate, not fixed-delay: sleeping a whole interval *after* the work
+                // makes the period interval + work. Subtracting the elapsed time is what
+                // actually delivers the interval the live view was promised.
+                val interval = statusIntervalMs(System.currentTimeMillis(), liveFastUntilMs)
+                Thread.sleep(pacedSleepMs(interval, System.currentTimeMillis() - startedAt))
             }
+        }
+    }
+
+    /**
+     * Command polling, on its own thread. Kept at [BASE_POLL_MS] regardless of fast mode:
+     * grants last far longer than one poll, so there is nothing to gain by polling faster —
+     * and the status loop no longer waits on this round trip.
+     */
+    private suspend fun commandLoop(
+        ok: OkHttpClient,
+        control: DiParsControlClient,
+        confPath: String,
+    ) {
+        var backoffMs = BASE_POLL_MS
+        while (true) {
+            val conf = loadConf(confPath)
+            if (conf == null) {
+                Thread.sleep(BASE_POLL_MS)
+                continue
+            }
+            val waited = try {
+                val result = pollOnce(ok, conf, control, latestData)
+                backoffMs = if (result) BASE_POLL_MS else min(backoffMs * 2, MAX_BACKOFF_MS)
+                if (result) BASE_POLL_MS else backoffMs
+            } catch (e: Exception) {
+                log("poll error: ${e.message}")
+                backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
+                backoffMs
+            }
+            Thread.sleep(waited)
         }
     }
 

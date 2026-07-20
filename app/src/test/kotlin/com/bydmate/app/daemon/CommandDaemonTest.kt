@@ -102,12 +102,23 @@ class CommandDaemonTest {
     }
 
     @Test
-    fun `the loop wakes at the push interval only while watched`() {
-        // Regression: the 3s push interval was meaningless while the loop slept 6s — measured
-        // pushes landed 8-9s apart until this clamp.
-        assertEquals(6_000L, CommandDaemon.loopSleepMs(6_000L, t0, 0L))
-        assertEquals(3_000L, CommandDaemon.loopSleepMs(6_000L, t0, t0 + 60_000L))
-        // Never *lengthens* a backoff the poll asked for.
-        assertEquals(1_000L, CommandDaemon.loopSleepMs(1_000L, t0, t0 + 60_000L))
+    fun `the status loop wakes at the push interval only while watched`() {
+        // Regression: the 3s push interval was meaningless while the loop woke every 6s —
+        // measured pushes landed 8-9s apart until the wake rate itself changed.
+        assertEquals(6_000L, CommandDaemon.statusIntervalMs(t0, 0L))
+        assertEquals(3_000L, CommandDaemon.statusIntervalMs(t0, t0 + 60_000L))
+        // Unwatched still wakes at 6s, not the 60s push cadence: DiPars must stay fresh for
+        // the command loop, and a plug/unplug edge must still be caught promptly.
+        assertEquals(6_000L, CommandDaemon.statusIntervalMs(t0, t0 - 1L))
+    }
+
+    @Test
+    fun `pacing subtracts the work so the period is the interval, not interval plus work`() {
+        // The other half of the 8-9s regression: a 3s sleep after ~2s of DiPars + POST work
+        // yields a 5s period. Fixed-rate pacing is what actually delivers 3s.
+        assertEquals(1_000L, CommandDaemon.pacedSleepMs(3_000L, 2_000L))
+        assertEquals(3_000L, CommandDaemon.pacedSleepMs(3_000L, 0L))
+        // A slow iteration never sleeps negative — it just runs the next one immediately.
+        assertEquals(0L, CommandDaemon.pacedSleepMs(3_000L, 9_000L))
     }
 }
