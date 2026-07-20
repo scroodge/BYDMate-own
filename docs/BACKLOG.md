@@ -4,7 +4,7 @@ Actionable, prioritized task list. Milestone-level view lives in
 [`ROADMAP.md`](ROADMAP.md); shipped detail in [`CHANGELOG.md`](../CHANGELOG.md);
 engineering notes in [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-07-17 · база: `main` @ `0.4.8` (`versionCode 333`).
+- **Обновлено:** 2026-07-20 · база: `main` @ `0.4.10` (`versionCode 335`).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `done`.
 - Оценка: S (<½ дня) · M (1–2 дня) · L (>2 дня / кросс-репо).
@@ -19,6 +19,7 @@ engineering notes in [`project-notes.md`](project-notes.md).
 | ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
 |----|--------|------|-----|--------|---------------------|
 | B-03 | Непрерывность истории телеметрии при переименовании авто | cloud / **VoltFlow** | L | `blocked` | Слить историю до/после rename на стороне Supabase (`vehicle_id` — часть ключа). Блок: логика в VoltFlow/EvAcChargeTimer, нужна координация репо. Потеря данных уже устранена (`7b37366`). |
+| B-06 | Cloud-side Phase 4: client-owned trip rollups | cloud / **VoltFlow** | L | `todo` | Добавить `bydmate_apply_client_trip` и route/schema wiring; затем подтвердить, что `client_trip`/`trips` применяются идемпотентно, а старые APK и daemon продолжают работать по прежнему пути. |
 
 ---
 

@@ -128,7 +128,7 @@ APK может отправить один telemetry sample:
   "vehicle_id": "way",
   "device_time": "2026-05-25T12:34:56Z",
   "source": "BYDMate",
-  "mate_version": "0.4.7",
+  "mate_version": "0.4.10",
   "telemetry": {
     "soc": 73,
     "speed_kmh": 0.0,
@@ -231,7 +231,9 @@ APK может отправить один telemetry sample:
 
 Важно: каждый элемент `samples[]` имеет ту же схему, что одиночный sample.
 Backend должен принимать оба варианта: одиночный объект sample и объект с
-массивом `samples`.
+массивом `samples`. В APK с client-side rollups batch также может содержать
+необязательные sibling-массивы `hourly` (cumulative hourly blocks) и `trips`
+(cumulative trip blocks). Они относятся к тому же `X-Vehicle-Id`, что и samples.
 
 ## Top-Level Fields
 
@@ -242,7 +244,9 @@ Backend должен принимать оба варианта: одиночн�
 | `device_time` | string | yes | ISO-8601 UTC timestamp, например `2026-05-25T12:34:56Z`. |
 | `source` | string | yes | Сейчас всегда `BYDMate`. |
 | `live_only` | boolean | no | `true` — парковочный heartbeat, в котором ничего существенного не изменилось. Сервер обновляет **только** `bydmate_live_snapshots` (плюс его `diplus_*` / `autoservice_*` колонки) и пропускает запись в `bydmate_telemetry_samples`, hourly-rollup и логику поездок. Поле **опускается**, когда `false`, — обычный sample не меняет форму на проводе. Старые версии APK его не шлют, и такие payload'ы идут полным путём. |
-| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, сейчас `0.4.7`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. |
+| `client_hourly` | boolean | no | `true` означает, что sample уже folded в APK-owned cumulative `hourly` block. Сервер пропускает свой per-sample hourly path, чтобы не считать час дважды. Поле опускается, когда `false`. |
+| `trip_id` + `client_trip` | string + boolean | no | APK помечает driving sample UUID текущей client-owned поездки и прикладывает её cumulative block в `trips`. Это additive Phase 4: пока cloud-side RPC не введена, ingest должен принимать и игнорировать эти поля, продолжая прежнюю server-side trip-логику. |
+| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, сейчас `0.4.10`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. |
 | `telemetry` | object | yes | Нормализованный набор основных метрик. |
 | `diplus` | object/null | no | Сырые/расширенные данные DiPlus после парсинга APK. Может быть `null` или отсутствовать, когда Di+ недоступен. |
 | `autoservice` | object | no | BMS-direct поля, доступные только при ADB/autoservice Binder; отсутствие блока нормально. |
@@ -428,10 +432,11 @@ APK не отправляет каждый poll напрямую. Сначала
 
 Backend должен быть готов к batch из десятков samples, особенно при зарядке.
 
-`CommandDaemon` не использует Room queue: при car-off он best-effort отправляет один
-сокращённый Di+ sample без GPS раз в 60 s и пишет HTTP-код в daemon log. Его задача —
-сохранить current live state и command path до следующего запуска основного приложения,
-а не заменить надёжную app-очередь.
+`CommandDaemon` не использует Room queue: при car-off он best-effort отправляет сокращённый
+Di+ sample без GPS по обычному 60-секундному cadence, сразу при смене gun state, а при активном
+`live_fast_seconds` grant — `live_only` status каждые 3 секунды. Его задача — сохранить current
+live state и command path до следующего запуска основного приложения, а не заменить надёжную
+app-очередь.
 
 ## vehicle_id — неизменяемый идентификатор сессии
 

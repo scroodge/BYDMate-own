@@ -26,18 +26,28 @@ the server's *read* path, not APK uploads.
 | Parked | 30 s | `PARKED_CLOUD_HEARTBEAT_MS` |
 
 **Flush (HTTP POST, batched via `buildBatch` → server `bydmate_ingest_telemetry_batch`):**
-- Active (driving OR charging): every `ACTIVE_FLUSH_INTERVAL_MS = 15 s`, batch
+- Driving and charging tail (≥98%): every `ACTIVE_FLUSH_INTERVAL_MS = 15 s`, batch
   `ACTIVE_BATCH_SIZE = 15`.
+- Charging bulk (<98%): every `CHARGING_BULK_FLUSH_INTERVAL_MS = 60 s`.
 - Parked / inactive: every `config.flushIntervalSec` (default 60 s), batch up to
   `MAX_BATCH_SIZE = 120`.
 - `flushNow` on certain state transitions.
 
-**Effective POST rate per active vehicle: ~1 request / 15 s** (driving = batch ~15;
-charging-bulk = batch ~1–2; tail = batch ~15; parked = ~1 / 60 s).
+The durable transition sample still uses that queue. Since v0.4.9, a charging/parking
+transition also sends one queue-independent `live_only` status ping, so the live snapshot moves
+within seconds without adding a history row or resetting the batch timer. Since v0.4.10, an
+active VoltFlow live view can request `live_fast_seconds`; while that short-lived grant is valid,
+the app sends `live_only` status every 3 seconds.
 
-## The problem with charging-bulk
+**Effective durable POST rate per vehicle:** driving and charging tail are about one request per
+15 s; charging bulk is about one per 60 s with ~6 samples; parked is about one per 60 s. A live
+view can temporarily add one lightweight `live_only` status POST per 3 s; it does not write
+history or change the durable batch cadence.
 
-A charge runs for hours. At 10 s sampling + 15 s flush, the bulk phase emits ~4
+## Original charging-bulk problem (resolved)
+
+A charge runs for hours. Before the 2026-06-24 change, 10 s sampling + 15 s flush made the bulk
+phase emit ~4
 POSTs/min each carrying only 1–2 samples. **Every POST pays the full server
 fixed cost** (key lookup, previous-snapshot read, verify re-read, auto-session,
 reconcile-if-changed). Example: a 5 h charge = ~1,200 POSTs; ×100 users = ~120k
@@ -68,19 +78,22 @@ re-reads during the longest phase of the day.
 4. `ACTIVE_BATCH_SIZE` (15) remains the size-based safety flush — a 60 s bulk window
    queues only ~6 samples, so it won't trip early.
 
-### Decision: NO prompt charging-start flush (revised)
+### Decision: no prompt charging-start **history** flush
 
 The earlier plan said to add a prompt flush when state enters CHARGING. **Dropped after
-tracing it through:** a prompt flush drains the queue and *resets* the active batch
+tracing it through:** a prompt history flush drains the queue and *resets* the active batch
 window, which pushes the *next* bulk flush ~60 s later — net-delaying the batch rather
 than helping. Auto-start needs **4 consecutive** `charge_power_kw` samples (~40 s at 10 s
 sampling) regardless, and the first 60 s bulk flush already carries them, so auto-start
 fires at ~t+60 s — within the documented acceptance and the server's ≤90 s freshness
-target. Not worth the added `decide()` complexity or the risk to the batching invariant.
+target. Not worth the added `decide()` complexity or the risk to the batching invariant. This does
+not prevent the separate v0.4.9 `live_only` status ping at a charge/park transition: it updates
+the live snapshot immediately while the durable transition sample stays in the normal batch.
 
 ### Safety / acceptance
 
-- **Live status freshness:** 60 s charging flush is within the server's ≤90 s target.
+- **Live status freshness:** a charge/park transition now pings the live snapshot within seconds;
+  the 60 s durable charging-bulk flush remains within the server's ≤90 s target.
 - **Auto-start:** fires at ~t+60 s of plug-in (first bulk flush carries the 4 consecutive
   samples). Slightly later than the old ~t+35 s; negligible for a multi-hour charge.
 - **Charge-threshold push notifications:** may lag up to ~60 s. Accepted.
@@ -100,9 +113,9 @@ they hit the 15-sample batch flush) so they're unaffected. Full debug suite:
 - Tiered web session poll (done).
 - Reconcile gated to auto-session start/stop (done).
 
-## Risk note (carry forward from AGENTS.md)
+## Resolved vehicle-ID risk
 
-Changing `cloud_sync_vehicle_id` while old queue payloads exist can create a
-header/body `vehicle_id` mismatch and drop mixed batches. Any change that alters
-batching must not reintroduce that hazard — the server already rewrites body
-`vehicle_id` to the header, but verify mixed-batch behavior after edits.
+Changing `cloud_sync_vehicle_id` no longer drops old queued payloads: `flushQueue()` groups rows
+by the `vehicle_id` stored in each payload and sends each group with a matching
+`X-Vehicle-Id` header (`7b37366`). This preserves delivery, but it does **not** merge the server
+history under the old and new IDs. Any batching change must retain this per-vehicle grouping.

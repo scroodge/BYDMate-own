@@ -6,6 +6,10 @@
 
 Полные релизы с APK: <https://github.com/scroodge/BYDMate-own/releases>.
 
+> Статус checkout на 2026-07-20: последний git tag — `v0.4.8`. Разделы 0.4.9 и
+> 0.4.10 описывают изменения в `main`; они не подтверждают опубликованный релиз, пока
+> debug APK не установлен на автомобиль и не появилась свежая телеметрия.
+
 ## [0.4.10] - 2026-07-20
 
 ### Added
@@ -89,8 +93,10 @@
   топлива в данных поездки и телеметрии.
 - **Клиентские почасовые rollup'ы телеметрии** (`ab0e477`): APK накапливает агрегаты
   в локальной таблице `cloud_hourly_rollup` (Room 14 → 15) и отправляет cumulative-блоки
-  `hourly` вместе с batch, помечая соответствующие сэмплы `client_hourly`. Серверная часть
-  Phase 3 ещё не реализована и отслеживается отдельно в `CLOUD_OFFLOAD_PLAN.md`.
+  `hourly` вместе с batch, помечая соответствующие сэмплы `client_hourly`. Server-side Phase 3
+  (`bydmate_apply_client_hourly` и ingest wiring) применена и подтверждена в production;
+  следующий незакрытый этап — cloud-side Phase 4 для `trips`, см.
+  `CLOUD_OFFLOAD_PLAN.md`.
 
 ### Changed
 - **Спаренные авто переведены на постоянный домен `voltflow.life`** (`e2cd59b`):
@@ -295,7 +301,7 @@
 - Приложение остаётся форком BYDMate и использует отдельный Android `applicationId`: `dev.scroodge.cloudevmate`, поэтому может стоять рядом с оригинальным BYDMate.
 - Для работы шлюза нужен установленный и настроенный BYDMATE, из которого VoltFlow Mate берёт live-данные машины.
 
-[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/scroodge/BYDMate-own/compare/v0.4.8...HEAD
 [0.3.6]: https://github.com/scroodge/BYDMate-own/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/scroodge/BYDMate-own/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/scroodge/BYDMate-own/compare/v0.3.3...v0.3.4

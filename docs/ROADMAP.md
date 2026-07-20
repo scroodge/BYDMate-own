@@ -5,36 +5,22 @@
 [`docs/project-notes.md`](project-notes.md) (инженерные заметки и инциденты).
 Этот файл даёт единый взгляд: что сделано, что в работе, что рассматривается.
 
-- **Текущая версия:** `0.4.8` (`versionCode 333`), релиз 2026-07-16.
-- **Обновлено:** 2026-07-17.
+- **Текущая версия кода в `main`:** `0.4.10` (`versionCode 335`). Последний
+  опубликованный git tag — `v0.4.8` (2026-07-16); не называйте 0.4.10 релизом,
+  пока debug APK не опубликован, установлен и не подтверждён свежей телеметрией.
+- **Обновлено:** 2026-07-20.
 - Легенда: ✅ сделано · 🔧 в работе / `[Unreleased]` · 🧭 кандидат (не запланирован) · ⚠️ риск / долг.
 
 ---
 
-## 🔧 В работе — следующий релиз (`[Unreleased]`)
+## 🔧 В работе
 
-Закоммичено в `main`, ещё не вошло в тегированный релиз:
-
-- 🔧 **Батч-флаш телеметрии больше не теряет данные при переименовании авто** —
-  `flushQueue` группирует очередь по `vehicle_id` из payload, по батчу на id
-  (заголовок == тело). Регресс-тест добавлен. `7b37366`.
-- 🔧 **Расход топлива** в данных поездки и телеметрии. `e9fd89a`.
-- 🔧 **Переезд спаренных авто на `voltflow.life`** с `volt-flow-beige.vercel.app`. `e2cd59b`.
-- 🔧 **CommandDaemon watchdog self-revival** — bundled asset `start_voltflow_cmd.sh`
-  синхронизирован с hardened-лаунчером; supervisor чинит демон без живого watchdog PID.
-- 🔧 **Чистка мёртвого кода (~280 строк)** — `IdleDrainTracker`, `BatteryHealthViewModel`,
-  `ConsumptionCalculator`, legacy `domain/model/Models.kt`, ресурс `ic_cloudev_mate`.
-- 🔧 **Парковочные heartbeat'ы `live_only` и компактнее payload** (`203358d`) — неизменившийся
-  parked-сэмпл помечается `live_only`; добавлены округление значений и corridor thinning GPS
-  при движении.
-- 🔧 **`live_only` в CommandDaemon** (`d41e748`) — при parked без изменений демон отправляет
-  heartbeat без history/hourly/trip-записей; полный сэмпл принудительно уходит не реже 15 минут.
-- 🔧 **Клиентские почасовые rollup'ы** (`ab0e477`) — APK копит агрегаты в Room
-  `cloud_hourly_rollup` (миграция 14 → 15) и прикладывает cumulative-блоки `hourly` к flush.
-  Серверная часть Phase 3 ещё нужна; подробности — в
+- 🔧 **Cloud-side Phase 4: client-owned trip rollups.** APK уже ведёт cumulative `trips`
+  в Room и помечает driving samples `client_trip`; серверная RPC и route wiring ещё не
+  реализованы, поэтому сервер пока продолжает обычную trip-логику. Подробности — в
   [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md).
-
-**Действие:** включить эти изменения в следующий тегированный релиз.
+- 🔧 **Расход топлива** в данных поездки и telemetry payload (`e9fd89a`) остаётся в
+  разделе `[Unreleased]` changelog до отдельного выпуска.
 
 ---
 
@@ -48,12 +34,18 @@
 - ✅ GPS privacy (`cloud_sync_omit_gps`), «только Wi-Fi», отбраковка плохого GPS (>30 м).
 - ✅ `mate_version` в каждом payload → видно версию APK на каждом авто (v0.3.9.4).
 - ✅ Облачная синхронизация поездок из `energydata` без ADB (`TripSummaryCloudSync`, v0.4.7).
+- ✅ `live_only` для неизменившейся стоянки, клиентские hourly rollups и GPS corridor thinning;
+  server-side hourly path проверен в production.
+- ✅ Переходы park/charge сразу обновляют live status, а открытый live-экран получает
+  `live_only`-статус каждые 3 секунды (v0.4.9–0.4.10).
 
 ### Parked/off remote commands
 - ✅ CommandDaemon как shell-uid `app_process`: переживает force-stop при parked/off,
   читает DiPlus на `127.0.0.1:8988`, poll/ack команд через VoltFlow.
 - ✅ Демон и приложение не дублируют телеметрию (heartbeat-маяк, v0.3.9.5).
 - ✅ Single-instance lock и очистка stale-демона в лаунчере (v0.4.0).
+- ✅ При car-off daemon сразу обрабатывает смену gun state; в live fast mode отправляет
+  `live_only`-статус каждые 3 секунды, не вытесняя 60-секундный history cadence (v0.4.10).
 
 ### Диагностика и UX
 - ✅ «Диагностика хранилища BYD» (Настройки) и кнопка в Gateway-режиме (v0.4.5–0.4.6).

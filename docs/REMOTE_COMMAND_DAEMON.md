@@ -29,7 +29,9 @@ Supabase /api/bydmate/commands ──poll──> CommandDaemon (app_process, uid
                               POST /api/bydmate/commands/ack  <───┘
 
 DiPlus 127.0.0.1:8988 /api/getDiPars ──read──> CommandDaemon
-                                                    │  every 60 s, ONLY when the app is NOT sending
+                                                    │  normal cadence every 60 s, or immediately on gun change
+                                                    │  live fast mode: status-only every 3 s
+                                                    │  ONLY when the app is NOT sending
                                                     │  (app-alive beacon stale AND not DRIVING)
                                                     ▼
                               POST /api/bydmate/telemetry ──> Supabase bydmate_live_snapshots
@@ -75,7 +77,7 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 **Proven behavior** (Yuan Up 2024, DiLink 3.0, 2026-06-10):
 - Car off (`PWR=0`), app force-stopped by BYD `collectPowerOffEvent`
 - Daemon (uid shell) survived; DiPlus still accessible at `127.0.0.1:8988`
-- `bydmate_live_snapshots` updated every ~60 s (`SOC=32, PWR=0, GUN=1, V12=13.7`)
+- `bydmate_live_snapshots` updated at the normal ~60 s cadence (`SOC=32, PWR=0, GUN=1, V12=13.7`)
 - Network stayed alive thanks to head-unit **"Keep network on while parked"** setting (see below)
 
 > **Known limitation**: DiPlus `迪加`-phrases require `电源状态 ≥ 1` (car ON) to actuate physical
@@ -87,7 +89,7 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 
 | Piece | Where | Role |
 |---|---|---|
-| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + telemetry push every 60 s (only when the app is not sending) |
+| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + normal 60 s telemetry cadence (only when the app is not sending); gun-state edges are immediate and an active live-view grant adds 3 s `live_only` status pushes |
 | `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update |
 | `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |

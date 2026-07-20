@@ -24,7 +24,8 @@
 
 | Иконка | Раздел | Что делает |
 |---|---|---|
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Передаёт данные с BYDMATE в облако | Берёт данные из BYDMATE `energydata` или DiPlus TripInfo. |
+| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Передаёт телеметрию в VoltFlow | Читает live-данные через DiPlus; при настроенном on-device ADB дополняет их BMS/autoservice. История поездок для совместимых машин импортируется из `energydata`. |
+| 📡 | Работает на стоянке | Опциональный shell-демон опрашивает команды и поддерживает live-статус после выключения машины; для него нужен разовый on-device ADB. |
 | ⬆️ | Обновления APK | Проверка GitHub Releases при запуске, диалог, скачивание и установка (экран шлюза → **Обновления**). |
 
 
@@ -131,74 +132,22 @@ app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk
 
 Debug-сборка подписывается стандартным debug-ключом Android и подходит для личной установки через ADB или файловый менеджер DiLink.
 
-### Release-сборка
+### Выпуск обновления
+
+Проект распространяет и обновляет **только debug APK**. Перед публикацией используйте:
 
 ```bash
-./gradlew clean assembleRelease
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-APK будет в:
+Опубликуйте `app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk` в GitHub Release с русским
+описанием изменений. Затем установите именно этот файл на DiLink и убедитесь, что после установки
+в VoltFlow появились свежие `bydmate_telemetry_samples` и `bydmate_live_snapshots`. Успешная сборка
+и установка без свежей телеметрии не считаются успешным выпуском.
 
-```text
-app/build/outputs/apk/release/VoltFlow-Mate-v<version>.apk
-```
-
-Для публичного релиза используйте свой keystore и подпишите APK перед публикацией. Готовый файл прикрепляйте к GitHub Release в блок **Assets**. Автопроверка обновлений в приложении смотрит на `https://api.github.com/repos/scroodge/BYDMate-own/releases/latest` и ищет первый `.apk` в assets последнего релиза.
-
----
-
-## Как оформить релиз
-
-1. Обновите `CHANGELOG.md` из git-коммитов:
-
-```bash
-./gradlew releaseChangelog
-```
-
-Для предварительного просмотра без изменения файла:
-
-```bash
-./gradlew releaseChangelog -PdryRun=true
-```
-
-Если нужно указать версию вручную:
-
-```bash
-./gradlew releaseChangelog -PreleaseVersion=0.2.3
-```
-
-Авто-версия считается по SemVer от последнего тега `v*`: `fix:` и обычные сообщения дают patch, `feat:` даёт minor, `feat!:` или `BREAKING CHANGE:` дают major. Для аккуратного changelog пишите коммиты в формате Conventional Commits:
-
-```text
-feat: добавить интеграцию ABRP
-fix: исправить расчёт зарядной сессии
-refactor: упростить обработку телеметрии
-```
-
-2. Проверьте и при необходимости отредактируйте текст изменений в `CHANGELOG.md`.
-3. Соберите APK:
-
-```bash
-./gradlew clean assembleRelease
-```
-
-4. Создайте коммит релиза и тег версии:
-
-```bash
-git add CHANGELOG.md
-git commit -m "chore(release): v0.2.3"
-git tag v0.2.3
-git push origin main v0.2.3
-```
-
-5. На GitHub откройте **Releases -> Draft a new release**.
-6. Выберите созданный тег.
-7. В название релиза поставьте `VoltFlow Mate v0.2.3`.
-8. В описание добавьте краткий список изменений на русском.
-9. Прикрепите `VoltFlow-Mate-v0.2.3.apk`.
-10. Опубликуйте релиз.
-
-Обычным пользователям после этого достаточно открыть [страницу последнего релиза](https://github.com/scroodge/BYDMate-own/releases) и скачать APK.
+Автопроверка обновлений смотрит на
+`https://api.github.com/repos/scroodge/BYDMate-own/releases/latest` и выбирает первый `.apk` в
+assets последнего релиза.
 
 ---
 

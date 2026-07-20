@@ -135,7 +135,7 @@ trapezoidal regen/traction integration. The APK already sees consecutive reading
 accumulates `regen_kwh_sum` / `traction_kwh_sum` on-device with the same math (including the 180 s
 gap cap and the zero-crossing split) and ships them in the same block.
 
-#### APK side ✅ (built, tests green — not yet on the car)
+#### APK side ✅ (built, tests green — on the car since v0.4.9)
 
 - `HourlyRollupEntity` (Room table `cloud_hourly_rollup`, PK `vehicleId`+`hourStart`) — stores
   **sums** rather than means; the wire/server column is `*_avg`, but dividing once at serialization

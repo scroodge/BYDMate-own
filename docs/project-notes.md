@@ -54,7 +54,7 @@
 - Для работы над Cloud Sync сначала проверять `CloudTelemetrySender`, `CloudTelemetryPayload`, `CloudTelemetryCadence`, `TrackingService` и тесты в `app/src/test/kotlin/com/bydmate/app/data/cloud/`.
 - Для работы над parked/off remote commands сначала проверять `CommandDaemon`, `VehicleCommandPoller`, `CommandAllowlist`, `DiParsControlClient`, `tools/start_voltflow_cmd.sh` и `docs/REMOTE_COMMAND_DAEMON.md`.
 
-## 2026-05-29: Смена имени машины в APK ломает очередь и разрывает историю телеметрии
+## 2026-05-29: Исторический инцидент — смена имени машины ломала очередь
 
 ### Диагноз
 
@@ -82,9 +82,13 @@
 
 ### Статус
 
-Задокументировано. План исправления — см. ниже.
-Воркэраунд для пользователей: обновлять `cars.vehicle_alias` в VoltFlow перед сменой
-имени в APK, после смены — дождаться очистки очереди (или переустановить APK).
+**Исправлено 2026-07-14 (`7b37366`).** `flushQueue()` теперь группирует pending rows по
+`vehicle_id`, записанному в payload, и отправляет каждую группу с совпадающим
+`X-Vehicle-Id`. Старые queued samples доставляются под старым ID, новые — под новым;
+переустановка APK и ожидание очистки очереди больше не нужны.
+
+Остаётся только продуктовый эффект: серверная история до и после переименования живёт под
+разными `vehicle_id`. Перед сменой по-прежнему обновите `cars.vehicle_alias` в VoltFlow.
 
 
 
