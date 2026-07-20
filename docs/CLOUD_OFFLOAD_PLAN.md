@@ -352,10 +352,27 @@ old-APK sample still taking the original server path. All passed. Applied for re
 confirmed five cars stayed sub-minute fresh **including two on old APKs (0.4.7, 0.4.8)** — the
 redefined ingest function didn't break them.
 
-**Still to confirm:** no drive has gone through the new path yet (`client_trip` count was 0
-immediately after the apply). Check on `way` after its next drive that the trip row has
-`client_trip = true`, that `sample_count` tracks the block rather than the stored samples, and
-that `regen_energy_kwh`/`traction_energy_kwh` survive the close instead of being recomputed.
+**Confirmed on a real drive 2026-07-20** (`way`, v0.5.0, trip `5291de85`, 26.1 km, 14:13–14:40 UTC):
+
+- `client_trip = true`, and **`trip_meter_baseline_km = 0`** — the stub insert's value, never
+  touched. This is the decisive tell: had the server's extend path run,
+  `bydmate_trip_distance_from_meter` would have written a real baseline from
+  `current_trip_distance_km`. `distance_km` of 26.1 therefore came from the client's odometer
+  baselines and the server's per-sample trip arithmetic was genuinely skipped.
+- `regen_energy_kwh` 0.6461 / `traction_energy_kwh` 4.2151 survived the close, so
+  `bydmate_finalize_trip_energy` was correctly suppressed by the `client_trip` guard.
+- `track_point_count` 240 against 1280 samples — track points stayed server-side per-sample and
+  Phase 1's corridor thinning is still active.
+- **Cross-check:** `avg_consumption_kwh_100km` 13.79 (from the car's lifetime-consumption
+  baselines) versus 13.67 computed independently from the client's own regen/traction
+  integration — two separate on-device paths agreeing within ~1%.
+
+> **Do not expect `sample_count` to diverge from the stored sample rows on a closed trip.** An
+> earlier draft of this section predicted divergence by analogy with Phase 3's hourly block. That
+> was wrong: the hourly lag is an *in-flight* effect (the rollup advances per flush) and it
+> resolves once the last block lands. On a closed trip every sample in the window was folded
+> exactly once, so exact equality — 1280/1280 here — is the healthy result. Divergence is only
+> meaningful mid-drive.
 
 ## Deploy notes
 
