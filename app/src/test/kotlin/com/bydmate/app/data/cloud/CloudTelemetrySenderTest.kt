@@ -419,6 +419,70 @@ class CloudTelemetrySenderTest {
         }
     }
 
+    @Test
+    fun `live fast mode pushes status every three seconds without queueing history`() = runTest {
+        val setup = setup()
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        val baseline = setup.client.payloads.size
+        val queuedBefore = setup.queue.items.size
+
+        setup.sender.onLiveFastGranted(20)
+
+        // 12s of steady charging: without fast mode this queues at 10s and flushes at 60s,
+        // so nothing would be POSTed at all in this window.
+        for (second in 2..13) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        }
+
+        val pings = setup.client.payloads.drop(baseline)
+        assertTrue("expected ~4 pings in 12s, got ${pings.size}", pings.size >= 3)
+        pings.forEach { payload ->
+            val json = JSONObject(payload)
+            assertTrue(json.optBoolean("live_only"))
+            assertTrue(!json.has("samples"))
+        }
+        // Fast mode must not inflate stored history — only the 10s charging cadence does.
+        assertTrue(setup.queue.items.size - queuedBefore <= 2)
+    }
+
+    @Test
+    fun `live fast mode lapses on its own so a closed viewer stops the traffic`() = runTest {
+        val setup = setup()
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        setup.sender.onLiveFastGranted(10)
+
+        setup.now = BASE_TIME_MS + 5_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        val duringGrant = setup.client.payloads.size
+
+        // Well past the 10s grant: no further pings, even though nothing else changed.
+        for (second in 30..48 step 3) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        }
+        assertEquals(duringGrant, setup.client.payloads.size)
+    }
+
+    @Test
+    fun `a zero grant never enables fast mode`() = runTest {
+        val setup = setup()
+        setup.now = BASE_TIME_MS + 1_000L
+        setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        val baseline = setup.client.payloads.size
+
+        // What an older server (no live_fast_seconds key) reports every poll.
+        setup.sender.onLiveFastGranted(0)
+
+        for (second in 2..20) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.send(snapshot(charging = true, soc = 60, gear = 1))
+        }
+        assertEquals(baseline, setup.client.payloads.size)
+    }
+
     /** A queue row as it looks after being enqueued under [vehicleId]. */
     private fun queueRow(vehicleId: String, createdAt: Long) = CloudSyncQueueEntity(
         createdAt = createdAt,

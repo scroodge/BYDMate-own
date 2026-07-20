@@ -4,22 +4,35 @@ Goal: cut cloud DB write work by doing arithmetic on-device and shipping pre-agg
 instead of having the ingest RPC recompute it per sample. The APK stays a **gateway** — no
 analytics or UI move; only arithmetic.
 
-Status as of **2026-07-18**: phases 0–3 shipped. Phase 3's cloud side (`bydmate_apply_client_hourly`,
-the `client_hourly` skip guard in `bydmate_ingest_telemetry`, `ingest-payload.ts`/`route.ts` wiring)
-is now applied to prod — verified via a rolled-back dry-run transaction (cumulative replace, stale
-retry guard, skip-vs-normal sample paths all matched spec) before the real apply, then confirmed
-live ingest was unaffected across the fleet afterward. The APK side has been on the car since
-2026-07-17 16:32 (daemon auto-restarted on the new build). **Not yet independently verified**: an
-actual driving hour producing a `client_hourly`-tagged block that lands via the new RPC — the app's
-`TrackingService` (the only writer of hourly blocks; the daemon deliberately stays on the per-sample
-path) hasn't run since the cloud side went live, because the car has been parked. Confirm on the next
-drive: query `bydmate_telemetry_hourly` for an hour with `sample_count` matching the block rather than
-per-sample increments.
+Status as of **2026-07-20**: phases 0–3 shipped **and verified end-to-end in prod**. Phase 3's cloud
+side (`bydmate_apply_client_hourly`, the `client_hourly` skip guard in `bydmate_ingest_telemetry`,
+`ingest-payload.ts`/`route.ts` wiring) was applied to prod on 2026-07-18 — verified via a rolled-back
+dry-run transaction (cumulative replace, stale retry guard, skip-vs-normal sample paths all matched
+spec) before the real apply, then confirmed live ingest was unaffected across the fleet afterward.
 
-Phase 4's APK side (client-owned trip rollups) is also now built and unit-tested — **not yet
-installed on the car**, and its cloud side (`bydmate_apply_client_trip`) is not started. Same
-pattern as Phase 3's split: nothing is deployed, and the APK half is inert until the cloud half
-lands (`trip_id`/`client_trip` are unknown fields to today's ingest, ignored under `.passthrough()`).
+**Phase 3 driving-hour verification closed 2026-07-20.** The previously-open checkpoint ("no driving
+hour has gone through the new path yet") is now confirmed on car `way`:
+
+- `bydmate_live_snapshots.raw_payload->>'client_hourly'` is `true` on `way` (`mate_version` 0.4.9),
+  so the flag is being emitted and accepted by the redefined ingest function.
+- Driving hours land as blocks, not per-sample increments. Completed hours reconcile
+  (2026-07-20 06:00 UTC: rollup `sample_count` 2650 vs 2650 stored sample rows), and — the clearer
+  tell — the **in-flight** hour lags its stored rows (07:00 UTC: rollup 87 vs 96 stored) because the
+  rollup only advances when a flush attaches the block. The per-sample path would stay in lockstep.
+- Completed driving hours show small deficits against stored rows (1973/1975, 623/641, 298/302).
+  Consistent with the two-writer margin documented under Phase 3 — daemon samples increment
+  per-sample while the client's cumulative block replaces on `sample_count >=`. Bounded and benign
+  as analysed; worth re-checking if a deficit ever grows to a material share of an hour.
+- Overnight parked hours sit at ~3–5 rows/hour, confirming Phase 2's `live_only` fast path is still
+  holding (~60 rows/h → ~4/h) alongside Phase 3.
+
+Phase 4's APK side (client-owned trip rollups) is built, unit-tested, and — as of **2026-07-20** —
+**installed on the car** (shipped in v0.4.9 alongside the transition status ping; it was already in
+the working tree and rode along with that build). Its cloud side (`bydmate_apply_client_trip`) is
+still not started, so the APK half remains **inert by design**: `trip_id`/`client_trip` are unknown
+fields to today's ingest and are ignored under `.passthrough()`, while the server's own trip
+detection continues to run unmodified. Confirmed in prod — no `client_trip` value is stored. The cost
+until the cloud half lands is on-device compute and a few wire bytes per drive, not correctness.
 
 ## Measured baseline (prod, 2026-07-17, 14 cars, trailing 7 days)
 
@@ -50,8 +63,8 @@ hourly rollup upsert (4 weighted averages), trip create/extend, track-point inse
 | 0 | Baseline queries | — | ✅ shipped (local-only file) |
 | 1 | Float rounding + GPS corridor thinning | wire bytes, 55 MB track points | ✅ shipped |
 | 2 | Parked `live_only` fast path | 16 % of samples | ✅ shipped + verified in prod |
-| 3 | Client-side hourly rollups | **100 % of samples** | ✅ shipped — driving-hour end-to-end not yet observed |
-| 4 | APK-owned trips | 73 % (driving) | 🟡 APK side done; cloud side next |
+| 3 | Client-side hourly rollups | **100 % of samples** | ✅ shipped + verified in prod (driving hour confirmed 2026-07-20) |
+| 4 | APK-owned trips | 73 % (driving) | 🟡 APK side done **and on the car** (v0.4.9); cloud side next — inert until then |
 | 5 | Charging hints | ~11 % | ⬜ likely skip |
 | 6 | Retire server-side paths | — | ⬜ gated on fleet `mate_version` |
 
@@ -197,11 +210,10 @@ back — all five checks matched spec exactly. Applied for real, then confirmed 
 snapshots kept updating (5 cars, all sub-minute-fresh) — the redefined ingest function didn't break
 anything.
 
-**Still open:** no driving hour has gone through the new path yet (car parked since the cloud side
-shipped; the daemon, which is what's currently running, deliberately never sets `client_hourly`). Next
-drive should be checked: `bydmate_telemetry_hourly.sample_count` for that hour should jump in the
-block's increments rather than by 1 per sample, and `hourly_rollup_applied` in the flush response
-should be non-zero.
+**Closed 2026-07-20 — driving hours confirmed on the block path.** See the verification summary at the
+top of this document. In short: `client_hourly` is `true` on `way`'s live snapshot, the in-flight hour
+lags its stored rows (rollup advances per flush, not per sample), and completed driving hours
+reconcile within the expected two-writer margin.
 
 **Why old APKs keep working.** An old payload has no `client_hourly` key, so
 `coalesce(nullif(p_raw_payload->>'client_hourly', '')::boolean, false)` is false and step 2's branch
@@ -258,7 +270,7 @@ approach.
 Named `TripRollup*` (mirroring `HourlyRollup*`), not `TripSummary*` — `TripSummaryCloudSync.kt`
 already exists for an unrelated feature (energydata-imported trip history for ADB-less cars).
 
-#### APK side ✅ (built, tests green — not yet on the car)
+#### APK side ✅ (built, tests green — on the car since v0.4.9, 2026-07-20)
 
 - `TripRollupEntity` (Room table `cloud_trip_rollup`, PK `tripId`) — cumulative fields mirroring
   `bydmate_trips`, same cumulative-not-delta convention as Phase 3's hourly block (retry-safe: the

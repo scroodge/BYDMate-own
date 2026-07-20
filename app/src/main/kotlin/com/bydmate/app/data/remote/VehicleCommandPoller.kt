@@ -1,6 +1,7 @@
 package com.bydmate.app.data.remote
 
 import android.util.Log
+import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,6 +26,7 @@ import kotlin.math.min
 class VehicleCommandPoller @Inject constructor(
     private val controlClient: DiParsControlClient,
     private val settingsRepository: SettingsRepository,
+    private val cloudTelemetrySender: CloudTelemetrySender,
 ) {
     private val pollClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
@@ -102,6 +104,10 @@ class VehicleCommandPoller @Inject constructor(
             backoffMs = BASE_POLL_MS
             val body = response.body?.string().orEmpty()
             val json = JSONObject(body)
+            // Someone has the live view open: push status fast until this grant lapses.
+            // Read before the empty-queue return — an idle command queue is the normal case
+            // and must not skip the grant. Absent on older servers, which reads as 0 = off.
+            cloudTelemetrySender.onLiveFastGranted(json.optInt("live_fast_seconds", 0))
             val commands = json.optJSONArray("commands") ?: JSONArray()
             if (commands.length() == 0) return BASE_POLL_MS
 

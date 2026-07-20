@@ -3,6 +3,7 @@ package com.bydmate.app.data.cloud
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.TripRollupDao
@@ -56,6 +57,16 @@ class CloudTelemetrySender @Inject constructor(
      * while the queued full sample stays the durable history record.
      */
     @Volatile private var pendingStatusPingPayload: String? = null
+    /**
+     * Device time until which the live view is known to be open, from the command poll's
+     * `live_fast_seconds` grant. While in the future, status is pushed every
+     * [LIVE_FAST_PING_INTERVAL_MS] instead of waiting out the 15-60s batch flush.
+     *
+     * Expiry-based on purpose: the car forgets on its own, so a closed tab, a crashed
+     * browser or a dropped network can never strand the car in fast mode.
+     */
+    @Volatile private var liveFastUntilMs: Long = 0L
+    @Volatile private var lastFastPingMs: Long = 0L
     @Volatile private var lastChargingBelowTail: Boolean = false
     @Volatile private var lastTelemetryState: IternioIntervalPolicy.TelemetryState? = null
     /**
@@ -104,7 +115,12 @@ class CloudTelemetrySender @Inject constructor(
         if (decision.flushNow) {
             pendingFlushNow = true
         }
-        if (decision.statusPing) {
+        // A transition always pings; on top of that, while the live view is open we ping on
+        // a fixed short interval so *every* status field (SOC, charge power, gear, gun) is
+        // fresh within seconds, not just the moving/charging edges.
+        val liveFastActive = now < liveFastUntilMs
+        val fastPingDue = liveFastActive && now - lastFastPingMs >= LIVE_FAST_PING_INTERVAL_MS
+        if (decision.statusPing || fastPingDue) {
             // live_only: the server's fast path only upserts the live snapshot, so the ping
             // never duplicates a history row — the queued full sample below is the record.
             pendingStatusPingPayload = CloudTelemetryPayload.build(
@@ -114,6 +130,7 @@ class CloudTelemetrySender @Inject constructor(
                 telemetryState = telemetryState,
                 liveOnly = true,
             )
+            lastFastPingMs = now
         }
         if (decision.enqueue) {
             val loc = snapshot.location
@@ -254,7 +271,21 @@ class CloudTelemetrySender @Inject constructor(
         val payload = pendingStatusPingPayload ?: return
         pendingStatusPingPayload = null
         if (config.wifiOnly && !isWifiConnected()) return
-        client.send(config.url, config.apiKey, config.vehicleId, payload)
+        val result = client.send(config.url, config.apiKey, config.vehicleId, payload)
+        // Logged because this path is otherwise invisible: it writes no queue row and no
+        // history row, so without this line a ping that never fired looks exactly like a
+        // ping that fired and was ignored downstream.
+        Log.i(TAG, "status ping ${if (result is CloudSendResult.Success) "ok" else "failed: $result"}")
+    }
+
+    /**
+     * Grant (or extend) fast live-status mode. Called from the ~6s command poll; a grant of
+     * 0 — the default on older servers and whenever nobody is watching — simply lets the
+     * current window lapse rather than cancelling it early.
+     */
+    fun onLiveFastGranted(seconds: Int) {
+        if (seconds <= 0) return
+        liveFastUntilMs = nowProvider() + seconds * 1000L
     }
 
     suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
@@ -763,7 +794,16 @@ class CloudTelemetrySender @Inject constructor(
         // ~4x while staying within the server's <=90s live-status freshness target.
         const val CHARGING_BULK_FLUSH_INTERVAL_MS = 60_000L
         /** Parked online heartbeat for VoltFlow live status (aligned with Iternio PARKED cadence). */
+        private const val TAG = "CloudTelemetrySender"
+
         const val PARKED_CLOUD_HEARTBEAT_MS = 30_000L
+
+        /**
+         * Status push interval while the live view is open. Chosen against the PWA's ~1s
+         * Realtime debounce so an observed change lands inside the 2-5s the live view
+         * promises, without pushing at the 1Hz poll rate.
+         */
+        const val LIVE_FAST_PING_INTERVAL_MS = 3_000L
         /**
          * Disabled: an unchanged parked heartbeat must still reach the server to refresh
          * VoltFlow live status. It now goes as a live_only sample, which refreshes the live
