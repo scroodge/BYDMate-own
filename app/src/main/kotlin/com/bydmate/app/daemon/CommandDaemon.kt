@@ -54,6 +54,71 @@ object CommandDaemon {
     private const val TELEMETRY_PUSH_MS = 60_000L
 
     /**
+     * Status push interval while the live view is open, mirroring
+     * `CloudTelemetrySender.LIVE_FAST_PING_INTERVAL_MS`. The daemon needs its own copy
+     * because it builds its own payload and bypasses that class entirely — the same reason
+     * the parked `live_only` logic had to be duplicated here.
+     */
+    private const val LIVE_FAST_PUSH_MS = 3_000L
+
+    /** Device time until which the live view is known to be open; see [LIVE_FAST_PUSH_MS]. */
+    @Volatile private var liveFastUntilMs = 0L
+
+    /**
+     * Why this iteration is pushing, and what that implies. Extracted from the loop so the
+     * gating can be unit-tested — the loop itself is unreachable from tests (it blocks on
+     * DiPars, HTTP and Thread.sleep forever).
+     */
+    internal data class PushPlan(
+        val push: Boolean,
+        val dueByInterval: Boolean,
+        val gunChanged: Boolean,
+    ) {
+        /**
+         * Only a real cadence push (or a stored plug/unplug edge) advances the history
+         * rhythm; fast-mode status pushes must leave it alone or they starve it entirely.
+         */
+        val advancesIntervalTimer: Boolean get() = dueByInterval || gunChanged
+
+        /**
+         * @param unchanged parked and nothing material moved (the phase-2 idle test)
+         * @param runExpired the 15-minute forced-full rule for phantom-drain analytics
+         */
+        fun liveOnly(unchanged: Boolean, runExpired: Boolean): Boolean = when {
+            // A plug/unplug is a real event: store it, and re-baseline.
+            gunChanged -> false
+            // Status-only. The parked `unchanged` test is false while charging, so without
+            // this a watched charge would write a history row every push.
+            !dueByInterval -> true
+            else -> unchanged && !runExpired
+        }
+    }
+
+    internal fun planPush(
+        now: Long,
+        lastTelemetryPushAt: Long,
+        lastIntervalPushAt: Long,
+        liveFastUntilMs: Long,
+        gunChanged: Boolean,
+    ): PushPlan {
+        val dueByInterval = now - lastIntervalPushAt >= TELEMETRY_PUSH_MS
+        val dueByFast = now < liveFastUntilMs &&
+            now - lastTelemetryPushAt >= LIVE_FAST_PUSH_MS
+        return PushPlan(
+            push = dueByInterval || dueByFast || gunChanged,
+            dueByInterval = dueByInterval,
+            gunChanged = gunChanged,
+        )
+    }
+
+    /**
+     * The loop period is the real floor on status latency: a 3s push interval is meaningless
+     * if the thread only wakes every 6s. Measured before this clamp, pushes landed 8-9s apart.
+     */
+    internal fun loopSleepMs(waited: Long, now: Long, liveFastUntilMs: Long): Long =
+        if (now < liveFastUntilMs) minOf(waited, LIVE_FAST_PUSH_MS) else waited
+
+    /**
      * Longest a parked `live_only` run may last before a full sample is forced. Car-off is the
      * daemon's whole reason to exist, so without this an overnight park with flat SOC would store
      * no parked rows at all and leave a single >6h gap — which `bydmate_phantom_drain_daily`
@@ -105,6 +170,13 @@ object CommandDaemon {
         var latestData: DiParsData? = null
         var latestDataAt = 0L
         var lastTelemetryPushAt = 0L
+        // Separate from [lastTelemetryPushAt] on purpose: fast-mode status pushes must not
+        // keep resetting the history rhythm, or a car watched for an hour would store no
+        // rows at all. This timer alone gates the normal TELEMETRY_PUSH_MS cadence.
+        var lastIntervalPushAt = 0L
+        // Last gun state the loop observed, for plug/unplug edge detection. Tracked every
+        // iteration (even when the push is skipped) so a stale edge cannot fire later.
+        var lastSeenGun: Int? = null
         // Baseline for the parked live_only decision, mirroring CloudTelemetrySender.decide().
         // Only a *full* push refreshes these, so the comparison stays against the last stored row.
         var lastFullPushAt = 0L
@@ -134,7 +206,22 @@ object CommandDaemon {
                     //     The daemon exists only to cover the window when BYD force-stops the app.
                     //  2. Driving — belt-and-suspenders: never push a reduced-payload gear=1
                     //     heartbeat mid-drive (would split the live trip).
-                    if (now - lastTelemetryPushAt >= TELEMETRY_PUSH_MS) {
+                    // Three reasons to push, in priority order:
+                    //  * the normal history cadence,
+                    //  * a plug/unplug edge — the event the owner is waiting to see, and the
+                    //    reason plugging in with the car off used to take a minute,
+                    //  * the live view being open (fast mode), which is status-only.
+                    val gunNow = latestData?.chargeGunState
+                    val gunChanged = lastSeenGun != null && gunNow != null && gunNow != lastSeenGun
+                    if (gunNow != null) lastSeenGun = gunNow
+                    val plan = planPush(
+                        now = now,
+                        lastTelemetryPushAt = lastTelemetryPushAt,
+                        lastIntervalPushAt = lastIntervalPushAt,
+                        liveFastUntilMs = liveFastUntilMs,
+                        gunChanged = gunChanged,
+                    )
+                    if (plan.push) {
                         latestData?.let { data ->
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
                             when {
@@ -159,7 +246,7 @@ object CommandDaemon {
                                             abs(v12 - b12) < LIVE_ONLY_12V_EPSILON_V
                                     val runExpired = lastFullPushAt != 0L &&
                                         now - lastFullPushAt >= LIVE_ONLY_MAX_RUN_MS
-                                    val liveOnly = unchanged && !runExpired
+                                    val liveOnly = plan.liveOnly(unchanged, runExpired)
                                     if (!liveOnly) {
                                         baseSoc = data.soc
                                         baseGun = data.chargeGunState
@@ -172,6 +259,7 @@ object CommandDaemon {
                             }
                         }
                         lastTelemetryPushAt = now
+                        if (plan.advancesIntervalTimer) lastIntervalPushAt = now
                     }
 
                     val result = pollOnce(ok, conf, control, latestData)
@@ -182,7 +270,10 @@ object CommandDaemon {
                     backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
                     backoffMs
                 }
-                Thread.sleep(waited)
+                // While the live view is open, wake at the push interval instead of the poll
+                // interval. This also runs the command poll at that rate, which is the
+                // accepted cost of a short, viewer-gated window. See [loopSleepMs].
+                Thread.sleep(loopSleepMs(waited, System.currentTimeMillis(), liveFastUntilMs))
             }
         }
     }
@@ -209,7 +300,15 @@ object CommandDaemon {
                 return false
             }
             val body = response.body?.string().orEmpty()
-            val commands = JSONObject(body).optJSONArray("commands") ?: JSONArray()
+            val json = JSONObject(body)
+            // Someone has the live view open. Read before the empty-queue return — an idle
+            // command queue is the normal case and must not skip the grant. Absent on older
+            // servers, which reads as 0 and leaves the current window to lapse.
+            val grantSeconds = json.optInt("live_fast_seconds", 0)
+            if (grantSeconds > 0) {
+                liveFastUntilMs = System.currentTimeMillis() + grantSeconds * 1000L
+            }
+            val commands = json.optJSONArray("commands") ?: JSONArray()
             if (commands.length() == 0) return true
 
             log("received ${commands.length()} command(s)")
