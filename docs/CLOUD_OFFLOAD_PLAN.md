@@ -26,13 +26,18 @@ hour has gone through the new path yet") is now confirmed on car `way`:
 - Overnight parked hours sit at ~3–5 rows/hour, confirming Phase 2's `live_only` fast path is still
   holding (~60 rows/h → ~4/h) alongside Phase 3.
 
-Phase 4's APK side (client-owned trip rollups) is built, unit-tested, and — as of **2026-07-20** —
-**installed on the car** (shipped in v0.4.9 alongside the transition status ping; it was already in
-the working tree and rode along with that build). Its cloud side (`bydmate_apply_client_trip`) is
-still not started, so the APK half remains **inert by design**: `trip_id`/`client_trip` are unknown
-fields to today's ingest and are ignored under `.passthrough()`, while the server's own trip
-detection continues to run unmodified. Confirmed in prod — no `client_trip` value is stored. The cost
-until the cloud half lands is on-device compute and a few wire bytes per drive, not correctness.
+> **Version note.** The APK half of Phases 3 and 4 has been running on the car since **0.4.9**
+> (`way` currently reports `mate_version` 0.4.10). Those are internal builds; the public release
+> carrying this work is **v0.5.0** (`versionCode` 336). Where this document says "on the car since
+> 0.4.9" it means exactly that — do not read it as "not in 0.5.0".
+
+**Phase 4 closed 2026-07-20.** Its APK side shipped in the 0.4.9 internal build (released as
+v0.5.0) and sat inert for two days; the cloud
+side (`bydmate_apply_client_trip`, the `client_trip` branch in `bydmate_ingest_telemetry`, the
+`bydmate_trips.client_trip` marker, and the `ingest-payload.ts`/`route.ts` wiring) was applied to
+prod on 2026-07-20 — verified via a rolled-back dry-run transaction covering all eight cases,
+then confirmed live ingest was unaffected across the fleet including two cars on old APKs. The
+new path has **not yet carried a real drive**; see "Still to confirm" under Phase 4.
 
 ## Measured baseline (prod, 2026-07-17, 14 cars, trailing 7 days)
 
@@ -64,7 +69,7 @@ hourly rollup upsert (4 weighted averages), trip create/extend, track-point inse
 | 1 | Float rounding + GPS corridor thinning | wire bytes, 55 MB track points | ✅ shipped |
 | 2 | Parked `live_only` fast path | 16 % of samples | ✅ shipped + verified in prod |
 | 3 | Client-side hourly rollups | **100 % of samples** | ✅ shipped + verified in prod (driving hour confirmed 2026-07-20) |
-| 4 | APK-owned trips | 73 % (driving) | 🟡 APK side done **and on the car** (v0.4.9); cloud side next — inert until then |
+| 4 | APK-owned trips | 73 % (driving) | ✅ shipped — APK side on the car since 0.4.9 (released as v0.5.0), cloud side applied to prod 2026-07-20 |
 | 5 | Charging hints | ~11 % | ⬜ likely skip |
 | 6 | Retire server-side paths | — | ⬜ gated on fleet `mate_version` |
 
@@ -135,7 +140,7 @@ trapezoidal regen/traction integration. The APK already sees consecutive reading
 accumulates `regen_kwh_sum` / `traction_kwh_sum` on-device with the same math (including the 180 s
 gap cap and the zero-crossing split) and ships them in the same block.
 
-#### APK side ✅ (built, tests green — on the car since v0.4.9)
+#### APK side ✅ (built, tests green — on the car since 0.4.9, released as v0.5.0)
 
 - `HourlyRollupEntity` (Room table `cloud_hourly_rollup`, PK `vehicleId`+`hourStart`) — stores
   **sums** rather than means; the wire/server column is `*_avg`, but dividing once at serialization
@@ -270,7 +275,7 @@ approach.
 Named `TripRollup*` (mirroring `HourlyRollup*`), not `TripSummary*` — `TripSummaryCloudSync.kt`
 already exists for an unrelated feature (energydata-imported trip history for ADB-less cars).
 
-#### APK side ✅ (built, tests green — on the car since v0.4.9, 2026-07-20)
+#### APK side ✅ (built, tests green — on the car since 0.4.9, released as v0.5.0)
 
 - `TripRollupEntity` (Room table `cloud_trip_rollup`, PK `tripId`) — cumulative fields mirroring
   `bydmate_trips`, same cumulative-not-delta convention as Phase 3's hourly block (retry-safe: the
@@ -299,11 +304,58 @@ already exists for an unrelated feature (energydata-imported trip history for AD
   restart within that window instead resumes the same trip via the lazy-hydration path above.
 - Room 15 → 16 (`MIGRATION_15_16`).
 
-**Deliberately out of scope this pass:** the cloud RPC (`bydmate_apply_client_trip`, mirroring
-`bydmate_apply_client_hourly`) and `route.ts`/`ingest-payload.ts` wiring — same APK-first/cloud-second
-split as Phase 3. Track-point ownership also stays server-side per-sample for now (unaffected,
-cheap, idempotent); moving it client-side is an open question for the cloud-side session, not
-decided here.
+#### Cloud side ✅ (applied to prod 2026-07-20)
+
+Implemented in `EvAcChargeTimer/supabase/migrations/20260720140000_bydmate_client_trip_rollup.sql`.
+Track-point ownership stayed server-side per-sample as flagged (unaffected, cheap, idempotent).
+
+1. `bydmate_trips.client_trip` — the marker that suppresses `bydmate_finalize_trip_energy` on
+   close. **This turned out to be the load-bearing part.** That function re-integrates
+   regen/traction by scanning `bydmate_telemetry_samples` across the whole trip window, so for a
+   client-owned trip it both wasted the scan and overwrote the client's own figures with a
+   second estimate that the next cumulative block would flip straight back.
+2. `bydmate_ingest_telemetry` (9-arg) gained a `v_client_trip` branch: stub the trip row, write
+   the track point, skip the create/extend, weighted means and `trip_meter_baseline_km`
+   arithmetic. Placed **after** the charging/gear-P early returns so the server's close triggers
+   stay authoritative.
+3. `bydmate_apply_client_trip` — cumulative replace guarded by
+   `excluded.sample_count >= existing.sample_count`, tenant-scoped on `user_id`/`vehicle_id`.
+4. `ingest-payload.ts` (`client_trip`, `trip_id`, `tripBlockSchema`, `trips[]`) and `route.ts`
+   (best-effort apply after samples, reported as `trip_rollup_applied`).
+
+**Four corrections found while implementing:**
+
+1. **The RPC must be UPDATE-only, not an upsert.** Row creation belongs to the ingest stub.
+   `bydmate_discard_trip_if_junk` *deletes* the row on close, so an upserting block arriving
+   after a discard would resurrect the junk trip as a newly-open row and re-collide with
+   `bydmate_trips_open_unique`. A block whose row is gone is now silently dropped — the correct
+   outcome: no samples, no trip.
+2. **Closing stray open trips is mandatory, not defensive.** `bydmate_trips_open_unique` is a
+   **partial** index (`where ended_at is null`), so `on conflict (id) do nothing` does not absorb
+   a violation from a *different* open trip — the stub insert would raise and fail the whole
+   ingest with a 500.
+3. **The 5-minute gap close does not apply to client-owned trips.** The client owns that
+   lifecycle (gear-P/charging markers plus its 20-minute next-boot finalizer), and a server-side
+   gap close would strand a still-open client trip as closed while its blocks kept arriving. The
+   gap close remains the fallback for every server-owned trip, including via marker #2 — the
+   daemon's untagged post-car-off samples, which still run the unmodified close path.
+4. **The 9-arg function is not the entrypoint.** Both `route.ts` and
+   `bydmate_ingest_telemetry_batch` call the **10-arg** overload (`p_diplus`, from
+   `20260716100000`), which handles `live_only` and otherwise delegates to the 9-arg one with
+   `raw_payload || {diplus}`. Only the 9-arg one needed changing — same as Phase 3 — but this is
+   worth knowing before hunting for why a flag "isn't firing".
+
+**Verification before the real apply:** ran the migration plus eight assertions inside a
+transaction against prod and rolled back — stub creation, stray close, block apply, stale-block
+rejection, equal-count idempotency, no junk-trip resurrection, no reopen-after-close, and an
+old-APK sample still taking the original server path. All passed. Applied for real, then
+confirmed five cars stayed sub-minute fresh **including two on old APKs (0.4.7, 0.4.8)** — the
+redefined ingest function didn't break them.
+
+**Still to confirm:** no drive has gone through the new path yet (`client_trip` count was 0
+immediately after the apply). Check on `way` after its next drive that the trip row has
+`client_trip = true`, that `sample_count` tracks the block rather than the stored samples, and
+that `regen_energy_kwh`/`traction_energy_kwh` survive the close instead of being recomputed.
 
 ## Deploy notes
 
