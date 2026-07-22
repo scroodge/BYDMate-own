@@ -161,6 +161,7 @@ fun GatewayScreen(
             vehicleId = state.cloudSyncVehicleId,
             wifiOnly = state.cloudSyncWifiOnly,
             omitGps = state.cloudSyncOmitGps,
+            keepWifiAwake = state.cloudSyncKeepWifiAwake,
             status = state.cloudSyncStatus,
             onEnabled = viewModel::toggleCloudSync,
             onUrl = viewModel::updateCloudSyncUrl,
@@ -171,6 +172,7 @@ fun GatewayScreen(
             onVehicleId = viewModel::updateCloudSyncVehicleId,
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
+            onKeepWifiAwake = viewModel::toggleCloudSyncKeepWifiAwake,
             onSave = viewModel::saveCloudSyncSettings,
             onTest = viewModel::sendCloudTestPayload,
             diagnosticLog = state.diagnosticLog,
@@ -516,6 +518,7 @@ private fun CloudSyncCard(
     vehicleId: String,
     wifiOnly: Boolean,
     omitGps: Boolean,
+    keepWifiAwake: Boolean,
     status: String?,
     onEnabled: (Boolean) -> Unit,
     onUrl: (String) -> Unit,
@@ -526,6 +529,7 @@ private fun CloudSyncCard(
     onVehicleId: (String) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
     onOmitGps: (Boolean) -> Unit,
+    onKeepWifiAwake: (Boolean) -> Unit,
     onSave: () -> Unit,
     onTest: () -> Unit,
     diagnosticLog: String?,
@@ -610,6 +614,17 @@ private fun CloudSyncCard(
         ) {
             Text(strings.gpsPrivacy, color = TextPrimary, fontSize = 14.sp)
             Switch(checked = omitGps, onCheckedChange = onOmitGps, colors = bydSwitchColors())
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(strings.keepWifiAwake, color = TextPrimary, fontSize = 14.sp)
+                Text(strings.keepWifiAwakeHint, color = TextSecondary, fontSize = 11.sp)
+            }
+            Switch(checked = keepWifiAwake, onCheckedChange = onKeepWifiAwake, colors = bydSwitchColors())
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
@@ -796,6 +811,8 @@ private data class GatewayStrings(
     val carNameRequired: String,
     val wifiOnly: String,
     val gpsPrivacy: String,
+    val keepWifiAwake: String,
+    val keepWifiAwakeHint: String,
     val save: String,
     val sendTest: String,
     val storageDiag: String,
@@ -862,6 +879,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             carNameRequired = "Без имени авто синхронизация не запустится. Например: Tang, Seal, Leopard 3.",
             wifiOnly = "Только Wi-Fi",
             gpsPrivacy = "Скрывать GPS",
+            keepWifiAwake = "Держать Wi-Fi на стоянке",
+            keepWifiAwakeHint = "Экспериментально: демон переподключает Wi-Fi каждые ~60 с, чтобы телеметрия не терялась на стоянке. Нужен on-device ADB.",
             save = "Сохранить",
             sendTest = "Отправить тест",
             storageDiag = "Диагностика BYD",
@@ -925,6 +944,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             carNameRequired = "Without a car name sync won't start. For example: Tang, Seal, Leopard 3.",
             wifiOnly = "Wi-Fi only",
             gpsPrivacy = "Hide GPS",
+            keepWifiAwake = "Keep Wi-Fi awake while parked",
+            keepWifiAwakeHint = "Experimental: the daemon reconnects Wi-Fi every ~60s so telemetry doesn't drop while parked. Requires on-device ADB.",
             save = "Save",
             sendTest = "Send test",
             storageDiag = "BYD storage check",
@@ -988,6 +1009,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             carNameRequired = "Без імя аўто сінхранізацыя не запусціцца. Напрыклад: Tang, Seal, Leopard 3.",
             wifiOnly = "Толькі Wi-Fi",
             gpsPrivacy = "Хаваць GPS",
+            keepWifiAwake = "Трымаць Wi-Fi на стаянцы",
+            keepWifiAwakeHint = "Эксперыментальна: дэман перападключае Wi-Fi кожныя ~60 с, каб тэлеметрыя не гублялася на стаянцы. Патрэбны on-device ADB.",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
             storageDiag = "Дыягностыка BYD",
