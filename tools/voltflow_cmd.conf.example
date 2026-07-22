@@ -6,3 +6,8 @@
 url=https://voltflow.life/api/bydmate/telemetry
 api_key=REPLACE_WITH_CLOUD_SYNC_API_KEY
 vehicle_id=REPLACE_WITH_VEHICLE_ID
+
+# keep_wifi_awake: 1 = daemon runs `svc wifi enable` every ~60s (automates DiLink's own
+# "Keep network on while parked"), 0 or absent = off. Mirrors in-app Settings toggle
+# "Keep Wi-Fi awake while parked" (KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE) — experimental, opt-in.
+keep_wifi_awake=0

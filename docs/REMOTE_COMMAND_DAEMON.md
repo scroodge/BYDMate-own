@@ -47,11 +47,31 @@ alive it already streams telemetry (1 Hz driving / 10 s charging bulk / 1 s char
 parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetry:
 
 - `TrackingService.writeAppAliveHeartbeat()` writes epoch-millis to
-  `<externalFilesDir>/voltflow_mate_heartbeat` on every cloud enqueue.
-- `CommandDaemon.isAppAlive()` reads that file; if it is fresher than `APP_ALIVE_TTL_MS`
-  (120 s) the daemon **skips** its telemetry push (`"telemetry push skipped (app alive …)"`).
+  `<externalFilesDir>/voltflow_mate_heartbeat`. This lands at **1 Hz** — the poll loop calls it
+  after every successful DiPars read, not once per flush — so the file's age is a fine-grained
+  "is the app's loop still turning" signal.
+- `CommandDaemon.shouldDeferToApp()` grades that age by what the push would actually write
+  (`"telemetry push skipped (app alive …)"`, throttled to one line per minute):
+
+  | Push kind | Threshold | Why |
+  | --- | --- | --- |
+  | history-writing (cadence, gun edge, forced-full) | `APP_ALIVE_FULL_TTL_MS` = **20 s** | a false "app is dead" stores a duplicate sample, so it keeps margin for a GC pause |
+  | status-only (`live_only`) | `APP_ALIVE_LIVE_TTL_MS` = **5 s** | writes no history row at all — worst case is a few seconds of the daemon's reduced snapshot |
+
 - A second guard skips the push while `classifyFromDiPars == DRIVING`, belt-and-suspenders
-  against a reduced-payload `gear=1` heartbeat splitting a live trip.
+  against a reduced-payload `gear=1` heartbeat splitting a live trip. This one is **not** graded
+  by `live_only`: the daemon has no GPS and stamps `device_time = now`, so it would beat the
+  app's batched samples through the server's stale-guard and blank the live map mid-drive.
+- `TrackingService.onDestroy()` deletes the beacon so a graceful stop hands over at once. A
+  power-off force-stop never runs `onDestroy`, which is why the thresholds above still matter.
+
+**Operational impact (2026-07-22).** These thresholds replaced a single flat 120 s TTL, and the
+push timers now advance only when a push actually went out — previously a *skipped* push still
+reset the 60 s history cadence, so after the beacon finally aged out the daemon had just
+restarted its own clock. Together those two produced a measured **124-236 s** of stale live
+status after every park (14 prod transitions on `way`, 2026-07-21/22). Expected now: **~13 s**
+with the live view open, **~31 s** without. Because the cadence timer is no longer reset by
+skips, the first push after handover is a **full** sample — a real parked history row at trip end.
 
 ### Fast D → P → power-off handoff
 
@@ -94,7 +114,7 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 | `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
 | `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |
-| `voltflow_mate_heartbeat` | `<externalFilesDir>/` | app-alive beacon (epoch millis); daemon reads it to suppress its telemetry push while the app is sending |
+| `voltflow_mate_heartbeat` | `<externalFilesDir>/` | app-alive beacon (epoch millis, rewritten at 1 Hz); daemon reads its age to suppress its telemetry push while the app is sending — 20 s for history-writing pushes, 5 s for `live_only` status |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
 
@@ -130,6 +150,54 @@ By default, the BYD head unit drops WiFi ~9 minutes after the car is switched of
 Enable **Settings → Connectivity → "Keep network on while parked"** (or equivalent) on the head
 unit so the WiFi connection to your phone hotspot (gateway `192.168.43.1`) stays up indefinitely.
 Without this, the daemon survives but loses cloud connectivity after ~9 min.
+
+### Automated keep-alive (experimental, opt-in)
+
+Instead of relying on the user finding that DiLink toggle, `CommandDaemon` can re-assert WiFi
+itself: **Settings → Cloud Sync → "Keep Wi-Fi awake while parked"**
+(`SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE`). When on, `TrackingService.exportDaemonConfig()`
+writes `keep_wifi_awake=1` to `voltflow_cmd.conf`, and the daemon's main loop runs
+`svc wifi enable` every ~60s (`CommandDaemon.shouldRefreshWifiKeepalive`) regardless of DiLink's
+own connectivity setting — same trick competitor BYD EV Pro's `ProcessExemptionController` uses
+(see [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) section 4). Idempotent and cheap: a no-op
+if WiFi is already on, and no ADB round-trip since the daemon already runs as shell uid. Off by
+default — needs real-car testing before it becomes the recommended path over the manual DiLink
+toggle. Verify with:
+
+```sh
+adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "wifi keepalive"
+```
+
+### Autoservice parity check (experimental, always-on when the daemon runs)
+
+Every telemetry push, the daemon now also reads SOC and engine power directly from the
+`autoservice` binder (bypassing DiPlus entirely for these two fields — same fids as
+[`FidRegistry`](../app/src/main/kotlin/com/bydmate/app/data/autoservice/FidRegistry.kt)) and logs
+them next to the DiPlus-sourced values, purely for comparison — nothing is sent to the cloud from
+this path yet:
+
+```sh
+adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "autoservice check"
+# expect: autoservice check: soc=79.0 (diplus=79) power_kw=-4 (diplus=-4)
+```
+
+**2026-07-22 update:** the daemon also logs a second parity line covering doors, trunk, hood, and
+tire pressure — 16 fids total (including 12 window/sunroof/sunshade fids in `FidRegistry` not yet
+wired into a log line), sourced from the real BYD vendor SDK
+(`android.hardware.bydauto.BYDAutoFeatureIds`, decompiled from this car's own
+`/system/framework/framework.jar`) rather than guessed magic numbers, and live-validated 16/16
+against di+ the same day (see [`FidRegistry.kt`](../app/src/main/kotlin/com/bydmate/app/data/autoservice/FidRegistry.kt)
+for the architecture-conditional caveat — 12 of the 16 values only apply to CANFD-platform BYDs):
+
+```sh
+adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "autoservice check2"
+# expect: autoservice check2: doors/trunk/hood(fl/fr/rl/rr/trunk/hood)=0/0/0/0/0/0 (diplus=0/0/0/0/0/0) tires_kpa(fl/fr/rl/rr)=250/247/245/247 (diplus=250/247/245/247)
+```
+
+This is the evidence-gathering step for backlog **B-07** (dropping the di+ dependency for reads)
+— see [`docs/BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано). Once enough real-drive/charge/park
+log samples confirm parity, the DiPars-sourced fields can be replaced outright instead of just
+cross-checked.
 
 ## Prerequisites (one time)
 
@@ -275,7 +343,9 @@ Interpretation:
 
 - `voltflow_cmd_daemon` present + fresh log lines = daemon is alive.
 - Fresh app heartbeat + log line `telemetry push skipped (app alive ...)` = daemon is correctly
-  staying quiet because VoltFlow Mate is sending live telemetry.
+  staying quiet because VoltFlow Mate is sending live telemetry. That line is throttled to one
+  per minute per reason, so a single occurrence covers a whole quiet stretch — check the
+  heartbeat's own age, not the log frequency, to judge whether the app is still alive.
 - No `voltflow_cmd_daemon`, stale watchdog PID, and old log timestamp = sleep/offline coverage is
   broken until the app wakes and relaunches it.
 - Fresh server telemetry with `is_charging=true`, `charge_power_kw > 0`, and `charge_gun_state=2`

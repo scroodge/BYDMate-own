@@ -121,4 +121,82 @@ class CommandDaemonTest {
         // A slow iteration never sleeps negative — it just runs the next one immediately.
         assertEquals(0L, CommandDaemon.pacedSleepMs(3_000L, 9_000L))
     }
+
+    // --- app-alive gate ---
+    //
+    // The beacon is written at 1 Hz (TrackingService's poll loop writes it after every
+    // enqueue), so its age is a fine-grained "is the app's loop still turning" signal.
+    // A single flat 120 s TTL over it is what produced the ~2.5-3 min of stale status the
+    // owner saw after every park, measured at 124-236 s across 14 prod transitions.
+    //
+    // The park transition itself classifies PARKED, not DRIVING — gear=1, and the
+    // reduced-payload gear/speed=null case, are both pinned in IternioIntervalPolicyTest —
+    // so the DRIVING guard is not involved and deliberately keeps its unconditional skip.
+
+    @Test
+    fun `a status-only push resumes seconds after the app dies, a stored one waits`() {
+        // The blackout, in one assertion. The head unit force-stops the app, the beacon
+        // freezes, and 5 s later the daemon may refresh live state — it writes no history
+        // row, so there is nothing to duplicate. A full sample still holds off.
+        val age = 5_001L
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = age, liveOnly = true))
+        assertTrue(CommandDaemon.shouldDeferToApp(beaconAgeMs = age, liveOnly = false))
+    }
+
+    @Test
+    fun `a healthy one hertz beacon silences both kinds of push`() {
+        // The no-dual-writer invariant. While the app is genuinely alive the daemon must
+        // stay off the wire entirely: its payload has no GPS and none of the range/trip
+        // fields, and its device_time always beats the app's batched samples, so any push
+        // here would blank those out of the live snapshot.
+        assertTrue(CommandDaemon.shouldDeferToApp(beaconAgeMs = 1_000L, liveOnly = true))
+        assertTrue(CommandDaemon.shouldDeferToApp(beaconAgeMs = 1_000L, liveOnly = false))
+    }
+
+    @Test
+    fun `a long dead app stops holding back stored samples too`() {
+        // 20 missed beacons: enough margin for a GC pause, short enough that the parked
+        // history row lands promptly instead of two minutes later.
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = 20_001L, liveOnly = false))
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = 20_001L, liveOnly = true))
+    }
+
+    @Test
+    fun `no beacon at all is not an excuse to stay silent`() {
+        // Absent or unparseable file — an app that has never written one is not sending.
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = null, liveOnly = true))
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = null, liveOnly = false))
+    }
+
+    @Test
+    fun `a future-dated beacon does not read as alive`() {
+        // Clock skew across the app/daemon boundary must not strand the car silent; the
+        // range check is deliberately `in 0..ttl`, not `<= ttl`.
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = -1_000L, liveOnly = true))
+        assertFalse(CommandDaemon.shouldDeferToApp(beaconAgeMs = -1_000L, liveOnly = false))
+    }
+
+    @Test
+    fun `the status-only threshold is always the shorter of the two`() {
+        // Ordering invariant: swapping these would let a history-writing push go out sooner
+        // than a status-only one, which is exactly backwards — the stored row is the one
+        // that can be duplicated.
+        assertTrue(CommandDaemon.appAliveTtlMs(liveOnly = true) < CommandDaemon.appAliveTtlMs(liveOnly = false))
+    }
+
+    @Test
+    fun `wifi keepalive never fires when the user has not opted in`() {
+        assertFalse(CommandDaemon.shouldRefreshWifiKeepalive(now = t0 + 120_000L, lastAttemptAt = 0L, enabled = false))
+    }
+
+    @Test
+    fun `wifi keepalive fires once the interval elapses, then waits again`() {
+        assertFalse(
+            "too soon",
+            CommandDaemon.shouldRefreshWifiKeepalive(now = t0 + 30_000L, lastAttemptAt = t0, enabled = true),
+        )
+        assertTrue(
+            CommandDaemon.shouldRefreshWifiKeepalive(now = t0 + 60_000L, lastAttemptAt = t0, enabled = true),
+        )
+    }
 }

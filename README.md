@@ -167,6 +167,7 @@ assets последнего релиза.
 |------|------------|
 | [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md) | HTTPS ingest, заголовки, cadence, GPS privacy, **6-значное подключение** |
 | [docs/REMOTE_COMMAND_DAEMON.md](docs/REMOTE_COMMAND_DAEMON.md) | Удалённые команды при **выключенной машине**: демон выживания, установка, обновление, автозапуск |
+| [docs/EV_PRO_APP_ANALYSIS.md](docs/EV_PRO_APP_ANALYSIS.md) | Реверс-инжиниринг конкурента (BYD EV Pro): прямой доступ к `autoservice` в обход di+, watchdog вместо демон-хака |
 | [docs/project-notes.md](docs/project-notes.md) | Заметки разработчика (vehicle_id, VoltFlow, Cloud Sync) |
 | VoltFlow `supabase/BYDMATE_APK_API.md` | Серверный контракт: telemetry, `link-code`, `redeem` |
 | VoltFlow `supabase/TELEMETRY.md` | Схема БД и pairing на стороне облака |

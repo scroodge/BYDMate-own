@@ -39,6 +39,20 @@ engineering notes in [`project-notes.md`](project-notes.md).
 
 ---
 
+## Кандидаты (не запланировано)
+
+Из анализа конкурента [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) (BYD EV Pro,
+2026-07-21) — не приоритизировано, решение за владельцем.
+
+| ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
+|----|--------|------|-----|--------|---------------------|
+| B-07 | Прямой доступ к `autoservice` вместо di+ HTTP | app / daemon | L | `in-progress` | ✅ 2026-07-21: `CommandDaemon` логирует SOC + engine power через `autoservice` рядом со значениями di+ (`"autoservice check: ..."`). ✅ 2026-07-22: декомпилирован `/system/framework/framework.jar` с реальной машины → найден полный вендорский SDK `android.hardware.bydauto.*` (`BYDAutoFeatureIds`); 16 новых fid (двери FL/FR/RL/RR, багажник, капот, стёкла FL/FR/RL/RR, люк, шторка, давление в шинах FL/FR/RL/RR) добавлены в `FidRegistry` и **живьём сверены с di+ 16/16 = 100% match** (включая нетривиальные значения: давление 245-250 кПа, шторка=100%) на этой машине (Leopard 3, DiLink 3.0, `sys.car.protocol=CANFD`). Двери и шины уже логируются вторым чеком (`"autoservice check2: ..."`) в `voltflow_cmd_daemon.log`. **Важно:** 12 из 16 значений архитектурно-зависимы (`isCanFD`/`isToyota`/default-ветки в `BYDAutoFeatureIds`) — валидны только для CANFD-платформы, см. предупреждение в `FidRegistry.kt`. Осталось: собрать сэмплы за более долгий период (drive/charge, не только парковка), затем заменить `diplus.*` поля в пейлоаде на autoservice-источник. |
+| B-08 | Разделить `CommandDaemon` на I/O-демон + watchdog | daemon | M | `todo` [verify] | Отдельный процесс только поднимает/следит (аналог PEC: respawn app+daemon каждые ~30 c, keep-alive WiFi/BT), демон делает только poll/ack/телеметрию — независимые перезапуски, тест на оба процесса отдельно. Первый шаг (WiFi keep-alive) сделан как B-10, отдельного watchdog-процесса пока нет. |
+| B-09 | FID-таблица как server-pushed JSON, не хардкод в APK | app / cloud | M | `todo` [verify] | Новый сигнал/модель авто добавляется конфигом на сервере, без релиза APK; старые установки без конфига продолжают работать на текущих хардкод-значениях (fallback). |
+| B-10 | Автоматический keep-alive WiFi на стоянке | daemon | S | `in-progress` | ✅ 2026-07-21: тумблер **Настройки → Cloud Sync → «Keep Wi-Fi awake while parked»** → `keep_wifi_awake=1` в `voltflow_cmd.conf` → демон каждые ~60 с шлёт `svc wifi enable` (`CommandDaemon.shouldRefreshWifiKeepalive`, тесты зелёные). Выключено по умолчанию. Осталось: включить и проверить на реальной машине, что стоянка >9 мин не теряет телеметрию без ручного тумблера DiLink «Keep network on while parked». |
+
+---
+
 ## Техдолг / риски (перенесены из ROADMAP)
 
 - ⚠️ **Packaging-gotcha** — asset и `tools/` копии лаунчера обязаны совпадать → **B-05**.

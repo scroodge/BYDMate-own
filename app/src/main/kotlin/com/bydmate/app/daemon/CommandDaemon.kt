@@ -54,6 +54,15 @@ object CommandDaemon {
     private const val TELEMETRY_PUSH_MS = 60_000L
 
     /**
+     * How often to re-assert WiFi via `svc wifi enable` when [Conf.keepWifiAwake] is set.
+     * DiLink drops WiFi ~9 minutes after park unless "Keep network on while parked" is enabled
+     * in head-unit settings; this automates that from the daemon (shell uid, no ADB needed —
+     * see docs/EV_PRO_APP_ANALYSIS.md section 4) instead of relying on the user finding that
+     * toggle. 60s keeps well under the 9-minute drop window with negligible overhead.
+     */
+    private const val WIFI_KEEPALIVE_INTERVAL_MS = 60_000L
+
+    /**
      * Status push interval while the live view is open, mirroring
      * `CloudTelemetrySender.LIVE_FAST_PING_INTERVAL_MS`. The daemon needs its own copy
      * because it builds its own payload and bypasses that class entirely — the same reason
@@ -129,6 +138,14 @@ object CommandDaemon {
         if (now < liveFastUntilMs) LIVE_FAST_PUSH_MS else BASE_POLL_MS
 
     /**
+     * Gates the `svc wifi enable` tick: only when the user opted in ([enabled], mirrors
+     * [Conf.keepWifiAwake]) and at least [WIFI_KEEPALIVE_INTERVAL_MS] has passed since the last
+     * attempt. Extracted as a pure function so it's testable without a real shell exec.
+     */
+    internal fun shouldRefreshWifiKeepalive(now: Long, lastAttemptAt: Long, enabled: Boolean): Boolean =
+        enabled && now - lastAttemptAt >= WIFI_KEEPALIVE_INTERVAL_MS
+
+    /**
      * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
      * interval + work — measured 8-9s for a 3s interval once DiPars, the telemetry POST and
      * the command poll were all counted. Never returns negative (a slow iteration simply
@@ -149,19 +166,77 @@ object CommandDaemon {
     private const val LIVE_ONLY_12V_EPSILON_V = 0.3
 
     /**
-     * App-liveness beacon written by [com.bydmate.app.service.TrackingService.writeAppAliveHeartbeat]
-     * on every cloud enqueue. While this file's epoch is fresher than [APP_ALIVE_TTL_MS], the app
-     * is actively sending 1 Hz/30 s telemetry — the daemon must NOT push its own 60 s heartbeat
-     * (it would duplicate samples and risk phantom trips). Shell uid can read external-files dir.
+     * App-liveness beacon written by [com.bydmate.app.service.TrackingService.writeAppAliveHeartbeat].
+     * While it is fresh the app is actively sending and the daemon must not duplicate it
+     * (that would store duplicate samples and risk phantom trips). Shell uid can read the
+     * external-files dir.
+     *
+     * The beacon is written at **1 Hz**: `TrackingService`'s poll loop calls
+     * `maybeSendCloudTelemetry` on every successful DiPars read (`POLL_INTERVAL_MS = 1000`),
+     * and the write happens unconditionally after `enqueue`. Its age is therefore a
+     * fine-grained "is the app's loop still turning" signal, not a coarse per-flush one —
+     * which is what lets the thresholds below be seconds rather than minutes.
      */
     private const val APP_HEARTBEAT_FILE =
         "/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_mate_heartbeat"
-    private const val APP_ALIVE_TTL_MS = 120_000L
+
+    /**
+     * Beacon age past which a *history-writing* push may proceed: 20 missed 1 Hz beacons.
+     * The more conservative of the two — a false "app is dead" here stores a duplicate
+     * sample, so it keeps margin against a GC pause or a slow DiPars round trip.
+     */
+    internal const val APP_ALIVE_FULL_TTL_MS = 20_000L
+
+    /**
+     * Beacon age past which a *status-only* (`live_only`) push may proceed: 5 missed beacons.
+     * Shorter because a `live_only` push writes no history row at all — the server refreshes
+     * `bydmate_live_snapshots` and skips samples/hourly/trips (docs/cloud-telemetry-contract-ru.md).
+     * The only cost of being wrong is a few seconds of the daemon's reduced snapshot (no GPS,
+     * no range/trip fields) replacing the app's richer one.
+     */
+    internal const val APP_ALIVE_LIVE_TTL_MS = 5_000L
+
+    internal fun appAliveTtlMs(liveOnly: Boolean): Long =
+        if (liveOnly) APP_ALIVE_LIVE_TTL_MS else APP_ALIVE_FULL_TTL_MS
+
+    /**
+     * Whether to stay silent because VoltFlow Mate is still sending. Pure so the gate is
+     * unit-testable — the loop itself is unreachable from tests.
+     *
+     * This was one flat 120 s TTL applied to every push, which is why the owner saw ~2.5-3
+     * minutes of stale status after every park: the head unit force-stops the app, the beacon
+     * freezes mid-TTL, and the daemon deliberately said nothing for the remainder. Grading it
+     * by what the push would actually write is what collapses that window.
+     *
+     * @param beaconAgeMs null when the beacon is absent or unreadable — then never defer;
+     *   an app that has never written one is not sending.
+     */
+    internal fun shouldDeferToApp(beaconAgeMs: Long?, liveOnly: Boolean): Boolean =
+        beaconAgeMs != null && beaconAgeMs in 0..appAliveTtlMs(liveOnly)
 
     private val ts get() = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
     private fun log(msg: String) {
         println("[$ts] $msg")
         System.out.flush()
+    }
+
+    private var lastSkipLogAt = 0L
+    private var lastSkipReason: String? = null
+
+    /**
+     * Skip logging, throttled to one line per reason per [TELEMETRY_PUSH_MS]. A change of
+     * reason always logs, so transitions stay visible.
+     *
+     * Needed because the push timers no longer advance on a skip: while the app is alive the
+     * history cadence is permanently due, so the guard is re-evaluated on every BASE_POLL_MS
+     * wake. Unthrottled that is ~10× more lines an hour in
+     * `/data/local/tmp/voltflow_cmd_daemon.log`, which is the file used for field diagnosis.
+     */
+    private fun logSkip(now: Long, reason: String) {
+        if (reason == lastSkipReason && now - lastSkipLogAt < TELEMETRY_PUSH_MS) return
+        lastSkipReason = reason
+        lastSkipLogAt = now
+        log("telemetry push skipped ($reason)")
     }
 
     private data class Conf(
@@ -170,6 +245,8 @@ object CommandDaemon {
         val telemetryUrl: String,
         val apiKey: String,
         val vehicleId: String,
+        /** Experimental: see [WIFI_KEEPALIVE_INTERVAL_MS] and `keep_wifi_awake` in voltflow_cmd.conf. */
+        val keepWifiAwake: Boolean = false,
     )
 
     @JvmStatic
@@ -209,6 +286,9 @@ object CommandDaemon {
         var baseGun: Int? = null
         var baseGear: Int? = null
         var base12v: Double? = null
+        // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
+        // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
+        var lastWifiKeepAliveAt = 0L
 
         runBlocking {
             while (true) {
@@ -220,8 +300,13 @@ object CommandDaemon {
 
                 val startedAt = System.currentTimeMillis()
                 try {
-                    // Refresh telemetry for guards if stale (cheap localhost call).
                     val now = startedAt
+                    if (shouldRefreshWifiKeepalive(now, lastWifiKeepAliveAt, conf.keepWifiAwake)) {
+                        refreshWifiKeepalive()
+                        lastWifiKeepAliveAt = now
+                    }
+
+                    // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
                         diPars.fetch()?.let { latestData = it; latestDataAt = now }
                     }
@@ -230,6 +315,7 @@ object CommandDaemon {
                     // Two guards prevent duplicating the app's stream:
                     //  1. App-alive beacon — if VoltFlow Mate is actively sending, stay silent.
                     //     The daemon exists only to cover the window when BYD force-stops the app.
+                    //     Graded by what the push would write, see [shouldDeferToApp].
                     //  2. Driving — belt-and-suspenders: never push a reduced-payload gear=1
                     //     heartbeat mid-drive (would split the live trip).
                     // Three reasons to push, in priority order:
@@ -248,31 +334,46 @@ object CommandDaemon {
                         gunChanged = gunChanged,
                     )
                     if (plan.push) {
-                        latestData?.let { data ->
+                        val pushed = latestData?.let { data ->
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
+                            // Parked + nothing material moved => live_only: the server refreshes
+                            // live state and skips the history/hourly/trip writes. Charging is
+                            // deliberately excluded — its SOC curve and cell-delta tail need
+                            // every row. Any change, or an expired run, sends a full sample and
+                            // re-baselines.
+                            //
+                            // Computed *before* the guards, not inside the push branch: the
+                            // app-alive gate is graded by whether this push would write history,
+                            // so it has to know first.
+                            val v12 = data.voltage12v
+                            val b12 = base12v
+                            val unchanged =
+                                state == IternioIntervalPolicy.TelemetryState.PARKED &&
+                                    data.soc != null && data.soc == baseSoc &&
+                                    data.chargeGunState == baseGun &&
+                                    data.gear == baseGear &&
+                                    v12 != null && b12 != null &&
+                                    abs(v12 - b12) < LIVE_ONLY_12V_EPSILON_V
+                            val runExpired = lastFullPushAt != 0L &&
+                                now - lastFullPushAt >= LIVE_ONLY_MAX_RUN_MS
+                            val liveOnly = plan.liveOnly(unchanged, runExpired)
                             when {
-                                isAppAlive(now) ->
-                                    log("telemetry push skipped (app alive — VoltFlow Mate is sending)")
-                                state == IternioIntervalPolicy.TelemetryState.DRIVING ->
-                                    log("telemetry push skipped (driving — VoltFlow Mate is active)")
+                                shouldDeferToApp(beaconAgeMs(now), liveOnly) -> {
+                                    logSkip(now, "app alive — VoltFlow Mate is sending")
+                                    false
+                                }
+                                // NOT relaxed for live_only, unlike the app-alive guard above.
+                                // The daemon's payload has no GPS (`location = {}`) and none of the
+                                // app-only range/trip fields, and its device_time is always `now`
+                                // while the app's batched samples lag — so it would win the server's
+                                // stale-guard and blank the live map for the whole drive. The
+                                // blackout this file fixes is a *park* transition (gear=1 => PARKED),
+                                // so nothing here needs to give.
+                                state == IternioIntervalPolicy.TelemetryState.DRIVING -> {
+                                    logSkip(now, "driving — VoltFlow Mate is active")
+                                    false
+                                }
                                 else -> {
-                                    // Parked + nothing material moved => live_only: the server refreshes
-                                    // live state and skips the history/hourly/trip writes. Charging is
-                                    // deliberately excluded — its SOC curve and cell-delta tail need
-                                    // every row. Any change, or an expired run, sends a full sample and
-                                    // re-baselines.
-                                    val v12 = data.voltage12v
-                                    val b12 = base12v
-                                    val unchanged =
-                                        state == IternioIntervalPolicy.TelemetryState.PARKED &&
-                                            data.soc != null && data.soc == baseSoc &&
-                                            data.chargeGunState == baseGun &&
-                                            data.gear == baseGear &&
-                                            v12 != null && b12 != null &&
-                                            abs(v12 - b12) < LIVE_ONLY_12V_EPSILON_V
-                                    val runExpired = lastFullPushAt != 0L &&
-                                        now - lastFullPushAt >= LIVE_ONLY_MAX_RUN_MS
-                                    val liveOnly = plan.liveOnly(unchanged, runExpired)
                                     if (!liveOnly) {
                                         baseSoc = data.soc
                                         baseGun = data.chargeGunState
@@ -281,11 +382,21 @@ object CommandDaemon {
                                         lastFullPushAt = now
                                     }
                                     pushTelemetry(ok, conf, data, liveOnly)
+                                    true
                                 }
                             }
+                        } ?: false
+                        // Only a push that actually went out may advance the timers. Advancing on a
+                        // skip is what stretched the post-park blackout by up to a further 60 s: the
+                        // history cadence kept "firing" into the void while the app was assumed
+                        // alive, so when the beacon finally aged out the daemon had just reset its
+                        // own clock. Same for a DiPars read that returned nothing.
+                        if (pushed) {
+                            lastTelemetryPushAt = now
+                            if (plan.advancesIntervalTimer) lastIntervalPushAt = now
+                            // A push breaks the skip run, so the next skip is worth a line.
+                            lastSkipReason = null
                         }
-                        lastTelemetryPushAt = now
-                        if (plan.advancesIntervalTimer) lastIntervalPushAt = now
                     }
 
                 } catch (e: Exception) {
@@ -463,11 +574,112 @@ object CommandDaemon {
         null
     }
 
+    /**
+     * Live SOC via autoservice directly (DEV_STATISTIC=1014, FID_SOC=1246777400, TX_GET_FLOAT=7)
+     * — same fid as [com.bydmate.app.data.autoservice.FidRegistry.FID_SOC]. Read-only, used only
+     * to log a parity check against di+'s SOC while evaluating dropping the di+ dependency
+     * (docs/EV_PRO_APP_ANALYSIS.md, backlog B-07). Never fed into the cloud payload.
+     */
+    private fun readSocPercentAutoservice(): Float? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 7 i32 1014 i32 1246777400")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val bits = PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt()
+            ?: return null
+        val f = java.lang.Float.intBitsToFloat(bits)
+        if (f.isNaN() || f.isInfinite() || f !in 0f..100f) null else f
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Live engine power (kW) via autoservice directly (DEV_ENGINE=1012, FID_ENGINE_POWER=339738656,
+     * TX_GET_INT=5) — same fid di+'s 发动机功率 ultimately reads. Read-only parity-check twin of
+     * [readSocPercentAutoservice]; see that doc for why. Sanity envelope matches
+     * IternioTelemetryClient's [-300, +500] range, tightened to the ±350 the FidRegistry doc note
+     * already used for this fid.
+     */
+    private fun readEnginePowerKwAutoservice(): Int? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 5 i32 1012 i32 339738656")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val v = PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt()
+            ?: return null
+        if (kotlin.math.abs(v) > 350) null else v
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Runs `service call autoservice 5 i32 <dev> i32 <fid>` and decodes the raw int, or null. */
+    private fun readAutoserviceIntFid(dev: Int, fid: Int): Int? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 5 i32 $dev i32 $fid")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt()
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Door/trunk/hood open state via autoservice directly (dev=1001, transact 5) — same fids as
+     * [com.bydmate.app.data.autoservice.FidRegistry.FID_DOOR_FL] and friends (CANFD branch,
+     * live-validated against di+ 2026-07-22, see docs/BACKLOG.md B-07). Read-only parity check,
+     * never fed into the cloud payload — same rationale as [readSocPercentAutoservice]. Returns
+     * a compact "fl/fr/rl/rr/trunk/hood" string (each 0/1, "?" on read failure) to keep the log
+     * line short rather than six separate fields.
+     */
+    private fun readBodyworkOpenStatesAutoservice(): String {
+        fun bit(fid: Int) = readAutoserviceIntFid(1001, fid)?.toString() ?: "?"
+        return "${bit(692060168)}/${bit(692060170)}/${bit(692060172)}/${bit(692060174)}/" +
+            "${bit(692060186)}/${bit(692060188)}"
+    }
+
+    /**
+     * Tire pressure (kPa) via autoservice directly (dev=1001, transact 5) — same fids as
+     * [com.bydmate.app.data.autoservice.FidRegistry.FID_TIRE_PRESSURE_FL] and friends (not
+     * platform-conditional, live-validated against di+ 2026-07-22).
+     */
+    private fun readTirePressuresAutoservice(): String {
+        fun v(fid: Int) = readAutoserviceIntFid(1001, fid)?.toString() ?: "?"
+        return "${v(-1728052956)}/${v(-1728052952)}/${v(-1728052948)}/${v(-1728052944)}"
+    }
+
+    /**
+     * Re-asserts WiFi via shell-uid `svc wifi enable` — idempotent no-op if already on. Never
+     * throws: a failure here must not take down the daemon's poll/telemetry loops.
+     */
+    private fun refreshWifiKeepalive() {
+        try {
+            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", "svc wifi enable"))
+            proc.waitFor()
+            log("wifi keepalive: svc wifi enable (exit=${proc.exitValue()})")
+        } catch (e: Exception) {
+            log("wifi keepalive failed: ${e.message}")
+        }
+    }
+
     /** Push one telemetry sample to the cloud ingest endpoint (contract: docs/cloud-telemetry-contract-ru.md). */
     private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData, liveOnly: Boolean = false) {
         try {
             val kwhCharged = readKwhCharged()
             val sohPercent = readSohPercent()
+            // Parity check only — logged, never sent to the cloud. See readSocPercentAutoservice.
+            val autoserviceSoc = readSocPercentAutoservice()
+            val autoservicePowerKw = readEnginePowerKwAutoservice()
+            if (autoserviceSoc != null || autoservicePowerKw != null) {
+                log(
+                    "autoservice check: soc=$autoserviceSoc (diplus=${data.soc}) " +
+                        "power_kw=$autoservicePowerKw (diplus=${data.power})"
+                )
+            }
+            val bodyworkStates = readBodyworkOpenStatesAutoservice()
+            val tirePressures = readTirePressuresAutoservice()
+            log(
+                "autoservice check2: doors/trunk/hood(fl/fr/rl/rr/trunk/hood)=$bodyworkStates " +
+                    "(diplus=${data.doorFL}/${data.doorFR}/${data.doorRL}/${data.doorRR}/${data.trunk}/${data.hood}) " +
+                    "tires_kpa(fl/fr/rl/rr)=$tirePressures " +
+                    "(diplus=${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
+            )
             val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent, liveOnly).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
@@ -558,13 +770,17 @@ object CommandDaemon {
         }
     }
 
-    /** True if VoltFlow Mate wrote its liveness beacon within [APP_ALIVE_TTL_MS]. */
-    private fun isAppAlive(now: Long): Boolean = try {
-        val epoch = File(APP_HEARTBEAT_FILE).takeIf { it.exists() }
+    /**
+     * How long ago VoltFlow Mate last wrote its liveness beacon, or null when there is no
+     * readable beacon at all. The whole impure part of the app-alive gate lives here; the
+     * decision is [shouldDeferToApp].
+     */
+    private fun beaconAgeMs(now: Long): Long? = try {
+        File(APP_HEARTBEAT_FILE).takeIf { it.exists() }
             ?.readText()?.trim()?.toLongOrNull()
-        epoch != null && now - epoch in 0..APP_ALIVE_TTL_MS
+            ?.let { now - it }
     } catch (_: Exception) {
-        false
+        null
     }
 
     private fun isoNow(): String {
@@ -621,6 +837,7 @@ object CommandDaemon {
             telemetryUrl = telemetryUrl,
             apiKey = apiKey,
             vehicleId = vehicleId,
+            keepWifiAwake = props["keep_wifi_awake"] == "1",
         )
     }
 

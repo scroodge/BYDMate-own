@@ -68,4 +68,52 @@ object FidRegistry {
      * See memory `reference_eng_pow_fid.md`.
      */
     const val FID_ENGINE_POWER = 339738656
+
+    // === Bodywork open/close fids (dev=1001) ===
+    // Source: android.hardware.bydauto.BYDAutoFeatureIds, decompiled from the vehicle's own
+    // /system/framework/framework.jar (2026-07-22) — the real BYD vendor SDK backing `autoservice`,
+    // not a magic-number guess. All 16 values below live-validated against di+'s getDiPars on this
+    // car (Leopard 3, DiLink 3.0) same day: 100% match, including non-trivial values (tire
+    // pressures 245-250 kPa, sunshade=100) — see docs/BACKLOG.md B-07.
+    //
+    // CAUTION — architecture-conditional: BYDAutoFeatureIds branches these 12 door/window/
+    // sunroof/sunshade values on `isCanFD` (sys.car.protocol == "CANFD") vs `isToyota` vs a
+    // default/else. The constants below are the CANFD branch, matching `getprop sys.car.protocol`
+    // on this car. A non-CANFD or Toyota-platform BYD (older CAN, or a Toyota-derived joint-venture
+    // model) needs the OTHER branch's values — do not reuse these on an unconfirmed platform
+    // without re-checking `sys.car.protocol` and re-validating against that car's own di+.
+    /** Driver-side front door: 0=closed, 1=open (transact 5). CANFD branch. */
+    const val FID_DOOR_FL = 692060168
+    /** Passenger-side front door. CANFD branch. */
+    const val FID_DOOR_FR = 692060170
+    /** Left rear door. CANFD branch. */
+    const val FID_DOOR_RL = 692060172
+    /** Right rear door. CANFD branch. */
+    const val FID_DOOR_RR = 692060174
+    /** Trunk/tailgate: 0=closed, 1=open (transact 5). CANFD branch. */
+    const val FID_TRUNK = 692060186
+    /** Hood: 0=closed, 1=open (transact 5). CANFD branch. */
+    const val FID_HOOD = 692060188
+    /** Driver-side front window, 0-100% open (transact 5). CANFD branch. */
+    const val FID_WINDOW_FL = 947912728
+    /** Passenger-side front window. CANFD branch. */
+    const val FID_WINDOW_FR = 1267728400
+    /** Left rear window. CANFD branch. */
+    const val FID_WINDOW_RL = 947912736
+    /** Right rear window. CANFD branch. */
+    const val FID_WINDOW_RR = 1267728408
+    /** Sunroof, 0-100% open (transact 5). CANFD branch. */
+    const val FID_SUNROOF = 1101004832
+    /** Sunshade panel, 0-100% open (transact 5). CANFD branch. */
+    const val FID_SUNSHADE = 1101004816
+
+    // === Tyre pressure fids (dev=1001) — NOT platform-conditional (single literal per fid) ===
+    /** Front-left tire pressure, kPa (transact 5). */
+    const val FID_TIRE_PRESSURE_FL = -1728052956
+    /** Front-right tire pressure, kPa. */
+    const val FID_TIRE_PRESSURE_FR = -1728052952
+    /** Rear-left tire pressure, kPa. */
+    const val FID_TIRE_PRESSURE_RL = -1728052948
+    /** Rear-right tire pressure, kPa. */
+    const val FID_TIRE_PRESSURE_RR = -1728052944
 }

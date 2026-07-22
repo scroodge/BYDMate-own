@@ -57,6 +57,14 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_WIFI_ONLY = "cloud_sync_wifi_only"
         /** When true, cloud payloads send location {} even if GPS is available. */
         const val KEY_CLOUD_SYNC_OMIT_GPS = "cloud_sync_omit_gps"
+        /**
+         * Experimental: when true, [com.bydmate.app.daemon.CommandDaemon] runs `svc wifi enable`
+         * every ~60s (exported to `voltflow_cmd.conf` by [com.bydmate.app.service.TrackingService.exportDaemonConfig]).
+         * Automates DiLink's own "Keep network on while parked" toggle instead of requiring the
+         * user to find it — see docs/EV_PRO_APP_ANALYSIS.md section 4. Requires on-device ADB
+         * (same as autoservice) since the daemon itself needs to already be running.
+         */
+        const val KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE = "cloud_sync_keep_wifi_awake"
         const val KEY_CLOUD_SYNC_LAST_OK = "cloud_sync_last_ok"
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"

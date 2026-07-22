@@ -608,6 +608,29 @@ fun SettingsScreen(
                         }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Keep Wi-Fi awake while parked",
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                )
+                                Text(
+                                    "Experimental: the survival daemon re-enables Wi-Fi every ~60s so telemetry keeps flowing after DiLink would otherwise drop the connection. Requires on-device ADB (Advanced features card).",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Switch(
+                                checked = state.cloudSyncKeepWifiAwake,
+                                onCheckedChange = { viewModel.toggleCloudSyncKeepWifiAwake(it) },
+                                colors = bydSwitchColors(),
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {

@@ -1,5 +1,97 @@
 # Project Notes
 
+## 2026-07-22: живая сверка на машине — найден вендорский SDK, +16 fid в FidRegistry
+
+Владелец подключил Mac к машине (`adb connect 192.168.43.71:5555`, уже авторизован ранее).
+Вместо разбора di+ (тупик — ни в Java, ни в native `.so` нет строки "autoservice"/
+"BYDAutoServer"; логика в непрозрачном native-коде) нашли и скачали с самой машины
+`/system/framework/framework.jar` (29 МБ, часть BOOTCLASSPATH) → декомпилировали → внутри
+полный вендорский SDK **`android.hardware.bydauto.*`** (123 класса, по одному пакету на
+подсистему: bodywork, tyre, ac, speed, gearbox, radar, pm2p5, panorama, safetybelt, …) с
+именованными константами в `BYDAutoFeatureIds` — то, что `AutoserviceBridge`/`FidRegistry`
+до сих пор восстанавливали вручную через магические числа.
+
+- **Важное открытие:** часть fid'ов в `BYDAutoFeatureIds` **архитектурно-зависимая** —
+  ветвится по `isCanFD` (`getprop sys.car.protocol == "CANFD"`) vs `isToyota` vs default.
+  На этой машине `sys.car.protocol=CANFD` → взяли CANFD-ветку. **Другой BYD (не-CANFD или
+  Toyota-платформа, напр. Denza/bZ3 joint-venture) требует ДРУГИЕ значения** — нельзя
+  переиспользовать эти константы без проверки `sys.car.protocol` на конкретной машине.
+- Найдены и **живьём сверены с di+ (100% match, 16/16)**: двери FL/FR/RL/RR, багажник,
+  капот, стёкла FL/FR/RL/RR, люк, шторка, давление в шинах FL/FR/RL/RR — включая
+  нетривиальные значения (шторка=100%, шины 245-250 кПа), не только тривиальные нули.
+  Метод сверки: `di+ getDiPars` (中文 signal names, HTTP на 127.0.0.1:8988) против
+  `service call autoservice 5 i32 1001 i32 <fid>` в одном ADB-сеансе.
+- Добавлено в `FidRegistry.kt`: `FID_DOOR_FL/FR/RL/RR`, `FID_TRUNK`, `FID_HOOD`,
+  `FID_WINDOW_FL/FR/RL/RR`, `FID_SUNROOF`, `FID_SUNSHADE` (все CANFD-ветка, с
+  предупреждением в коде), `FID_TIRE_PRESSURE_FL/FR/RL/RR` (не архитектурно-зависимые).
+  `CommandDaemon.pushTelemetry` логирует второй чек (`"autoservice check2: ..."`) для
+  дверей/багажника/капота/шин рядом со значениями di+ — только сверка, в облако не идёт,
+  то же правило что и для B-07's SOC/power check.
+- `./gradlew :app:testDebugUnitTest` зелёный, 515 тестов (было 509 в начале сессии).
+- Осталось для B-07: собрать сэмплы за drive/charge (не только парковку), окна/люк/шторку
+  ещё не завели в лог (fid есть, чек не написан) — при желании добавить аналогично.
+  Подробности и статус — [`BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано) (B-07).
+
+## 2026-07-21: первый шаг по EV_PRO_APP_ANALYSIS.md — WiFi keep-alive + autoservice-сверка
+
+Владелец подтвердил приоритет: (1) в перспективе отказаться от di+, начав со сверки данных,
+(2) **важнее** — не дать стоянке «засыпать» без ручного тумблера DiLink. Реализовано и
+покрыто тестами (`./gradlew :app:testDebugUnitTest` зелёный, 509 тестов):
+
+- **B-10 (WiFi keep-alive, выключено по умолчанию)**: новый тумблер **Настройки → Cloud Sync →
+  «Keep Wi-Fi awake while parked»** (`SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE`) →
+  `TrackingService.exportDaemonConfig()` пишет `keep_wifi_awake=1` в `voltflow_cmd.conf` →
+  `CommandDaemon` каждые ~60 с шлёт `svc wifi enable` (`shouldRefreshWifiKeepalive`, чистая
+  функция, покрыта тестами). Ничего не меняли в `start_voltflow_cmd.sh` — конфиг читает сам
+  демон, риск рассинхрона asset/tools не тронут.
+- **B-07 (autoservice вместо di+, только сверка пока)**: `CommandDaemon.pushTelemetry` теперь
+  читает SOC и engine power напрямую через `autoservice` (те же fid, что в `FidRegistry`) и
+  логирует их рядом со значениями di+ (`"autoservice check: soc=... (diplus=...) power_kw=...
+  (diplus=...)"` в `voltflow_cmd_daemon.log`) — в облако эти значения пока не идут, это только
+  сбор доказательств перед переключением по умолчанию.
+- Оба тумблера **выключены по умолчанию** — включаются вручную в Настройках перед тестом на
+  реальной машине (парковка >9 мин без DiLink-тумблера «Keep network on while parked»; сверка
+  autoservice/di+ на реальном drive/charge/park цикле).
+- Полный технический разбор конкурента и что из него применимо — в
+  [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md); статус задач — в
+  [`BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано) (B-07, B-10 теперь `in-progress`).
+
+## 2026-07-21: реверс-инжиниринг BYD EV Pro (ant0nkr/ev-pro-app)
+
+- Запрос: конкурентное приложение заявляет работу без di+ и «в фоне». Скачан и
+  декомпилирован (`jadx`/`apktool`) публичный релиз `byd-ev-pro-2.0.2-bd0e5a2.apk`
+  (`com.kramskyi.byd_ev_pro`, Flutter — бизнес-логика в AOT Dart непрозрачна, но
+  Android-мост на Kotlin/Java декомпилируется полностью и содержит всю логику
+  доступа к авто и выживания процесса). Полный разбор:
+  [`docs/EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md).
+- **Без di+ в принципе**: манифест объявляет собственные signature-permissions
+  `BYDAUTO_*` и напрямую дергает `ServiceManager.getService("autoservice")`
+  (`android.gui.BYDAutoServer`, transact-коды 5/6/7/9/10/11/13 = get/set
+  Int/Float/Array/Buffer по `(dev, fid)`) — тот же слой, что уже описан в
+  [`DIPLUS_DATA.md`](DIPLUS_DATA.md) как «raw BYD autoservice layer», только без
+  HTTP-обёртки di+.
+- **«Работает в фоне» — не системный трюк, а watchdog**: отдельный shell-uid
+  процесс (`ProcessExemptionController`, тик 30 с) перезапускает и сам Flutter-app,
+  и отдельный демон-«vehicled» через `am start`/`app_process`, если `pidof` пуст;
+  плюс сам держит WiFi/BT включёнными и молча регистрирует свой
+  AccessibilityService через `settings put secure`. Обычный `Service` в приложении
+  — стандартный foreground-service с wakelock, никакой магии.
+  Демон-с-данными (`byd_ev_pro_veh`, AIDL `IVehicleState`) — отдельный процесс,
+  а не то же самое, что даемон команд.
+- Own from-scratch ADB client (`AdbClient.java`) в APK — полностью свой ADB
+  wire-protocol (CNXN/AUTH/OPEN/OKAY/WRTE/CLSE, RSA-2048 auth) поверх
+  `127.0.0.1:5555`, без внешнего `adb`/Termux после разового «Allow USB
+  debugging?» — тот же принцип, что `AdbOnDeviceClient` в этом репо.
+- FID-таблица / логика распознавания модели авто у конкурента — не хардкод в
+  APK, а скачиваемый зашифрованный versioned jar (`byd_evpro_vehicled_classpath`
+  → `.../v-<version>.jar`, `libvehicled_crypto.so`) + JSON-пуш
+  (`updateFidConfig`) поверх него — поэтому не нужен релиз APK на новую модель/
+  сигнал.
+- Кандидаты для VoltFlow Mate из разбора — B-07/B-08/B-09 в
+  [`BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано): прямой `autoservice`
+  вместо di+ HTTP, разделение `CommandDaemon` на I/O-демон + watchdog,
+  server-pushed FID-конфиг вместо хардкода. Не приоритизировано.
+
 ## 2026-06-13: фантомные поездки, mate_version, демон ↔ приложение без дублей (v0.3.9.3–v0.3.9.5)
 
 ### Что сделано
@@ -17,6 +109,10 @@
   читает его и пропускает свой 60-секундный push, пока маяк свежий (< 120 с, `APP_ALIVE_TTL_MS`).
   Опрос команд остаётся всегда активным. Раньше при живом приложении обе стороны слали данные →
   лишние сэмплы и риск фантомных поездок.
+  **Заменено 2026-07-22:** плоские 120 с давали 124-236 с устаревшего live-статуса после каждой
+  парковки. Теперь два порога по типу push'а — `APP_ALIVE_FULL_TTL_MS` (20 с) для записи истории
+  и `APP_ALIVE_LIVE_TTL_MS` (5 с) для status-only `live_only`, — плюс таймеры каденса сдвигаются
+  только после реально отправленного push'а. См. `docs/REMOTE_COMMAND_DAEMON.md`.
 
 ### Фантомные поездки (диагноз и фикс — на стороне VoltFlow/Supabase)
 
