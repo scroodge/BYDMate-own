@@ -5,6 +5,13 @@
 # daemon so it survives BYD's power-off force-stop (collectPowerOffEvent / quickboot),
 # exactly like DI+ (aps_diplus) and Overdrive (acc_sentry_daemon) do.
 #
+# Also supervises the main app process itself (dev.scroodge.cloudevmate): if it's not
+# running, the watcher loop below relaunches it via a privileged `am start`, the same
+# way competitor BYD EV Pro's ProcessExemptionController does for its own app — see
+# docs/EV_PRO_APP_ANALYSIS.md section 4 and docs/BACKLOG.md B-08. This covers a hard
+# crash/OOM kill that TrackingService's own onTaskRemoved restart and the boot
+# receiver don't reach (those cover "swiped from recents" and "full reboot" only).
+#
 # Deploy once via wireless ADB or Termux (shell uid):
 #   1. Put cloud config at /data/local/tmp/voltflow_cmd.conf  (see voltflow_cmd.conf.example)
 #   2. adb push tools/start_voltflow_cmd.sh /data/local/tmp/ && chmod 755 /data/local/tmp/start_voltflow_cmd.sh
@@ -21,6 +28,9 @@ PROCESS_NAME="voltflow_cmd_daemon"
 LOG_FILE="/data/local/tmp/voltflow_cmd_daemon.log"
 SENTINEL="/data/local/tmp/voltflow_cmd_daemon.disabled"
 LOCKFILE="/data/local/tmp/voltflow_cmd_watchdog.pid"
+# App-liveness relaunch cooldown state — last successful relaunch attempt (epoch seconds).
+APP_RELAUNCH_TS_FILE="/data/local/tmp/voltflow_app_relaunch_ts"
+APP_RELAUNCH_COOLDOWN_SEC=60
 
 # Single-instance guard. Without this, every relaunch (app USER_PRESENT / boot / the
 # APK-update kill-respawn gap in TrackingService.ensureCommandDaemonRunning) starts a
@@ -90,6 +100,21 @@ while true; do
         echo "[$(date)] APK changed, restarting daemon for new code" >> "$LOG_FILE"
         kill "$DAEMON_PID" 2>/dev/null
         break
+      fi
+
+      # App-liveness check: relaunch dev.scroodge.cloudevmate if it's not running.
+      # Covers a hard crash/OOM kill — onTaskRemoved and the boot receiver don't reach
+      # those. Cooldown-gated so a genuinely broken app isn't hammered with `am start`
+      # every 30s.
+      if [ -z "$(pidof "$PKG" 2>/dev/null)" ]; then
+        NOW_TS=$(date +%s)
+        LAST_TS=$(cat "$APP_RELAUNCH_TS_FILE" 2>/dev/null || echo 0)
+        if [ $((NOW_TS - LAST_TS)) -ge $APP_RELAUNCH_COOLDOWN_SEC ]; then
+          echo "[$(date)] $PKG not running, relaunching" >> "$LOG_FILE"
+          am start-foreground-service -n "$PKG/com.bydmate.app.service.TrackingService" >/dev/null 2>&1
+          am start -n "$PKG/com.bydmate.app.MainActivity" >/dev/null 2>&1
+          echo "$NOW_TS" > "$APP_RELAUNCH_TS_FILE"
+        fi
       fi
     done
   ) &

@@ -1,5 +1,32 @@
 # Project Notes
 
+## 2026-07-22: B-08 — watchdog теперь следит и за самим приложением
+
+Планировали через `/plan` какой из оставшихся пунктов `EV_PRO_APP_ANALYSIS.md` брать
+следующим (B-08/B-09/E2E-шифрование); выбрали **B-08**. При ре-чтении кода перед планом
+выяснилось, что разрез «I/O-демон + watchdog» уже существует структурно —
+`tools/start_voltflow_cmd.sh` (shell-процесс) физически отдельн от `CommandDaemon`
+(`app_process`), и `CommandDaemon.kt` никогда не содержал собственной логики респауна —
+она всегда жила в shell-скрипте. Реальный разрыв с PEC конкурента: watchdog следил только
+за демоном, никогда — за самим приложением `dev.scroodge.cloudevmate`.
+
+- Добавлена проверка `pidof dev.scroodge.cloudevmate` в существующий 30-секундный
+  watcher-цикл `start_voltflow_cmd.sh`; при отсутствии — `am start-foreground-service` +
+  `am start` (тот же приём, что `AdbOnDeviceClient.LAUNCH_DIPLUS_CMD` уже использует для
+  di+). Cooldown 60 с через файл `voltflow_app_relaunch_ts`, чтобы не долбить `am start`
+  каждые 30 с при реально сломанном приложении.
+- Изменение только в shell — **обе** копии (`tools/` и `app/src/main/assets/`) обновлены
+  идентично, `cmp` зелёный, `./gradlew :app:testDebugUnitTest` зелёный (515 тестов, Kotlin
+  не тронут).
+- Сознательно не сделано в этом заходе: перенос WiFi keep-alive тика из `CommandDaemon` в
+  watchdog (сейчас тик зависит от живости демона — валидный follow-up, но не нужен для
+  закрытия конкретного разрыва с PEC) и binder-канал для мгновенной проверки статуса
+  (аналог `byd_evpro_pec_control` конкурента) — нет продемонстрированной необходимости.
+- План сохранён: `/Users/way/.claude/plans/atomic-humming-hoare.md`. Статус —
+  [`BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано) (B-08 `in-progress`).
+- Осталось проверить живьём на машине: `am force-stop dev.scroodge.cloudevmate`, убедиться
+  что `pidof` возвращает PID снова в течение ~30-60 с и телеметрия возобновляется.
+
 ## 2026-07-22: живая сверка на машине — найден вендорский SDK, +16 fid в FidRegistry
 
 Владелец подключил Mac к машине (`adb connect 192.168.43.71:5555`, уже авторизован ранее).
