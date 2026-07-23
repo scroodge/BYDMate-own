@@ -38,14 +38,6 @@ interface AdbOnDeviceClient {
      */
     suspend fun grantUsageStatsAppop(packageName: String): Boolean
     /**
-     * Starts D+ MainService directly via shell uid `am start-foreground-service`.
-     * Used by the watchdog when D+ has gone silent — `startActivity` against
-     * StartMainServiceActivity crashes on Android 12+ due to background-service
-     * restrictions in cached/idle state, but the shell-uid path bypasses them.
-     * Returns true when am succeeded.
-     */
-    suspend fun launchDiPlusService(): Boolean
-    /**
      * Returns true if the shell-uid survival daemon (nice-name `voltflow_cmd_daemon`,
      * spawned by `start_voltflow_cmd.sh`) is currently alive. Uses `pidof` over shell uid.
      */
@@ -142,20 +134,6 @@ class AdbOnDeviceClientImpl @Inject constructor(
         }
     }
 
-    override suspend fun launchDiPlusService(): Boolean = withContext(Dispatchers.IO) {
-        val p = protocol ?: return@withContext false
-        try {
-            // am start-foreground-service prints "Starting service: Intent { ... }"
-            // on success and "Error: ..." on failure. Treat any output starting
-            // with "Error" as a failure.
-            val out = p.exec(LAUNCH_DIPLUS_CMD) ?: return@withContext false
-            !out.trimStart().startsWith("Error")
-        } catch (e: Exception) {
-            Log.w(TAG, "launchDiPlusService failed: ${e.message}")
-            false
-        }
-    }
-
     override suspend fun isCommandDaemonRunning(): Boolean = withContext(Dispatchers.IO) {
         val p = protocol ?: return@withContext false
         try {
@@ -208,10 +186,6 @@ class AdbOnDeviceClientImpl @Inject constructor(
         // Allow only: service call autoservice <5|7|9> i32 <dev> i32 <fid>
         // Rejects tx=6 (setInt), tx=8 (setBuffer), and arbitrary shell.
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
-
-        // Hardcoded — no params, so no injection surface.
-        private const val LAUNCH_DIPLUS_CMD =
-            "am start-foreground-service -n com.van.diplus/com.van.diplus.service.MainService"
 
         // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
         private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"

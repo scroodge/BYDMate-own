@@ -15,7 +15,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
-import kotlin.math.min
 
 /**
  * Headless direct-telemetry daemon that preserves the APK's wake/sleep-survival path.

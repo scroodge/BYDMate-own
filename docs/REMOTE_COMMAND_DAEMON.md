@@ -1,8 +1,9 @@
-# Remote command daemon (survives car power-off)
+# Parked telemetry daemon (survives car power-off)
 
-VoltFlow Mate can execute cloud commands (lock, climate, windows, SOC limit, TTS…) **and push
-live telemetry to the cloud** while the head unit is parked / "off". This document explains how
-and the exact install / update steps.
+> **Current APK behavior:** remote-command polling and di+ actuation are disabled. The daemon
+> keeps its shell-uid wake/sleep-survival role and sends only direct `autoservice` telemetry while
+> the head unit is parked / "off". Sections below that describe commands are historical and must
+> not be used as an operational contract.
 
 ## Why a separate daemon
 

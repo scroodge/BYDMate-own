@@ -61,7 +61,6 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var chargeRepository: ChargeRepository
     @Inject lateinit var tripRepository: com.bydmate.app.data.repository.TripRepository
     @Inject lateinit var historyImporter: com.bydmate.app.data.local.HistoryImporter
-    @Inject lateinit var diPlusDbReader: com.bydmate.app.data.remote.DiPlusDbReader
     @Inject lateinit var settingsRepository: com.bydmate.app.data.repository.SettingsRepository
     @Inject lateinit var insightsManager: com.bydmate.app.data.remote.InsightsManager
     @Inject lateinit var automationEngine: AutomationEngine
@@ -86,10 +85,6 @@ class TrackingService : Service(), LocationListener {
     private var consecutiveNullCount = 0
     private var firstDataReceived = false
     private var currentPollIntervalMs = POLL_INTERVAL_MS
-    // Last D+ relaunch attempt. Reset to 0 on first successful fetch so a future
-    // outage triggers an immediate retry; otherwise spaced by RELAUNCH_COOLDOWN_MS
-    // to avoid hammering the launcher when D+ is genuinely broken.
-    @Volatile private var lastDiPlusRelaunchTs: Long = 0L
     @Volatile private var lastWakeLockRenewTs: Long = 0L
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
@@ -1186,56 +1181,6 @@ class TrackingService : Service(), LocationListener {
         cameraStateMonitor.start()
         serviceScope.launch {
             cameraStateMonitor.active.collect { _cameraActive.value = it }
-        }
-    }
-
-    private fun tryLaunchDiPlus() {
-        // Primary path: ADB shell uid bypasses BackgroundServiceStartNotAllowedException.
-        // Without this, startActivity(StartMainServiceActivity) crashes inside D+'s
-        // own onCreate when D+'s process is in cached/idle state — happens reliably
-        // when reverse is engaged before DiLink finishes booting.
-        serviceScope.launch {
-            val launched = try {
-                if (!adbOnDeviceClient.isConnected()) {
-                    adbOnDeviceClient.connect()
-                }
-                adbOnDeviceClient.launchDiPlusService()
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "ADB-driven DiPlus launch failed: ${e.message}")
-                false
-            }
-            if (launched) {
-                Log.i(TAG, "Launched DiPlus MainService via ADB shell")
-                return@launch
-            }
-            // Fallback: legacy startActivity path. Works when D+'s process is
-            // already warm; usually fails on cold start in Android 12.
-            try {
-                val intent = Intent().apply {
-                    setClassName("com.van.diplus", "com.van.diplus.activity.StartMainServiceActivity")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                startActivity(intent)
-                Log.i(TAG, "Launched DiPlus StartMainServiceActivity (fallback)")
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to launch DiPlus via activity: ${e.message}")
-                try {
-                    val launchIntent = packageManager.getLaunchIntentForPackage("com.van.diplus")
-                    if (launchIntent != null) {
-                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        startActivity(launchIntent)
-                        Log.i(TAG, "Launched DiPlus via package manager")
-                    }
-                } catch (e2: kotlinx.coroutines.CancellationException) {
-                    throw e2
-                } catch (e2: Exception) {
-                    Log.w(TAG, "Failed to launch DiPlus fallback: ${e2.message}")
-                }
-            }
         }
     }
 

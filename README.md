@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/scroodge/BYDMate-own?style=flat-square&label=APK)](https://github.com/scroodge/BYDMate-own/releases/latest)
 
-**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение является шлюзом: читает live-данные машины из **di+ (D+)** и передаёт их в облако VoltFlow. 
+**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение читает live-данные напрямую из системного BYD `autoservice` через on-device ADB и передаёт их в облако VoltFlow.
 
 [Скачать APK](https://github.com/scroodge/BYDMate-own/releases) ·[Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
 
@@ -24,8 +24,8 @@
 
 | Иконка | Раздел | Что делает |
 |---|---|---|
-| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Передаёт телеметрию в VoltFlow | Читает live-данные через DiPlus; при настроенном on-device ADB дополняет их BMS/autoservice. История поездок для совместимых машин импортируется из `energydata`. |
-| 📡 | Работает на стоянке | Опциональный shell-демон опрашивает команды и поддерживает live-статус после выключения машины; для него нужен разовый on-device ADB. |
+| <img src="docs/assets/voltflow-cloud-release.svg" width="28" alt=""> | Передаёт телеметрию в VoltFlow | Читает live-данные напрямую из BYD `autoservice` через on-device ADB. История поездок для совместимых машин импортируется из `energydata`. |
+| 📡 | Работает на стоянке | Опциональный shell-демон сохраняет direct-телеметрию и wake/sleep-survival после выключения машины; для него нужен разовый on-device ADB. |
 | ⬆️ | Обновления APK | Проверка GitHub Releases при запуске, диалог, скачивание и установка (экран шлюза → **Обновления**). |
 
 
@@ -48,17 +48,16 @@
 
 ### Что ещё нужно установить
 
-VoltFlow Mate **не читает машину сам**. Live-данные он берёт из **di+ (D+, `vandiplus`)**,
-который отдаёт их по локальному HTTP на `127.0.0.1:8988`. Без установленного и запущенного
-di+ шлюз не отправит в облако ничего.
+VoltFlow Mate **не требует di+ (D+)**. Для live-данных включите беспроводной ADB в инженерном
+меню DiLink и один раз подтвердите ключ приложения — после этого APK читает проверенные FID
+напрямую из системного BYD `autoservice`.
 
-1. Установите **di+ (D+)** на DiLink, если его ещё нет.
-2. Запустите di+ хотя бы один раз и настройте под вашу машину.
-3. Проверьте, что данные идут: на экране шлюза VoltFlow Mate появятся live-значения (SOC, передача, мощность).
+1. В инженерном меню включите **Wireless ADB debug switch**.
+2. В VoltFlow Mate откройте расширенные функции, нажмите **Connect ADB** и подтвердите диалог на DiLink.
+3. Проверьте live-данные на экране шлюза (SOC, мощность, состояние зарядки, 12 V).
 
-> Оригинальное приложение [BYDMate](https://github.com/AndyShaman/BYDMate) устанавливать
-> **не нужно**. VoltFlow Mate — его форк, но в работе от него не зависит: источник данных
-> только di+ (плюс опционально BMS/`autoservice` через разовый on-device ADB).
+> Оригинальное приложение [BYDMate](https://github.com/AndyShaman/BYDMate) и di+ устанавливать
+> **не нужно**. VoltFlow Mate читает BYD `autoservice` самостоятельно через разово настроенный on-device ADB.
 
 
 ## Первый запуск
