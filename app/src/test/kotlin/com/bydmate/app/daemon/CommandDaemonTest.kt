@@ -280,7 +280,7 @@ class CommandDaemonTest {
         assertNull(CommandDaemon.chargeTypeFrom(null))
     }
 
-    // --- buildTelemetryPayload: per-field merge ---
+    // --- buildTelemetryPayload: direct engine only ---
 
     private fun diPars(
         soc: Int? = null, speed: Int? = null, mileage: Double? = null, power: Double? = null,
@@ -314,41 +314,40 @@ class CommandDaemonTest {
         )
 
     @Test
-    fun `agreeing sources produce the same soc either way`() {
-        // The no-op guarantee: when di+ and autoservice agree (the healthy case per the parity
-        // corpus), which one "wins" must not matter to the payload's value.
+    fun `direct payload uses the validated autoservice soc`() {
         val json = payload(diPars(soc = 60, chargeGunState = 2), snap(socPercent = 60, gun = 2))
         assertEquals(60, json.getJSONObject("telemetry").getInt("soc"))
-        assertEquals(60, json.getJSONObject("diplus").getInt("soc"))
+        assertEquals(60, json.getJSONObject("autoservice").getInt("soc_percent"))
+        assertFalse(json.has("diplus"))
     }
 
     @Test
-    fun `autoservice soc overrides a stale di+ soc in both mirrors`() {
-        // The bug this whole change fixes: di+ frozen at 55 while autoservice tracks 62.
+    fun `direct payload never serializes a stale di plus soc`() {
         val json = payload(diPars(soc = 55, chargeGunState = 2), snap(socPercent = 62, gun = 2))
         assertEquals(62, json.getJSONObject("telemetry").getInt("soc"))
-        assertEquals(62, json.getJSONObject("diplus").getInt("soc"))
+        assertEquals(62, json.getJSONObject("autoservice").getInt("soc_percent"))
+        assertFalse(json.has("diplus"))
     }
 
     @Test
-    fun `soc falls back to di+ per-field when autoservice read fails, doors still come from autoservice`() {
+    fun `unavailable direct soc remains unknown while other direct fields survive`() {
         val json = payload(
             diPars(soc = 55, doorFL = 1, tirePressFL = 240),
             snap(socPercent = null, doorFL = 0, tireFL = 245),
         )
-        val diplus = json.getJSONObject("diplus")
-        assertEquals(55, diplus.getInt("soc")) // autoservice failed -> di+ fallback
-        assertEquals(0, diplus.getInt("door_fl")) // autoservice succeeded -> autoservice wins
-        assertEquals(245, diplus.getInt("tire_press_fl_kpa"))
+        val autoservice = json.getJSONObject("autoservice")
+        assertEquals(JSONObject.NULL, autoservice.get("soc_percent"))
+        assertEquals(0, autoservice.getInt("door_fl"))
+        assertEquals(245, autoservice.getInt("tire_press_fl_kpa"))
+        assertFalse(json.has("diplus"))
     }
 
     @Test
-    fun `di+-only fields serialize as null, not absent or zero, when di+ is down`() {
+    fun `direct payload omits di plus block and leaves park state unknown`() {
         val json = payload(d = null, auto = snap(socPercent = 71, gun = 2))
-        val diplus = json.getJSONObject("diplus")
-        assertTrue(diplus.has("gear"))
-        assertEquals(JSONObject.NULL, diplus.get("gear"))
-        assertEquals(71, diplus.getInt("soc"))
+        assertFalse(json.has("diplus"))
+        assertEquals(JSONObject.NULL, json.getJSONObject("telemetry").get("is_parked"))
+        assertEquals(71, json.getJSONObject("autoservice").getInt("soc_percent"))
     }
 
     @Test

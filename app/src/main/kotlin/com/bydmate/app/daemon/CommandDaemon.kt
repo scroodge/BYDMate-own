@@ -2,7 +2,6 @@ package com.bydmate.app.daemon
 
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.CommandAllowlist
-import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
@@ -30,10 +29,11 @@ import kotlin.math.min
  * This class is launched as a shell-uid `app_process` daemon (see `tools/start_voltflow_cmd.sh`),
  * which survives the force-stop exactly like DI+ (`aps_diplus`) does.
  *
- * It needs NO Android Context: both actuation and telemetry go over plain localhost HTTP to
- * DiPlus on 127.0.0.1:8988, and [DiParsClient] / [DiParsControlClient] / [CommandAllowlist]
- * are all constructible from just an [OkHttpClient]. Config (cloud URL / api key / vehicle id)
- * comes from a properties-style file instead of SettingsRepository.
+ * It needs NO Android Context: actuation goes over localhost HTTP to DiPlus on
+ * 127.0.0.1:8988 while telemetry comes directly from the BYD autoservice Binder.
+ * [DiParsControlClient] and [CommandAllowlist] are constructible from just an
+ * [OkHttpClient]. Config (cloud URL / api key / vehicle id) comes from a
+ * properties-style file instead of SettingsRepository.
  *
  * Launch:  CLASSPATH=<base.apk> app_process /system/bin --nice-name=voltflow_cmd_daemon \
  *              com.bydmate.app.daemon.CommandDaemon [confPath]
@@ -383,7 +383,6 @@ object CommandDaemon {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .build()
-        val diPars = DiParsClient(ok)
         val control = DiParsControlClient(ok)
 
         // Commands poll on their own thread. Previously a single loop did DiPars + telemetry
@@ -413,7 +412,10 @@ object CommandDaemon {
         // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
         // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
         var lastWifiKeepAliveAt = 0L
-        // Last gear/gun state di+ actually reported. `latestData` itself is never cleared to
+        // Last gear/gun state exposed to the command guard. In the direct-only
+        // branch gear remains null until a safe autoservice fid is validated; the
+        // guard then fails closed rather than consulting di+.
+        // `latestData` itself is never cleared to
         // null once di+ has answered once — a failed fetch() just leaves it stale — so these
         // are captured separately at the moment of each successful fetch and read back once
         // di+ is judged unreachable (see DIPLUS_STALE_MS below). Gates the autoservice-only
@@ -446,16 +448,18 @@ object CommandDaemon {
                         lastWifiKeepAliveAt = now
                     }
 
-                    // Refresh telemetry for guards if stale (cheap localhost call).
+                    // Direct-engine-only telemetry. The DiPars-shaped object is a
+                    // compatibility carrier for the existing command guard; it is
+                    // populated exclusively from autoservice and leaves unknown
+                    // fields null.
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
-                        diPars.fetch()?.let {
-                            latestData = it; latestDataAt = now
-                            lastKnownGear = it.gear; lastKnownGunState = it.chargeGunState
-                        }
+                        val direct = readAutoserviceSnapshot()
+                        latestData = direct.toSafetyData()
+                        latestDataAt = now
+                        lastKnownGear = null
+                        lastKnownGunState = direct.gun
                     }
-                    // `latestData` itself may be a stale success from before di+ went dark (see
-                    // DIPLUS_STALE_MS) — this is the actual "is di+ usable right now" signal.
-                    val diPlusFresh = latestData != null && now - latestDataAt <= DIPLUS_STALE_MS
+                    val directFresh = latestData != null && now - latestDataAt <= DIPLUS_STALE_MS
 
                     // Push telemetry to the cloud so data keeps flowing while the app process is dead.
                     // Two guards prevent duplicating the app's stream:
@@ -484,7 +488,7 @@ object CommandDaemon {
                         // below, and (per buildTelemetryPayload's precedence) autoservice wins the
                         // shared fields whenever di+ is fresh too, not only when di+ is down.
                         val autoSnap = readAutoserviceSnapshot()
-                        val pushed = latestData.takeIf { diPlusFresh }?.let { data ->
+                        val pushed = latestData.takeIf { directFresh }?.let { data ->
                             // Step 2, log-only: detect di+ answering with a frozen value (as
                             // opposed to not answering at all, which diPlusFresh already covers).
                             val sig = diPlusValueSignature(data)
@@ -843,10 +847,8 @@ object CommandDaemon {
     }
 
     /**
-     * Push one telemetry sample to the cloud ingest endpoint (contract:
-     * docs/cloud-telemetry-contract-ru.md). [data] is null when di+ is unreachable — the payload
-     * then carries only what autoservice can supply, which is why the caller must have cleared
-     * [shouldUseAutoserviceFallback] first.
+     * Push one direct-engine telemetry sample to the cloud ingest endpoint.
+     * [data] is a command-safety carrier only and is never serialized as di+.
      */
     private fun pushTelemetry(
         ok: OkHttpClient,
@@ -856,17 +858,6 @@ object CommandDaemon {
         liveOnly: Boolean = false,
     ) {
         try {
-            // Parity line: autoservice is now the source of these fields, so this records what di+
-            // *would* have said. Divergence here means di+ has gone stale, not that we sent it.
-            if (data != null) {
-                log(
-                    "parity: soc=${auto.socPercent}(di+ ${data.soc}) pw=${auto.powerKw}(di+ ${data.power}) " +
-                        "doors=${auto.doorFL}${auto.doorFR}${auto.doorRL}${auto.doorRR}" +
-                        "(di+ ${data.doorFL}${data.doorFR}${data.doorRL}${data.doorRR}) " +
-                        "tires=${auto.tireFL}/${auto.tireFR}/${auto.tireRL}/${auto.tireRR}" +
-                        "(di+ ${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
-                )
-            }
             val payload = buildTelemetryPayload(conf.vehicleId, data, auto, liveOnly).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
@@ -878,8 +869,7 @@ object CommandDaemon {
                 .build()
             ok.newCall(request).execute().use {
                 val mode = if (liveOnly) " live_only" else ""
-                val src = if (data != null) "" else " (di+ down)"
-                log("telemetry HTTP ${it.code} (soc=${auto.socPercent ?: data?.soc} pwr_state=${data?.powerState}$mode$src)")
+                log("telemetry HTTP ${it.code} (direct soc=${auto.socPercent} power=${auto.powerKw}$mode)")
             }
         } catch (e: Exception) {
             log("telemetry push failed: ${e.message}")
@@ -908,23 +898,67 @@ object CommandDaemon {
     )
 
     /**
-     * Builds the cloud telemetry payload by merging the two sources **per field**, with
-     * autoservice taking precedence over di+ wherever it has a live-validated fid.
+     * Compatibility carrier for command safety only. It contains no di+ read:
+     * unsupported speed and gear are deliberately null, which makes the
+     * allowlist reject commands unless direct charging evidence is available.
+     */
+    private fun AutoserviceSnapshot.toSafetyData(): DiParsData = DiParsData(
+        soc = socPercent,
+        speed = null,
+        mileage = null,
+        power = powerKw?.toDouble(),
+        chargeGunState = gun,
+        maxBatTemp = null,
+        avgBatTemp = null,
+        minBatTemp = null,
+        chargingStatus = null,
+        batteryCapacityKwh = null,
+        totalElecConsumption = null,
+        voltage12v = voltage12v,
+        maxCellVoltage = null,
+        minCellVoltage = null,
+        exteriorTemp = null,
+        gear = null,
+        powerState = null,
+        insideTemp = null,
+        acStatus = null,
+        acTemp = null,
+        fanLevel = null,
+        acCirc = null,
+        doorFL = doorFL,
+        doorFR = doorFR,
+        doorRL = doorRL,
+        doorRR = doorRR,
+        windowFL = null,
+        windowFR = null,
+        windowRL = null,
+        windowRR = null,
+        sunroof = null,
+        trunk = trunk,
+        hood = hood,
+        seatbeltFL = null,
+        lockFL = null,
+        tirePressFL = tireFL,
+        tirePressFR = tireFR,
+        tirePressRL = tireRL,
+        tirePressRR = tireRR,
+        driveMode = null,
+        workMode = null,
+        autoPark = null,
+        rain = null,
+        lightLow = null,
+        drl = null,
+        sunshade = null,
+        sentryState = null,
+        remoteLockState = null,
+    )
+
+    /**
+     * Builds a direct-engine-only cloud telemetry payload.
      *
-     * Why autoservice wins unconditionally rather than only when di+ looks stale: a 1236-sample
-     * parity corpus off this car (2026-07-23) shows the two agree *exactly* — delta 0 across
-     * 55…77% — whenever di+ is demonstrably live (its own `power` matching autoservice). Every
-     * divergence in the corpus sits inside a window where di+ is independently shown to be frozen,
-     * and there autoservice is the source still tracking reality. So promoting it is a no-op in
-     * the healthy case and a correction in the stale case, with no heuristic to get wrong.
-     *
-     * Degradation is per field, not all-or-nothing: every `readAutoservice*` returns null on
-     * failure, so an autoservice outage silently reverts each affected field to di+.
-     *
-     * @param d di+ sample, or null when di+ is unreachable — then its exclusive fields (speed,
-     *   gear, climate, temps, cell voltages, windows…) serialize as JSON null, the same partial
-     *   sample shape [putN] already produces for any missing field.
-     * @param auto autoservice snapshot, or null when only di+ is available.
+     * Every unsupported direct field is emitted as JSON null/omitted; it is never
+     * filled from di+. [d] remains only for binary-compatible unit-test callers
+     * and must be null in production telemetry paths.
      * @param mateVersion injectable so unit tests need not touch [BuildConfig].
      */
     internal fun buildTelemetryPayload(
@@ -934,31 +968,25 @@ object CommandDaemon {
         liveOnly: Boolean = false,
         mateVersion: String = BuildConfig.VERSION_NAME,
     ): JSONObject {
-        val cellDelta = if (d?.maxCellVoltage != null && d.minCellVoltage != null) {
-            d.maxCellVoltage!! - d.minCellVoltage!!
-        } else {
-            null
-        }
+        val cellDelta: Double? = null
 
-        // Merged fields — autoservice first, di+ as the per-field fallback. `power` bridges
-        // types: autoservice reports whole kW (Int), di+ reports fractional (Double).
-        val soc = auto?.socPercent ?: d?.soc
-        val powerKw = auto?.powerKw?.toDouble() ?: d?.power
-        val gun = auto?.gun ?: d?.chargeGunState
-        val voltage12v = auto?.voltage12v ?: d?.voltage12v
-        val doorFL = auto?.doorFL ?: d?.doorFL
-        val doorFR = auto?.doorFR ?: d?.doorFR
-        val doorRL = auto?.doorRL ?: d?.doorRL
-        val doorRR = auto?.doorRR ?: d?.doorRR
-        val trunk = auto?.trunk ?: d?.trunk
-        val hood = auto?.hood ?: d?.hood
-        val tireFL = auto?.tireFL ?: d?.tirePressFL
-        val tireFR = auto?.tireFR ?: d?.tirePressFR
-        val tireRL = auto?.tireRL ?: d?.tirePressRL
-        val tireRR = auto?.tireRR ?: d?.tirePressRR
+        val soc = auto?.socPercent
+        val powerKw = auto?.powerKw?.toDouble()
+        val gun = auto?.gun
+        val voltage12v = auto?.voltage12v
+        val doorFL = auto?.doorFL
+        val doorFR = auto?.doorFR
+        val doorRL = auto?.doorRL
+        val doorRR = auto?.doorRR
+        val trunk = auto?.trunk
+        val hood = auto?.hood
+        val tireFL = auto?.tireFL
+        val tireFR = auto?.tireFR
+        val tireRL = auto?.tireRL
+        val tireRR = auto?.tireRR
 
-        val isCharging = isChargingFrom(auto?.gun, d?.chargingStatus)
-        val chargeType = chargeTypeFrom(auto?.chargingType ?: d?.chargeGunState)
+        val isCharging = isChargingFrom(auto?.gun, null)
+        val chargeType = chargeTypeFrom(auto?.chargingType)
 
         val diplus = JSONObject().apply {
             putN("soc", soc); putN("speed_kmh", d?.speed); putN("mileage_km", d?.mileage)
@@ -996,7 +1024,9 @@ object CommandDaemon {
             putN("charge_power_kw", if (isCharging) powerKw?.let { abs(it) } else null)
             putN("kwh_charged", if (isCharging) auto?.kwhCharged?.toDouble() else null)
             putN("charge_type", if (isCharging) chargeType else null)
-            put("is_parked", isParkedFrom(d?.gear, isCharging))
+            // Gear has no validated direct fid on this vehicle. Keep this
+            // unknown instead of deriving a parked state from di+ or silence.
+            putN("is_parked", null)
             putN("soh_percent", auto?.sohPercent?.toDouble())
         }
 
@@ -1010,7 +1040,23 @@ object CommandDaemon {
             // Omitted (not false) when unset so a normal sample keeps its exact current shape.
             if (liveOnly) put("live_only", true)
             put("telemetry", telemetry)
-            put("diplus", diplus)
+            // No `diplus` block: all fields in this payload came from the
+            // direct autoservice engine. Unsupported direct fields above stay
+            // null rather than being mislabelled as di+ telemetry.
+            put("autoservice", JSONObject().apply {
+                putN("soc_percent", soc)
+                putN("power_kw", powerKw)
+                putN("gun_state", gun)
+                putN("charging_type", auto?.chargingType)
+                putN("voltage_12v", voltage12v)
+                putN("soh_percent", auto?.sohPercent)
+                putN("charging_capacity_kwh", auto?.kwhCharged)
+                putN("door_fl", doorFL); putN("door_fr", doorFR)
+                putN("door_rl", doorRL); putN("door_rr", doorRR)
+                putN("trunk", trunk); putN("hood", hood)
+                putN("tire_press_fl_kpa", tireFL); putN("tire_press_fr_kpa", tireFR)
+                putN("tire_press_rl_kpa", tireRL); putN("tire_press_rr_kpa", tireRR)
+            })
             // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
             put("location", JSONObject())
         }

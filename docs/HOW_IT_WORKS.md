@@ -27,47 +27,35 @@ come back from it.**
 | Local DB | Room, schema version 16 |
 | Distribution | **debug-signed APK only**, published to GitHub Releases |
 
-Its primary reader is **di+ (D+, `vandiplus`)**, which exposes vehicle signals over
-localhost HTTP. VoltFlow Mate also has a direct, read-only BYD `autoservice` Binder
-path for a validated core subset when di+ is unavailable.
+Its telemetry reader is the app's own, read-only BYD `autoservice` Binder engine.
+Di+ (D+, `vandiplus`) is retained only for its stall-sentry and the existing
+`sendCmd` actuation channel; it is not a telemetry source in this branch.
 
 **The original BYDMate app is *not* a runtime dependency.** VoltFlow Mate is a fork
 of it (hence the `com.bydmate.app` Kotlin package and the GPLv3 attribution in
 `NOTICE.md`), but it does not read from it, talk to it, or require it installed.
-Provenance only — the data source is di+.
+Provenance only — vehicle telemetry is direct autoservice data.
 
 ### Dependency reality check — read this before anything else
 
-> **D+ is no longer a single point of failure for core foreground telemetry.** When
-> its HTTP read fails, the app uses the direct BYD Binder for validated SOC, power,
-> charge-gun state and 12 V data, and continues cloud telemetry. D+ remains primary
-> for the richer signal set and for all command/sentry functions.
+> **D+ is not in the telemetry pipeline.** The APK and survival daemon both read the
+> direct BYD Binder. Unsupported fields remain explicitly unknown; they are never
+> filled from di+ or stale cached values.
 
-**The whole pipeline lives inside one null check** (`TrackingService.kt:749`):
+**The foreground pipeline starts with one bounded direct read**:
 
 ```kotlin
-val data = diParsClient.fetch()
-if (data != null) {
-    // …build snapshot, enqueue, flush — everything…
-} else {
-    consecutiveNullCount++          // TrackingService.kt:936
-    // …back off, relaunch D+…
-}
+val ownSnapshot = readAutoserviceFallback(System.currentTimeMillis())
+val data = ownSnapshot?.toDisplayData() // compatibility carrier; direct fields only
 ```
 
-On a failed read, the app marks D+ disconnected and attempts a bounded direct-Binder
-fallback every three seconds. After three failures it also begins the normal D+
-relaunch watchdog. The fallback publishes only values from validated fids; all
-unavailable fields remain null rather than being inferred. Cloud payloads from this
-path deliberately omit the `diplus` object and retain the direct values in the
-normal telemetry and `autoservice` blocks. GPS speed is used only for cloud cadence
-while D+ is down.
+The direct reader runs every three seconds and backs off only when the Binder itself
+is unavailable. It publishes validated SOC, engine power, charge-gun state, 12 V,
+SoH and charge diagnostics. Speed, gear, odometer, temperatures, cell voltages and
+climate are marked unsupported on this vehicle; cloud payloads omit `diplus`.
 
-It goes further than depending on D+: it **actively repairs** it.
-`DiPlusWatchdog.shouldRelaunch()` triggers `tryLaunchDiPlus()`
-(`TrackingService.kt:1080`), which connects over on-device ADB and runs
-`launchDiPlusService()` to restart D+'s MainService. `CommandDaemon` is the same —
-it reads D+ over `127.0.0.1:8988` and actuates through `sendCmd`.
+The daemon uses the same direct engine while the app is asleep. It may still call
+Di+ only to send an allowlisted command through `127.0.0.1:8988/api/sendCmd`.
 
 The v0.5.1 changelog states it directly:
 
@@ -79,8 +67,8 @@ The v0.5.1 changelog states it directly:
 
 | Mechanism | Independent of what | Still needs D+? |
 |---|---|---|
-| `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Yes** — reads D+ over HTTP, actuates via `sendCmd` |
-| `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` (29 fids, hand-rolled binary ADB protocol) | **D+ for validated core reads** — supplies foreground fallback and daemon data | **No for SOC/power/gun/12 V/SoH diagnostics**; needs ADB and still covers only a fraction of the richer signal set |
+| `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Only for `sendCmd` actuation** |
+| `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` | **All telemetry reads** — supplies APK and daemon data | **No**; fields without a validated fid remain unsupported |
 
 So survival genuinely is the app's own algorithm — but it is independence from
 *BYD force-stopping the app*, not from D+.

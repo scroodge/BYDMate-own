@@ -168,36 +168,34 @@ toggle. Verify with:
 adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "wifi keepalive"
 ```
 
-### Autoservice parity check (experimental, always-on when the daemon runs)
+### Direct autoservice telemetry engine
 
-Every telemetry push, the daemon now also reads SOC and engine power directly from the
-`autoservice` binder (bypassing DiPlus entirely for these two fields — same fids as
-[`FidRegistry`](../app/src/main/kotlin/com/bydmate/app/data/autoservice/FidRegistry.kt)) and logs
-them next to the DiPlus-sourced values, purely for comparison — nothing is sent to the cloud from
-this path yet:
+Every telemetry push reads directly from the `autoservice` Binder. The daemon does
+not read di+ for telemetry and does not emit a `diplus` object. SOC, engine power,
+gun state, 12 V, SoH, charge diagnostics, validated doors/trunk/hood and validated
+tire pressures are sent from this engine. The direct reader is the same fid registry
+used by the foreground APK.
 
 ```sh
-adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "autoservice check"
-# expect: autoservice check: soc=79.0 (diplus=79) power_kw=-4 (diplus=-4)
+adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "direct soc"
+# expect: telemetry HTTP 200 (direct soc=79 power=-4)
 ```
 
-**2026-07-22 update:** the daemon also logs a second parity line covering doors, trunk, hood, and
-tire pressure — 16 fids total (including 12 window/sunroof/sunshade fids in `FidRegistry` not yet
-wired into a log line), sourced from the real BYD vendor SDK
-(`android.hardware.bydauto.BYDAutoFeatureIds`, decompiled from this car's own
-`/system/framework/framework.jar`) rather than guessed magic numbers, and live-validated 16/16
-against di+ the same day (see [`FidRegistry.kt`](../app/src/main/kotlin/com/bydmate/app/data/autoservice/FidRegistry.kt)
-for the architecture-conditional caveat — 12 of the 16 values only apply to CANFD-platform BYDs):
+**2026-07-22 validation record:** direct door/trunk/hood and tire-pressure fids came
+from the real BYD vendor SDK (`android.hardware.bydauto.BYDAutoFeatureIds`,
+decompiled from this car's `/system/framework/framework.jar`) and were live-validated
+before use. They stay model-conditional; a new vehicle must validate them before
+adding them to its direct support contract:
 
 ```sh
 adb -s $HOST shell "tail -f /data/local/tmp/voltflow_cmd_daemon.log" | grep "autoservice check2"
 # expect: autoservice check2: doors/trunk/hood(fl/fr/rl/rr/trunk/hood)=0/0/0/0/0/0 (diplus=0/0/0/0/0/0) tires_kpa(fl/fr/rl/rr)=250/247/245/247 (diplus=250/247/245/247)
 ```
 
-This is the evidence-gathering step for backlog **B-07** (dropping the di+ dependency for reads)
-— see [`docs/BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано). Once enough real-drive/charge/park
-log samples confirm parity, the DiPars-sourced fields can be replaced outright instead of just
-cross-checked.
+Unsupported direct fields — including speed, gear/park state, odometer, temperatures
+and climate — are unknown, never copied from di+. Consequently a parked command with
+no direct charging evidence is rejected as `gear_unknown` until a safe direct gear or
+movement reader is validated. See [`docs/BACKLOG.md`](BACKLOG.md#кандидаты-не-запланировано).
 
 ## Prerequisites (one time)
 
@@ -406,4 +404,6 @@ adb -s $HOST shell "pkill -f voltflow_cmd_daemon"                          # kil
 
 Actuation only ever calls DiPlus `127.0.0.1/api/sendCmd` with phrases from `CommandAllowlist`;
 `DiParsControlClient` additionally blocks dangerous patterns (`发送CAN`, `执行SHELL`, `下电`…).
-Movement and low-12V guards reject commands unless the car is parked.
+Movement and low-12V guards fail closed. Without a validated direct gear/movement
+fid, non-charging parked commands are rejected as `gear_unknown` rather than using
+di+ telemetry.

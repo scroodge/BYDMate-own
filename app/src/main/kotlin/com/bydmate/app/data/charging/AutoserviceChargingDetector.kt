@@ -3,7 +3,6 @@ package com.bydmate.app.data.charging
 import com.bydmate.app.data.autoservice.AutoserviceClient
 import com.bydmate.app.data.local.entity.BatterySnapshotEntity
 import com.bydmate.app.data.local.entity.ChargeEntity
-import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
@@ -54,7 +53,6 @@ class AutoserviceChargingDetector @Inject constructor(
     private val stateStore: ChargingStateStore,
     private val classifier: ChargingTypeClassifier,
     private val settings: SettingsRepository,
-    private val diParsClient: DiParsClient
 ) {
     companion object {
         const val MIN_DELTA_KWH = 0.5
@@ -124,31 +122,14 @@ class AutoserviceChargingDetector @Inject constructor(
             val battery = client.readBatterySnapshot()
             val charging = client.readChargingSnapshot()
 
-            // Step 3: SOC sentinel check with DiPars fallback.
-            // The autoservice SOC fid can sentinel-out for several reasons:
-            //   - cold-start window: TrackingService runs catch-up before
-            //     autoservice has warmed its fid cache (observed 2026-04-30).
-            //   - 100% balancing: BMS may temporarily detach some telemetry
-            //     fids while equalizing cells (per car manual).
-            // DiPars lives in a separate process with its own cache and
-            // typically holds the last-known SOC across both windows. When
-            // it has a valid 0..100 value, we use it as the SOC source so
-            // catch-up does not lose a real charging session.
-            val autoSoc = battery?.socPercent?.toInt()
-            val currentSoc: Int = if (autoSoc != null) {
-                autoSoc
-            } else {
-                val diParsSoc = runCatching { diParsClient.fetch() }.getOrNull()
-                    ?.soc?.takeIf { it in 0..100 }
-                if (diParsSoc != null) {
-                    android.util.Log.i(TAG, "runCatchUp: autoservice SOC sentinel → DiPars fallback soc=$diParsSoc")
-                    diParsSoc
-                } else {
-                    android.util.Log.i(TAG, "runCatchUp: socPercent sentinel from BOTH autoservice AND DiPars")
+            // Step 3: SOC is direct-engine-only. A sentinel means this session
+            // cannot be finalized safely yet; do not substitute a di+ value.
+            val currentSoc = battery?.socPercent?.toInt()?.takeIf { it in 0..100 }
+                ?: run {
+                    android.util.Log.i(TAG, "runCatchUp: direct autoservice SOC unavailable")
                     _state.value = DetectorState.IDLE
                     return CatchUpResult(CatchUpOutcome.SENTINEL)
                 }
-            }
 
             // Step 4: load previous state; seed on cold start
             val prev = stateStore.load()
@@ -306,15 +287,11 @@ class AutoserviceChargingDetector @Inject constructor(
             val chargeId = chargeRepo.insertCharge(charge)
 
             // Step 11: BatterySnapshot when SOC delta is meaningful
-            // SoH = BMS-reported (autoservice FID_SOH), NOT our derived value.
-            // cellDeltaV/batTempAvg = best-effort from DiPlus; nulls if unavailable.
+            // SoH is BMS-reported through autoservice. Cell delta and battery
+            // temperature have no validated direct fid on this car, so remain null.
             if ((socEnd - socStart) >= MIN_SOC_DELTA_FOR_SNAPSHOT) {
                 val capacity = batteryHealthRepo.calculateCapacity(delta, socStart, socEnd)
                 val bmsSoh = battery?.sohPercent?.toDouble()
-                val diPars = runCatching { diParsClient.fetch() }.getOrNull()
-                val cellDelta = if (diPars?.maxCellVoltage != null && diPars.minCellVoltage != null)
-                    diPars.maxCellVoltage - diPars.minCellVoltage else null
-                val batTemp = diPars?.avgBatTemp?.toDouble()
                 batteryHealthRepo.insert(
                     BatterySnapshotEntity(
                         timestamp = now,
@@ -324,8 +301,8 @@ class AutoserviceChargingDetector @Inject constructor(
                         kwhCharged = delta,
                         calculatedCapacityKwh = capacity,
                         sohPercent = bmsSoh,
-                        cellDeltaV = cellDelta,
-                        batTempAvg = batTemp,
+                        cellDeltaV = null,
+                        batTempAvg = null,
                         chargeId = chargeId
                     )
                 )

@@ -7,8 +7,6 @@ import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.local.dao.ChargeSummary
 import com.bydmate.app.data.local.entity.ChargeEntity
 import com.bydmate.app.data.local.entity.ChargePointEntity
-import com.bydmate.app.data.remote.DiParsClient
-import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
@@ -99,12 +97,6 @@ class AutoserviceChargingDetectorTest {
             flowOf(emptyList())
     }
 
-    private class FakeDiParsClient(
-        private val data: DiParsData? = null
-    ) : DiParsClient(okhttp3.OkHttpClient()) {
-        override suspend fun fetch(): DiParsData? = data
-    }
-
     private class RecordingBatterySnapshotDao : com.bydmate.app.data.local.dao.BatterySnapshotDao {
         val inserted = mutableListOf<com.bydmate.app.data.local.entity.BatterySnapshotEntity>()
         override suspend fun insert(snapshot: com.bydmate.app.data.local.entity.BatterySnapshotEntity): Long {
@@ -145,7 +137,6 @@ class AutoserviceChargingDetectorTest {
         autoserviceAvailable: Boolean = true,
         homeTariff: Double = 0.20,
         dcTariff: Double = 0.73,
-        diParsData: DiParsData? = null
     ): TestSetup {
         val auto = FakeAutoservice(battery, charging, autoserviceAvailable)
         val dao = RecordingDao()
@@ -177,28 +168,9 @@ class AutoserviceChargingDetectorTest {
             stateStore = stateStore,
             classifier = classifier,
             settings = settings,
-            diParsClient = FakeDiParsClient(diParsData)
         )
         return TestSetup(detector, dao, snapshotDao, stateStore, auto)
     }
-
-    /** Minimal DiParsData with only the SOC field populated; rest is null. */
-    private fun diParsSoc(soc: Int?): DiParsData = DiParsData(
-        soc = soc,
-        speed = null, mileage = null, power = null, chargeGunState = null,
-        maxBatTemp = null, avgBatTemp = null, minBatTemp = null,
-        chargingStatus = null, batteryCapacityKwh = null, totalElecConsumption = null,
-        voltage12v = null, maxCellVoltage = null, minCellVoltage = null,
-        exteriorTemp = null, gear = null, powerState = null, insideTemp = null,
-        acStatus = null, acTemp = null, fanLevel = null, acCirc = null,
-        doorFL = null, doorFR = null, doorRL = null, doorRR = null,
-        windowFL = null, windowFR = null, windowRL = null, windowRR = null,
-        sunroof = null, trunk = null, hood = null, seatbeltFL = null, lockFL = null,
-        tirePressFL = null, tirePressFR = null, tirePressRL = null, tirePressRR = null,
-        driveMode = null, workMode = null, autoPark = null, rain = null,
-        lightLow = null, drl = null,
-        sunshade = null, sentryState = null, remoteLockState = null,
-    )
 
     // --- helpers ---
 
@@ -448,7 +420,7 @@ class AutoserviceChargingDetectorTest {
 
     @Test
     fun `SOC sentinel returns SENTINEL and state NOT updated`() = runTest {
-        // battery.socPercent == null AND DiPars unavailable (default null)
+        // battery.socPercent == null: direct engine must not invent a value.
         val batteryNoSoc = BatteryReading(
             sohPercent = 100f, socPercent = null,
             lifetimeKwh = 600f, lifetimeMileageKm = 2091f,
@@ -466,36 +438,26 @@ class AutoserviceChargingDetectorTest {
     }
 
     @Test
-    fun `autoservice SOC sentinel falls back to DiPars and seeds baseline`() = runTest {
-        // Cold-start scenario: TrackingService runs catch-up before autoservice
-        // has warmed its fid cache. autoservice SOC is sentinel, but DiPars
-        // (separate process) returns the cached SOC=99. Baseline must seed
-        // from DiPars value, no row created.
+    fun `autoservice SOC sentinel never seeds a baseline from di plus`() = runTest {
+        // The direct-only branch deliberately waits for a valid direct SOC.
         val batteryNoSoc = BatteryReading(
             sohPercent = 100f, socPercent = null,
             lifetimeKwh = null, lifetimeMileageKm = 2091f,
             voltage12v = 14f, readAtMs = 1000L
         )
-        val setup = build(
-            battery = batteryNoSoc,
-            prevSoc = null,
-            diParsData = diParsSoc(99)
-        )
+        val setup = build(battery = batteryNoSoc, prevSoc = null)
 
         val result = setup.detector.runCatchUp(now = 1500L)
 
-        assertEquals(CatchUpOutcome.BASELINE_INITIALIZED, result.outcome)
+        assertEquals(CatchUpOutcome.SENTINEL, result.outcome)
         assertEquals(0, setup.chargeDao.inserted.size)
         val state = setup.stateStore.load()
-        assertEquals(99, state.socPercent)
+        assertNull(state.socPercent)
     }
 
     @Test
-    fun `autoservice SOC sentinel falls back to DiPars and creates session`() = runTest {
-        // Reproduces the 2026-04-30 lost-charge bug: car charged overnight,
-        // pistol pulled before DiLink finished booting → autoservice SOC was
-        // sentinel during catch-up. With DiPars fallback, we recover the real
-        // SOC=100, see the +20 jump from prevSoc=80, and create the session.
+    fun `autoservice SOC sentinel does not create a session from di plus`() = runTest {
+        // A real session remains pending until autoservice exposes a valid SOC.
         val batteryNoSoc = BatteryReading(
             sohPercent = 100f, socPercent = null,
             lifetimeKwh = null, lifetimeMileageKm = 2091f,
@@ -506,34 +468,22 @@ class AutoserviceChargingDetectorTest {
             charging = charging(capKwh = 14.0f),
             prevSoc = 80,
             prevCapacityKwh = 0.0f,
-            diParsData = diParsSoc(100)
         )
 
         val result = setup.detector.runCatchUp(now = 1500L)
 
-        assertEquals(CatchUpOutcome.SESSION_CREATED, result.outcome)
-        assertEquals(1, setup.chargeDao.inserted.size)
-        val ch = setup.chargeDao.inserted.single()
-        assertEquals(100, ch.socEnd)
-        assertEquals(80, ch.socStart)
-        assertEquals(14.0, ch.kwhCharged!!, 0.01)
+        assertEquals(CatchUpOutcome.SENTINEL, result.outcome)
+        assertEquals(0, setup.chargeDao.inserted.size)
     }
 
     @Test
-    fun `autoservice SOC sentinel and DiPars out-of-range still returns SENTINEL`() = runTest {
-        // DiPars can return garbage values (negative or >100) on some firmware
-        // states. takeIf { it in 0..100 } guard must reject them and keep the
-        // SENTINEL outcome so the baseline isn't poisoned.
+    fun `autoservice SOC sentinel keeps existing baseline`() = runTest {
         val batteryNoSoc = BatteryReading(
             sohPercent = 100f, socPercent = null,
             lifetimeKwh = null, lifetimeMileageKm = 2091f,
             voltage12v = 14f, readAtMs = 1000L
         )
-        val setup = build(
-            battery = batteryNoSoc,
-            prevSoc = 80,
-            diParsData = diParsSoc(-1)
-        )
+        val setup = build(battery = batteryNoSoc, prevSoc = 80)
 
         val result = setup.detector.runCatchUp(now = 1500L)
 

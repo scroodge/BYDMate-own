@@ -107,8 +107,10 @@ data class VehicleTelemetrySnapshot(
                 rangeEstKm = rangeEstKm,
                 currentTripDistanceKm = currentTripDistanceKm,
                 currentTripConsumptionKwh100km = currentTripConsumptionKwh100km,
-                isParked = data?.gear?.let { it == 1 }
-                    ?: speedKmh?.let { it <= PARKED_SPEED_THRESHOLD_KMH && isCharging != true },
+                // Direct autoservice has no validated gear/park fid on this car.
+                // GPS speed is useful as a separate signal but cannot prove park,
+                // so direct-only telemetry leaves this unknown rather than guessing.
+                isParked = data?.gear?.let { it == 1 },
                 tirePressFL = data?.tirePressFL,
                 tirePressFR = data?.tirePressFR,
                 tirePressRL = data?.tirePressRL,
@@ -133,7 +135,6 @@ data class VehicleTelemetrySnapshot(
             )
         }
 
-        private const val PARKED_SPEED_THRESHOLD_KMH = 0.5
     }
 }
 
