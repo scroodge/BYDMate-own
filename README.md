@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/License-GPLv3-blue?style=flat-square)](LICENSE)
 [![Релиз](https://img.shields.io/github/v/release/scroodge/BYDMate-own?style=flat-square&label=APK)](https://github.com/scroodge/BYDMate-own/releases/latest)
 
-**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение является шлюзом для передачи данных с BYDMATE в облако VoltFlow. 
+**VoltFlow Mate** — форк BYDMate для головных устройств BYD DiLink. Приложение является шлюзом: читает live-данные машины из **di+ (D+)** и передаёт их в облако VoltFlow. 
 
 [Скачать APK](https://github.com/scroodge/BYDMate-own/releases) ·[Сборка из исходников](#-сборка-из-исходников) · [Поддержать](SUPPORT.md)
 
@@ -48,12 +48,17 @@
 
 ### Что ещё нужно установить
 
-VoltFlow Mate читает live-данные машины через **BYDMATE.**
+VoltFlow Mate **не читает машину сам**. Live-данные он берёт из **di+ (D+, `vandiplus`)**,
+который отдаёт их по локальному HTTP на `127.0.0.1:8988`. Без установленного и запущенного
+di+ шлюз не отправит в облако ничего.
 
-1. Следуйте инструкции установки: (https://github.com/AndyShaman/BYDMate).
-2. Перенесите файл на DiLink.
-3. Установите через файловый менеджер.
-4. Запустите  BYDMATE хотя бы один раз и настройте его под вашу машину.
+1. Установите **di+ (D+)** на DiLink, если его ещё нет.
+2. Запустите di+ хотя бы один раз и настройте под вашу машину.
+3. Проверьте, что данные идут: на экране шлюза VoltFlow Mate появятся live-значения (SOC, передача, мощность).
+
+> Оригинальное приложение [BYDMate](https://github.com/AndyShaman/BYDMate) устанавливать
+> **не нужно**. VoltFlow Mate — его форк, но в работе от него не зависит: источник данных
+> только di+ (плюс опционально BMS/`autoservice` через разовый on-device ADB).
 
 
 ## Первый запуск

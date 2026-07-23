@@ -199,4 +199,30 @@ class CommandDaemonTest {
             CommandDaemon.shouldRefreshWifiKeepalive(now = t0 + 60_000L, lastAttemptAt = t0, enabled = true),
         )
     }
+
+    // --- autoservice-only fallback (di+ down, parked/charging only) ---
+
+    @Test
+    fun `fallback is allowed when the last known state was parked`() {
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 1, lastKnownGunState = null))
+    }
+
+    @Test
+    fun `fallback is allowed when the last known state was charging, regardless of gear`() {
+        // gun states 2-5 are AC/DC/AC_DC/VTOL per FidRegistry.FID_GUN_CONNECT_STATE.
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, lastKnownGunState = 2))
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 3, lastKnownGunState = 5))
+    }
+
+    @Test
+    fun `fallback never fires from a driving last-known-state`() {
+        // gear=4 (D) per DiParsData's gear enum, gun=1 (NONE) — not parked, not charging.
+        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 4, lastKnownGunState = 1))
+    }
+
+    @Test
+    fun `fallback never guesses when di+ has never answered at all`() {
+        // No last-known state at all — err toward silence, not a guess.
+        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, lastKnownGunState = null))
+    }
 }

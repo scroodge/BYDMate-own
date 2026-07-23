@@ -27,10 +27,75 @@ come back from it.**
 | Local DB | Room, schema version 16 |
 | Distribution | **debug-signed APK only**, published to GitHub Releases |
 
-It is *not* a standalone reader. It depends on **BYDMATE / DiPlus (D+)** being
+It is *not* a standalone reader. It depends on **di+ (D+, `vandiplus`)** being
 installed and configured — D+ is the process that talks to the vehicle CAN bus and
 exposes it over localhost HTTP. VoltFlow Mate is a consumer of that, plus an
 optional second reader path through the BYD `autoservice` binder.
+
+**The original BYDMate app is *not* a runtime dependency.** VoltFlow Mate is a fork
+of it (hence the `com.bydmate.app` Kotlin package and the GPLv3 attribution in
+`NOTICE.md`), but it does not read from it, talk to it, or require it installed.
+Provenance only — the data source is di+.
+
+### Dependency reality check — read this before anything else
+
+> **VoltFlow Mate does not read the car on its own. D+ is a hard dependency, and
+> as of 0.5.1 there is no fallback path.** If you believe otherwise, this is the
+> section to check first — and see §11 for why it is also partly *by design*.
+
+**The whole pipeline lives inside one null check** (`TrackingService.kt:749`):
+
+```kotlin
+val data = diParsClient.fetch()
+if (data != null) {
+    // …build snapshot, enqueue, flush — everything…
+} else {
+    consecutiveNullCount++          // TrackingService.kt:936
+    // …back off, relaunch D+…
+}
+```
+
+There is **no alternative producer**. When D+ returns null the app does not switch
+sources — it sends *nothing*, stretches the poll interval toward
+`MAX_POLL_INTERVAL_MS`, and sets `_diPlusConnected = false`.
+
+It goes further than depending on D+: it **actively repairs** it.
+`DiPlusWatchdog.shouldRelaunch()` triggers `tryLaunchDiPlus()`
+(`TrackingService.kt:1080`), which connects over on-device ADB and runs
+`launchDiPlusService()` to restart D+'s MainService. `CommandDaemon` is the same —
+it reads D+ over `127.0.0.1:8988` and actuates through `sendCmd`.
+
+The v0.5.1 changelog states it directly:
+
+> Сверка `autoservice` ↔ di+ в логе демона (диагностика, **источник данных пока не
+> меняется**) … в облако эти значения пока не отправляются.
+> … Основной pipeline телеметрии/команд не изменился.
+
+**What *is* the app's own — the part easily conflated with independence:**
+
+| Mechanism | Independent of what | Still needs D+? |
+|---|---|---|
+| `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Yes** — reads D+ over HTTP, actuates via `sendCmd` |
+| `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` (29 fids, hand-rolled binary ADB protocol) | **D+ entirely** — real, wired to the cloud's `autoservice` block, 16/16 fids validated against D+ on 2026-07-22 | **No** — but it is a *supplement*: needs ADB, and covers a fraction of the ~48 signals D+ supplies |
+
+So survival genuinely is the app's own algorithm — but it is independence from
+*BYD force-stopping the app*, not from D+.
+
+**Full independence is not merely unfinished — it is partly blocked.** Even if
+B-07 moved every read to the `autoservice` binder, D+ would still be required:
+
+- D+'s 熄火哨兵 stall-sentry is what keeps the head unit awake while parked.
+- `127.0.0.1:8988/api/sendCmd` is the **only** actuation channel. `AdbOnDeviceClient` is deliberately write-barriered, so there is no autoservice write path for commands.
+
+A full `nativestack` port (direct autoservice reads) was **evaluated and rejected**:
+~40 per-vehicle-validated fids, more on-device ADB load, no new data — and D+ still
+could not be removed.
+
+If you are looking for where the "no third-party app" architecture is described,
+that is [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) — a comparison table
+describing **competitor BYD EV Pro's** design — plus backlog item **B-07**, filed
+under *кандидаты, не запланировано*. The parity logging added in 0.5.1 is the first
+evidence-gathering step toward it, not its arrival.
 
 ### The UI is one screen
 

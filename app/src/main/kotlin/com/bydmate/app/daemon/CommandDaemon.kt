@@ -50,6 +50,16 @@ object CommandDaemon {
     /** How often to refresh telemetry used for movement/voltage guards. */
     private const val TELEMETRY_TTL_MS = 5_000L
 
+    /**
+     * How stale `latestData` may be before di+ is judged unreachable and the autoservice-only
+     * fallback becomes eligible (subject to [shouldUseAutoserviceFallback]). A failed
+     * `diPars.fetch()` never nulls out `latestData` — it just stops refreshing it — so without
+     * this bound the daemon would silently keep re-pushing an increasingly stale di+ snapshot
+     * forever instead of ever noticing di+ is down. 3x [TELEMETRY_TTL_MS]: tolerates a couple of
+     * transient fetch failures before treating it as a real outage.
+     */
+    private const val DIPLUS_STALE_MS = TELEMETRY_TTL_MS * 3
+
     /** How often the daemon pushes a telemetry sample to the cloud (keeps data flowing when the app is dead). */
     private const val TELEMETRY_PUSH_MS = 60_000L
 
@@ -144,6 +154,18 @@ object CommandDaemon {
      */
     internal fun shouldRefreshWifiKeepalive(now: Long, lastAttemptAt: Long, enabled: Boolean): Boolean =
         enabled && now - lastAttemptAt >= WIFI_KEEPALIVE_INTERVAL_MS
+
+    /**
+     * Whether it's safe to push the autoservice-only fallback when di+ is unreachable — parked
+     * or charging only, never a guess. The fallback has no `gear`/`speed` of its own, so pushing
+     * it while actually driving would be a reduced-payload sample mid-drive, the same class of
+     * bug the DRIVING guard above (`state == DRIVING -> skip`) already exists to prevent. Gated
+     * on the *last known* di+ state before it went dark, not the current one (there is none —
+     * that's the point). `lastKnownGear == null` (di+ never answered even once) stays false:
+     * err toward silence, not a guess, until we have real evidence the car is parked/charging.
+     */
+    internal fun shouldUseAutoserviceFallback(lastKnownGear: Int?, lastKnownGunState: Int?): Boolean =
+        lastKnownGear == 1 || (lastKnownGunState != null && lastKnownGunState in 2..5)
 
     /**
      * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
@@ -289,6 +311,13 @@ object CommandDaemon {
         // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
         // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
         var lastWifiKeepAliveAt = 0L
+        // Last gear/gun state di+ actually reported. `latestData` itself is never cleared to
+        // null once di+ has answered once — a failed fetch() just leaves it stale — so these
+        // are captured separately at the moment of each successful fetch and read back once
+        // di+ is judged unreachable (see DIPLUS_STALE_MS below). Gates the autoservice-only
+        // fallback — see shouldUseAutoserviceFallback.
+        var lastKnownGear: Int? = null
+        var lastKnownGunState: Int? = null
 
         runBlocking {
             while (true) {
@@ -308,8 +337,14 @@ object CommandDaemon {
 
                     // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
-                        diPars.fetch()?.let { latestData = it; latestDataAt = now }
+                        diPars.fetch()?.let {
+                            latestData = it; latestDataAt = now
+                            lastKnownGear = it.gear; lastKnownGunState = it.chargeGunState
+                        }
                     }
+                    // `latestData` itself may be a stale success from before di+ went dark (see
+                    // DIPLUS_STALE_MS) — this is the actual "is di+ usable right now" signal.
+                    val diPlusFresh = latestData != null && now - latestDataAt <= DIPLUS_STALE_MS
 
                     // Push telemetry to the cloud so data keeps flowing while the app process is dead.
                     // Two guards prevent duplicating the app's stream:
@@ -334,7 +369,7 @@ object CommandDaemon {
                         gunChanged = gunChanged,
                     )
                     if (plan.push) {
-                        val pushed = latestData?.let { data ->
+                        val pushed = latestData.takeIf { diPlusFresh }?.let { data ->
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
                             // Parked + nothing material moved => live_only: the server refreshes
                             // live state and skips the history/hourly/trip writes. Charging is
@@ -385,7 +420,26 @@ object CommandDaemon {
                                     true
                                 }
                             }
-                        } ?: false
+                        } ?: run {
+                            // di+ is down or stuck stale (diPlusFresh == false). Only fall back
+                            // to autoservice-only telemetry when the last known state before di+
+                            // went dark was parked/charging — see shouldUseAutoserviceFallback
+                            // for why this never guesses during a drive.
+                            when {
+                                shouldDeferToApp(beaconAgeMs(now), liveOnly = false) -> {
+                                    logSkip(now, "app alive — VoltFlow Mate is sending")
+                                    false
+                                }
+                                shouldUseAutoserviceFallback(lastKnownGear, lastKnownGunState) -> {
+                                    pushAutoserviceFallback(ok, conf)
+                                    true
+                                }
+                                else -> {
+                                    logSkip(now, "di+ unreachable, last known state not parked/charging")
+                                    false
+                                }
+                            }
+                        }
                         // Only a push that actually went out may advance the timers. Advancing on a
                         // skip is what stretched the post-park blackout by up to a further 60 s: the
                         // history cadence kept "firing" into the void while the app was assumed
@@ -620,6 +674,18 @@ object CommandDaemon {
         null
     }
 
+    /** Runs `service call autoservice 7 i32 <dev> i32 <fid>` and decodes the raw float, or null. */
+    private fun readAutoserviceFloatFid(dev: Int, fid: Int): Double? = try {
+        val proc = Runtime.getRuntime().exec("service call autoservice 7 i32 $dev i32 $fid")
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        val bits = PARCEL_REGEX.find(out)?.groupValues?.getOrNull(1)?.toLong(16)?.toInt() ?: return null
+        val f = java.lang.Float.intBitsToFloat(bits)
+        if (f.isNaN() || f.isInfinite()) null else f.toDouble()
+    } catch (_: Exception) {
+        null
+    }
+
     /**
      * Door/trunk/hood open state via autoservice directly (dev=1001, transact 5) — same fids as
      * [com.bydmate.app.data.autoservice.FidRegistry.FID_DOOR_FL] and friends (CANFD branch,
@@ -695,6 +761,92 @@ object CommandDaemon {
             }
         } catch (e: Exception) {
             log("telemetry push failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Pushes a telemetry sample built entirely from autoservice reads — no di+ involved. Used
+     * only when [shouldUseAutoserviceFallback] has already confirmed the car is parked/charging;
+     * di+-only fields (speed, gear, climate, temps, etc.) are simply absent, same as any other
+     * partial sample. See docs/EV_PRO_APP_ANALYSIS.md and the "Parked/charging telemetry
+     * fallback" plan (2026-07-22) for why this exists and what it deliberately does not cover.
+     */
+    private fun pushAutoserviceFallback(ok: OkHttpClient, conf: Conf) {
+        try {
+            val payload = buildAutoserviceFallbackPayload(conf.vehicleId)
+            val diplus = payload.optJSONObject("diplus")
+            log(
+                "telemetry (di+ down, autoservice fallback): soc=${diplus?.opt("soc")} " +
+                    "gun=${diplus?.opt("charge_gun_state")}"
+            )
+            val request = Request.Builder()
+                .url(conf.telemetryUrl)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("X-API-Key", conf.apiKey)
+                .header("X-Vehicle-Id", conf.vehicleId)
+                .header("X-App", "VoltFlow-Mate-Daemon")
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            ok.newCall(request).execute().use { log("telemetry HTTP ${it.code} (autoservice fallback)") }
+        } catch (e: Exception) {
+            log("autoservice fallback push failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Assembles a telemetry payload purely from autoservice reads (dev=1001 bodywork/tyre,
+     * dev=1009 charging, dev=1012 engine, dev=1014 statistic — see [FidRegistry] for the fid
+     * catalog). Only fields already live-validated against di+ (2026-07-22) are populated;
+     * everything di+-only stays null via the same [putN] nullable-field convention
+     * [buildTelemetryPayload] already uses, so downstream consumers see a normal partial sample,
+     * not a malformed one.
+     */
+    private fun buildAutoserviceFallbackPayload(vehicleId: String): JSONObject {
+        val soc = readSocPercentAutoservice()?.toInt()
+        val powerKw = readEnginePowerKwAutoservice()
+        val gun = readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
+        val chargingType = readAutoserviceIntFid(1009, 876609592) // FID_CHARGING_TYPE
+        val voltage12v = readAutoserviceFloatFid(1001, 1128267816) // FID_OTA_BATTERY_POWER_VOLTAGE
+        val doorFL = readAutoserviceIntFid(1001, 692060168)
+        val doorFR = readAutoserviceIntFid(1001, 692060170)
+        val doorRL = readAutoserviceIntFid(1001, 692060172)
+        val doorRR = readAutoserviceIntFid(1001, 692060174)
+        val trunk = readAutoserviceIntFid(1001, 692060186)
+        val hood = readAutoserviceIntFid(1001, 692060188)
+        val tireFL = readAutoserviceIntFid(1001, -1728052956)
+        val tireFR = readAutoserviceIntFid(1001, -1728052952)
+        val tireRL = readAutoserviceIntFid(1001, -1728052948)
+        val tireRR = readAutoserviceIntFid(1001, -1728052944)
+        val sohPercent = readSohPercent()
+        val kwhCharged = readKwhCharged()
+        val isCharging = gun != null && gun in 2..5
+
+        val diplus = JSONObject().apply {
+            putN("soc", soc); putN("power_kw", powerKw); putN("charge_gun_state", gun)
+            putN("voltage_12v", voltage12v)
+            putN("door_fl", doorFL); putN("door_fr", doorFR); putN("door_rl", doorRL); putN("door_rr", doorRR)
+            putN("trunk", trunk); putN("hood", hood)
+            putN("tire_press_fl_kpa", tireFL); putN("tire_press_fr_kpa", tireFR)
+            putN("tire_press_rl_kpa", tireRL); putN("tire_press_rr_kpa", tireRR)
+        }
+        val telemetry = JSONObject().apply {
+            putN("soc", soc); putN("power_kw", powerKw); putN("aux_voltage_v", voltage12v)
+            put("is_charging", isCharging)
+            putN("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
+            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
+            putN("charge_type", if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
+            put("is_parked", !isCharging)
+            putN("soh_percent", sohPercent?.toDouble())
+        }
+        return JSONObject().apply {
+            put("schema_version", 1)
+            put("vehicle_id", vehicleId)
+            put("device_time", isoNow())
+            put("source", "BYDMate")
+            put("mate_version", BuildConfig.VERSION_NAME)
+            put("telemetry", telemetry)
+            put("diplus", diplus)
+            put("location", JSONObject())
         }
     }
 
