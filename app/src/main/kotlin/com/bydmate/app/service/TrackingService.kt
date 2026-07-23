@@ -22,7 +22,6 @@ import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.remote.AlicePollingManager
-import com.bydmate.app.data.remote.VehicleCommandPoller
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.autoservice.DirectDriveRecorder
@@ -68,7 +67,6 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var automationEngine: AutomationEngine
     @Inject lateinit var networkAvailableMonitor: com.bydmate.app.data.automation.NetworkAvailableMonitor
     @Inject lateinit var alicePollingManager: AlicePollingManager
-    @Inject lateinit var vehicleCommandPoller: VehicleCommandPoller
     @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
     @Inject lateinit var liveTripBuffer: LiveTripBuffer
     @Inject lateinit var socInterpolator: SocInterpolator
@@ -326,8 +324,9 @@ class TrackingService : Service(), LocationListener {
                 com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED, com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
             ) == "true"
             if (cloudEnabled) {
-                vehicleCommandPoller.start()
-                // Export config for the survival-proof shell daemon (CommandDaemon).
+                // Remote commands are intentionally disabled. The shell-uid daemon remains
+                // responsible only for direct autoservice telemetry and wake/sleep survival.
+                // Export its cloud credentials because it cannot read app-private settings.
                 // The daemon runs as uid shell and cannot read our app-private settings,
                 // so mirror the cloud-sync creds to a shell-readable file in external storage.
                 exportDaemonConfig()
@@ -578,7 +577,6 @@ class TrackingService : Service(), LocationListener {
         }.onFailure { Log.w(TAG, "clearAppAliveHeartbeat failed: ${it.message}") }
 
         alicePollingManager.stop()
-        vehicleCommandPoller.stop()
         cameraStateMonitor.stop()
         _cameraActive.value = false
         networkAvailableMonitor.stop()
@@ -774,7 +772,6 @@ class TrackingService : Service(), LocationListener {
                         // These legacy consumers receive the direct display carrier.
                         // Its unavailable fields are null; no di+ values enter it.
                         alicePollingManager.latestData = data
-                        vehicleCommandPoller.latestData = data
 
                         // Save SOC for retrospective charge detection
                         data.soc?.let { soc ->

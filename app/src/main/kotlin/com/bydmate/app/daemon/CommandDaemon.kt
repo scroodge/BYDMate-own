@@ -1,17 +1,13 @@
 package com.bydmate.app.daemon
 
 import com.bydmate.app.BuildConfig
-import com.bydmate.app.data.remote.CommandAllowlist
-import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import kotlinx.coroutines.runBlocking
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -22,31 +18,27 @@ import kotlin.math.abs
 import kotlin.math.min
 
 /**
- * Headless command-poll daemon — the survival-proof twin of [com.bydmate.app.data.remote.VehicleCommandPoller].
+ * Headless direct-telemetry daemon that preserves the APK's wake/sleep-survival path.
  *
  * Why this exists: the in-app poller runs inside the `com.bydmate.app` process, which BYD's
  * power-off routine (`collectPowerOffEvent` → force-stop) kills when the head unit parks/sleeps.
  * This class is launched as a shell-uid `app_process` daemon (see `tools/start_voltflow_cmd.sh`),
  * which survives the force-stop exactly like DI+ (`aps_diplus`) does.
  *
- * It needs NO Android Context: actuation goes over localhost HTTP to DiPlus on
- * 127.0.0.1:8988 while telemetry comes directly from the BYD autoservice Binder.
- * [DiParsControlClient] and [CommandAllowlist] are constructible from just an
- * [OkHttpClient]. Config (cloud URL / api key / vehicle id) comes from a
- * properties-style file instead of SettingsRepository.
+ * It needs NO Android Context. Telemetry comes directly from the BYD autoservice
+ * Binder; it never connects to DiPlus. Config (cloud URL / API key / vehicle ID)
+ * comes from a properties-style file instead of SettingsRepository.
  *
  * Launch:  CLASSPATH=<base.apk> app_process /system/bin --nice-name=voltflow_cmd_daemon \
  *              com.bydmate.app.daemon.CommandDaemon [confPath]
  *
- * Safety: reuses [CommandAllowlist] (movement / aux-voltage guards + phrase allowlist) and
- * [DiParsControlClient]'s blocked-pattern filter verbatim — no command logic is reinvented here.
+ * Remote-command polling is deliberately absent. The foreground APK and this daemon
+ * therefore have no runtime dependency on DiPlus.
  */
 object CommandDaemon {
 
     private const val DEFAULT_CONF = "/data/local/tmp/voltflow_cmd.conf"
     private const val BASE_POLL_MS = 6000L
-    private const val MAX_BACKOFF_MS = 30_000L
-
     /** How often to refresh telemetry used for movement/voltage guards. */
     private const val TELEMETRY_TTL_MS = 5_000L
 
@@ -366,8 +358,6 @@ object CommandDaemon {
     }
 
     private data class Conf(
-        val commandsUrl: String,
-        val ackUrl: String,
         val telemetryUrl: String,
         val apiKey: String,
         val vehicleId: String,
@@ -385,17 +375,6 @@ object CommandDaemon {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .build()
-        val control = DiParsControlClient(ok)
-
-        // Commands poll on their own thread. Previously a single loop did DiPars + telemetry
-        // POST + command poll in series, so every one of those round trips was added to the
-        // status period — which is why a 3s push interval measured 8-9s on the car. Split,
-        // the status loop only pays for its own work, and the command poll can stay at its
-        // relaxed 6s even while the live view is open.
-        Thread({ runBlocking { commandLoop(ok, control, confPath) } }, "voltflow-commands")
-            .apply { isDaemon = true }
-            .start()
-
         var lastTelemetryPushAt = 0L
         // Separate from [lastTelemetryPushAt] on purpose: fast-mode status pushes must not
         // keep resetting the history rhythm, or a car watched for an hour would store no
@@ -610,133 +589,6 @@ object CommandDaemon {
             }
         }
     }
-
-    /**
-     * Command polling, on its own thread. Kept at [BASE_POLL_MS] regardless of fast mode:
-     * grants last far longer than one poll, so there is nothing to gain by polling faster —
-     * and the status loop no longer waits on this round trip.
-     */
-    private suspend fun commandLoop(
-        ok: OkHttpClient,
-        control: DiParsControlClient,
-        confPath: String,
-    ) {
-        var backoffMs = BASE_POLL_MS
-        while (true) {
-            val conf = loadConf(confPath)
-            if (conf == null) {
-                Thread.sleep(BASE_POLL_MS)
-                continue
-            }
-            val waited = try {
-                val result = pollOnce(ok, conf, control, latestData)
-                backoffMs = if (result) BASE_POLL_MS else min(backoffMs * 2, MAX_BACKOFF_MS)
-                if (result) BASE_POLL_MS else backoffMs
-            } catch (e: Exception) {
-                log("poll error: ${e.message}")
-                backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
-                backoffMs
-            }
-            Thread.sleep(waited)
-        }
-    }
-
-    /** @return true on a clean poll (HTTP ok), false to trigger backoff. */
-    private suspend fun pollOnce(
-        ok: OkHttpClient,
-        conf: Conf,
-        control: DiParsControlClient,
-        data: DiParsData?,
-    ): Boolean {
-        val httpUrl = conf.commandsUrl.toHttpUrlOrNull() ?: return false
-        val request = Request.Builder()
-            .url(httpUrl)
-            .header("X-API-Key", conf.apiKey)
-            .header("X-Vehicle-Id", conf.vehicleId)
-            .header("X-App", "VoltFlow-Mate-Daemon")
-            .get()
-            .build()
-
-        ok.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                log("poll HTTP ${response.code}")
-                return false
-            }
-            val body = response.body?.string().orEmpty()
-            val json = JSONObject(body)
-            // Someone has the live view open. Read before the empty-queue return — an idle
-            // command queue is the normal case and must not skip the grant. Absent on older
-            // servers, which reads as 0 and leaves the current window to lapse.
-            val grantSeconds = json.optInt("live_fast_seconds", 0)
-            if (grantSeconds > 0) {
-                liveFastUntilMs = System.currentTimeMillis() + grantSeconds * 1000L
-            }
-            val commands = json.optJSONArray("commands") ?: JSONArray()
-            if (commands.length() == 0) return true
-
-            log("received ${commands.length()} command(s)")
-            val acks = JSONArray()
-            for (i in 0 until commands.length()) {
-                val cmd = commands.getJSONObject(i)
-                val id = cmd.getString("id")
-                val type = cmd.getString("type")
-                val params = jsonObjectToMap(cmd.optJSONObject("params") ?: JSONObject())
-                acks.put(executeCommand(control, data, id, type, params))
-            }
-            postAck(ok, conf, acks)
-        }
-        return true
-    }
-
-    private suspend fun executeCommand(
-        control: DiParsControlClient,
-        data: DiParsData?,
-        id: String,
-        type: String,
-        params: Map<String, Any?>,
-    ): JSONObject {
-        CommandAllowlist.movementBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
-        CommandAllowlist.auxVoltageBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
-
-        return when (val built = CommandAllowlist.buildPhrase(type, params)) {
-            is CommandAllowlist.BuildResult.Rejected ->
-                ack(id, "rejected", mapOf("error" to built.reason))
-            is CommandAllowlist.BuildResult.Ok -> {
-                val sent = control.sendAllowlistedPhrase(built.phrase)
-                if (sent) {
-                    log("executed '$type' → '${built.phrase}'")
-                    ack(id, "done", mapOf("phrase" to built.phrase, "verified" to false))
-                } else {
-                    log("FAILED '$type' → '${built.phrase}'")
-                    ack(id, "failed", mapOf("error" to "sendCmd_failed", "phrase" to built.phrase))
-                }
-            }
-        }
-    }
-
-    private fun postAck(ok: OkHttpClient, conf: Conf, acks: JSONArray) {
-        try {
-            val payload = JSONObject().put("acks", acks).toString()
-            val request = Request.Builder()
-                .url(conf.ackUrl)
-                .header("Content-Type", "application/json")
-                .header("X-API-Key", conf.apiKey)
-                .header("X-Vehicle-Id", conf.vehicleId)
-                .header("X-App", "VoltFlow-Mate-Daemon")
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
-            ok.newCall(request).execute().use { log("ack HTTP ${it.code} (${acks.length()} items)") }
-        } catch (e: Exception) {
-            log("ack failed: ${e.message}")
-        }
-    }
-
-    private fun ack(id: String, status: String, result: Map<String, Any?>): JSONObject =
-        JSONObject().apply {
-            put("id", id)
-            put("status", status)
-            put("result", JSONObject(result))
-        }
 
     /**
      * Read FID_CHARGING_CAPACITY (dev=1009, fid=666894360) from the autoservice Binder
@@ -1127,27 +979,13 @@ object CommandDaemon {
         val rawUrl = props["url"]?.takeIf { it.isNotBlank() } ?: return null
         val apiKey = props["api_key"]?.takeIf { it.isNotBlank() } ?: return null
         val vehicleId = props["vehicle_id"]?.takeIf { it.isNotBlank() } ?: return null
-        val commandsUrl = commandsUrlFromTelemetry(rawUrl) ?: return null
         val telemetryUrl = telemetryUrlFromAny(rawUrl) ?: return null
         return Conf(
-            commandsUrl = commandsUrl,
-            ackUrl = "$commandsUrl/ack",
             telemetryUrl = telemetryUrl,
             apiKey = apiKey,
             vehicleId = vehicleId,
             keepWifiAwake = props["keep_wifi_awake"] == "1",
         )
-    }
-
-    /** Mirror of VehicleCommandPoller.commandsUrlFromTelemetry — keep in sync. */
-    private fun commandsUrlFromTelemetry(telemetryUrl: String): String? {
-        val trimmed = telemetryUrl.trimEnd('/')
-        return when {
-            trimmed.endsWith("/commands") -> trimmed
-            trimmed.endsWith("/telemetry") -> trimmed.removeSuffix("/telemetry") + "/commands"
-            trimmed.contains("/api/bydmate") -> trimmed.substringBeforeLast('/') + "/commands"
-            else -> null
-        }
     }
 
     /** Normalize the configured base URL to the `…/api/bydmate/telemetry` ingest endpoint. */
