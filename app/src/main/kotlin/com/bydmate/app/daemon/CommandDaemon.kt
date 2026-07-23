@@ -159,13 +159,15 @@ object CommandDaemon {
      * Whether it's safe to push the autoservice-only fallback when di+ is unreachable — parked
      * or charging only, never a guess. The fallback has no `gear`/`speed` of its own, so pushing
      * it while actually driving would be a reduced-payload sample mid-drive, the same class of
-     * bug the DRIVING guard above (`state == DRIVING -> skip`) already exists to prevent. Gated
-     * on the *last known* di+ state before it went dark, not the current one (there is none —
-     * that's the point). `lastKnownGear == null` (di+ never answered even once) stays false:
-     * err toward silence, not a guess, until we have real evidence the car is parked/charging.
+     * bug the DRIVING guard above (`state == DRIVING -> skip`) already exists to prevent.
+     * `gunState` is normally di+'s *last known* state before it went dark; when di+ has never
+     * answered this run at all, the caller instead passes a fresh direct autoservice gun-state
+     * read (gear has no autoservice equivalent, so a never-seen di+ still can't clear the gear
+     * check). Both null stays false: err toward silence, not a guess, until we have real
+     * evidence the car is parked/charging.
      */
-    internal fun shouldUseAutoserviceFallback(lastKnownGear: Int?, lastKnownGunState: Int?): Boolean =
-        lastKnownGear == 1 || (lastKnownGunState != null && lastKnownGunState in 2..5)
+    internal fun shouldUseAutoserviceFallback(lastKnownGear: Int?, gunState: Int?): Boolean =
+        lastKnownGear == 1 || (gunState != null && gunState in 2..5)
 
     /**
      * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
@@ -315,7 +317,10 @@ object CommandDaemon {
         // null once di+ has answered once — a failed fetch() just leaves it stale — so these
         // are captured separately at the moment of each successful fetch and read back once
         // di+ is judged unreachable (see DIPLUS_STALE_MS below). Gates the autoservice-only
-        // fallback — see shouldUseAutoserviceFallback.
+        // fallback — see shouldUseAutoserviceFallback. Both stay null for the life of the
+        // process if di+ never answers even once (e.g. it's not running on this car at all);
+        // that cold-start case is covered separately by a live autoservice read at the fallback
+        // call site, not by these two.
         var lastKnownGear: Int? = null
         var lastKnownGunState: Int? = null
 
@@ -422,15 +427,28 @@ object CommandDaemon {
                             }
                         } ?: run {
                             // di+ is down or stuck stale (diPlusFresh == false). Only fall back
-                            // to autoservice-only telemetry when the last known state before di+
-                            // went dark was parked/charging — see shouldUseAutoserviceFallback
-                            // for why this never guesses during a drive.
+                            // to autoservice-only telemetry when there's real evidence the car is
+                            // parked/charging — see shouldUseAutoserviceFallback for why this
+                            // never guesses during a drive. Normally that evidence is di+'s last
+                            // known state before it went dark. But if di+ has never answered at
+                            // all this run (lastKnownGear/lastKnownGunState both still null —
+                            // e.g. right after a daemon restart on a car where di+ never comes
+                            // up), the last-known state can never clear the gate either, so the
+                            // daemon would stay silent forever even while genuinely
+                            // parked/charging. In that specific case only, take one fresh direct
+                            // autoservice gun-state read as the evidence instead.
+                            val neverSeenDiPlus = lastKnownGear == null && lastKnownGunState == null
+                            val liveGunState = if (neverSeenDiPlus) {
+                                readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
+                            } else {
+                                null
+                            }
                             when {
                                 shouldDeferToApp(beaconAgeMs(now), liveOnly = false) -> {
                                     logSkip(now, "app alive — VoltFlow Mate is sending")
                                     false
                                 }
-                                shouldUseAutoserviceFallback(lastKnownGear, lastKnownGunState) -> {
+                                shouldUseAutoserviceFallback(lastKnownGear, lastKnownGunState ?: liveGunState) -> {
                                     pushAutoserviceFallback(ok, conf)
                                     true
                                 }

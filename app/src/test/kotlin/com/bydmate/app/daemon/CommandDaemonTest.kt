@@ -201,28 +201,38 @@ class CommandDaemonTest {
     }
 
     // --- autoservice-only fallback (di+ down, parked/charging only) ---
+    // `gunState` models either di+'s last-known gun state, or (when di+ has never answered at
+    // all this run) a fresh direct autoservice gun-state read — the call site picks the source,
+    // the gate logic doesn't care which.
 
     @Test
     fun `fallback is allowed when the last known state was parked`() {
-        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 1, lastKnownGunState = null))
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 1, gunState = null))
     }
 
     @Test
-    fun `fallback is allowed when the last known state was charging, regardless of gear`() {
+    fun `fallback is allowed when charging, regardless of gear`() {
         // gun states 2-5 are AC/DC/AC_DC/VTOL per FidRegistry.FID_GUN_CONNECT_STATE.
-        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, lastKnownGunState = 2))
-        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 3, lastKnownGunState = 5))
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, gunState = 2))
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 3, gunState = 5))
     }
 
     @Test
     fun `fallback never fires from a driving last-known-state`() {
         // gear=4 (D) per DiParsData's gear enum, gun=1 (NONE) — not parked, not charging.
-        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 4, lastKnownGunState = 1))
+        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = 4, gunState = 1))
     }
 
     @Test
-    fun `fallback never guesses when di+ has never answered at all`() {
-        // No last-known state at all — err toward silence, not a guess.
-        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, lastKnownGunState = null))
+    fun `fallback never guesses when there is no evidence at all`() {
+        // No last-known di+ state and no live autoservice read either — err toward silence.
+        assertFalse(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, gunState = null))
+    }
+
+    @Test
+    fun `fallback is allowed from a live autoservice charging read when di+ has never answered`() {
+        // Models the cold-start case: lastKnownGear is null (di+ never answered), but the call
+        // site substituted a fresh direct autoservice gun-state read of 3 (DC) as evidence.
+        assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, gunState = 3))
     }
 }
