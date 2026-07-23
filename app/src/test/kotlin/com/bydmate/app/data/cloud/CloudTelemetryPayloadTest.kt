@@ -37,11 +37,10 @@ class CloudTelemetryPayloadTest {
             currentTripDistanceKm = null,
             currentTripConsumptionKwh100km = null,
             location = null,
-            fallbackSpeedKmh = 27.5,
         )
 
         assertEquals(87, snapshot.soc)
-        assertEquals(27.5, snapshot.speedKmh!!, 0.0001)
+        assertNull(snapshot.speedKmh)
         assertEquals(-4.0, snapshot.powerKw!!, 0.0001)
         assertEquals(true, snapshot.isCharging)
         assertNull(snapshot.isParked)
@@ -49,7 +48,7 @@ class CloudTelemetryPayloadTest {
         val payload = JSONObject(CloudTelemetryPayload.build("way", snapshot))
         val telemetry = payload.getJSONObject("telemetry")
         assertEquals(87, telemetry.getInt("soc"))
-        assertEquals(27.5, telemetry.getDouble("speed_kmh"), 0.0001)
+        assertEquals(false, telemetry.has("speed_kmh"))
         assertEquals(-4.0, telemetry.getDouble("power_kw"), 0.0001)
         assertEquals(false, payload.has("diplus"))
         assertEquals(87.0, payload.getJSONObject("autoservice").getDouble("soc_percent"), 0.0001)

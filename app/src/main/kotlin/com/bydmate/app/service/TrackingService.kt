@@ -917,11 +917,6 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
-                                fallbackSpeedKmh = locationForCloud
-                                    ?.takeIf { it.hasSpeed() }
-                                    ?.speed
-                                    ?.times(3.6f)
-                                    ?.toDouble(),
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }
@@ -980,41 +975,6 @@ class TrackingService : Service(), LocationListener {
             Log.w(TAG, "direct autoservice read failed: ${e.message}")
             null
         }
-    }
-
-    /** Legacy helper retained for direct-only callers outside the main loop. */
-    private suspend fun publishAutoserviceFallback(fallback: AutoserviceLiveSnapshot) {
-        _autoserviceFallback.value = fallback
-        val displayData = fallback.toDisplayData()
-        _lastData.value = displayData
-        val rangeKm = rangeCalculator.estimate(soc = displayData.soc, totalElecKwh = null)
-        _lastRangeKm.value = rangeKm
-        displayData.soc?.let { settingsRepository.saveLastKnownSoc(it) }
-        updateNotification(displayData)
-
-        val location = _lastLocation.value
-        val gpsSpeedKmh = location
-            ?.takeIf { it.hasSpeed() }
-            ?.speed
-            ?.times(3.6f)
-            ?.toDouble()
-        val snapshot = VehicleTelemetrySnapshot.from(
-            // Keep the cloud's `diplus` block null: these values came from the
-            // Binder, not from a stale or reconstructed di+ response.
-            data = null,
-            battery = fallback.battery,
-            charging = fallback.charging,
-            enginePowerKw = fallback.enginePowerKw,
-            capturedAtMs = fallback.capturedAtMs,
-            rangeEstKm = rangeKm,
-            currentTripDistanceKm = null,
-            currentTripConsumptionKwh100km = null,
-            location = location,
-            fallbackSpeedKmh = gpsSpeedKmh,
-        )
-        maybeSendCloudTelemetry(snapshot, fallback.capturedAtMs)
-        Log.i(TAG, "direct autoservice telemetry: soc=${fallback.socPercent} " +
-            "power=${fallback.enginePowerKw} gun=${fallback.gunState} 12v=${fallback.auxVoltageV}")
     }
 
     /** Converts the direct fields to the established display carrier; unknown values remain null. */

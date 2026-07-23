@@ -61,15 +61,15 @@ data class VehicleTelemetrySnapshot(
             currentTripDistanceKm: Double?,
             currentTripConsumptionKwh100km: Double?,
             location: Location?,
-            /** GPS speed used only while di+ is unavailable; it is never put in the di+ block. */
-            fallbackSpeedKmh: Double? = null,
         ): VehicleTelemetrySnapshot {
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
             val gunState = charging?.gunConnectState ?: data?.chargeGunState
             val isCharging = gunState?.let { it in CHARGING_GUN_STATES }
-            val saneFallbackSpeed = fallbackSpeedKmh?.takeIf { it.isFinite() && it in 0.0..350.0 }
-            val speedKmh = data?.speed?.toDouble() ?: saneFallbackSpeed
+            // Vehicle speed has no validated direct fid on this car. GPS is a separate signal
+            // with its own accuracy/error characteristics — it must not be presented as vehicle
+            // telemetry, so this stays unknown rather than a GPS estimate (docs/DIRECT_TELEMETRY_FIELD_MATRIX.md).
+            val speedKmh = data?.speed?.toDouble()
             val chargePower = if (isCharging == true) {
                 powerKw?.takeIf { it < 0.0 }?.let { -it } ?: 0.0
             } else {

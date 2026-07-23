@@ -940,7 +940,6 @@ class SettingsViewModel @Inject constructor(
                 currentTripDistanceKm = TrackingService.tripDistanceKm.value,
                 currentTripConsumptionKwh100km = null,
                 location = location,
-                fallbackSpeedKmh = location?.takeIf { it.hasSpeed() }?.speed?.times(3.6f)?.toDouble(),
             )
             _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test...")) }
             val result = cloudTelemetrySender?.sendTest(snapshot)
