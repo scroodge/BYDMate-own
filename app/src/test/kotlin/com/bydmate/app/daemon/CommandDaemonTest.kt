@@ -1,7 +1,10 @@
 package com.bydmate.app.daemon
 
+import com.bydmate.app.data.remote.DiParsData
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -234,5 +237,122 @@ class CommandDaemonTest {
         // Models the cold-start case: lastKnownGear is null (di+ never answered), but the call
         // site substituted a fresh direct autoservice gun-state read of 3 (DC) as evidence.
         assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, gunState = 3))
+    }
+
+    // --- autoservice/di+ merge: derived predicates ---
+    // Both bugs below were live in the code before 2026-07-23 and are the reason the two payload
+    // builders were merged into one: is_charging could latch true forever after unplug, and
+    // is_parked disagreed between the di+ path and the autoservice-fallback path for a car that
+    // was parked *and* charging at once.
+
+    @Test
+    fun `isChargingFrom lets a frozen di+ status keep charging true only when autoservice can't see the gun`() {
+        // gun unreadable (autoservice down) -> di+'s status is the only evidence left.
+        assertTrue(CommandDaemon.isChargingFrom(gun = null, diPlusChargingStatus = 3))
+        assertFalse(CommandDaemon.isChargingFrom(gun = null, diPlusChargingStatus = 0))
+    }
+
+    @Test
+    fun `isChargingFrom lets a live autoservice gun overrule a stale di+ status`() {
+        // Regression test: gun=1 (NONE, unplugged) must win over a frozen chargingStatus=3 that
+        // never updated after the real unplug — the pre-merge OR formula would have stayed true.
+        assertFalse(CommandDaemon.isChargingFrom(gun = 1, diPlusChargingStatus = 3))
+        assertTrue(CommandDaemon.isChargingFrom(gun = 2, diPlusChargingStatus = 0))
+        assertTrue(CommandDaemon.isChargingFrom(gun = 5, diPlusChargingStatus = null))
+        assertFalse(CommandDaemon.isChargingFrom(gun = 6, diPlusChargingStatus = 3))
+    }
+
+    @Test
+    fun `isParkedFrom prefers gear, falls back to charging state only when gear is unknown`() {
+        // The exact daemon scenario this fixes: parked AND charging must read parked=true.
+        assertTrue(CommandDaemon.isParkedFrom(gear = 1, isCharging = true))
+        assertFalse(CommandDaemon.isParkedFrom(gear = 4, isCharging = false))
+        assertFalse(CommandDaemon.isParkedFrom(gear = null, isCharging = true))
+        assertTrue(CommandDaemon.isParkedFrom(gear = null, isCharging = false))
+    }
+
+    @Test
+    fun `chargeTypeFrom maps the shared 2-AC 3to5-DC encoding`() {
+        assertEquals("AC", CommandDaemon.chargeTypeFrom(2))
+        assertEquals("DC", CommandDaemon.chargeTypeFrom(3))
+        assertEquals("DC", CommandDaemon.chargeTypeFrom(5))
+        assertNull(CommandDaemon.chargeTypeFrom(1))
+        assertNull(CommandDaemon.chargeTypeFrom(null))
+    }
+
+    // --- buildTelemetryPayload: per-field merge ---
+
+    private fun diPars(
+        soc: Int? = null, speed: Int? = null, mileage: Double? = null, power: Double? = null,
+        chargeGunState: Int? = null, gear: Int? = null, chargingStatus: Int? = null,
+        doorFL: Int? = null, doorFR: Int? = null, doorRL: Int? = null, doorRR: Int? = null,
+        tirePressFL: Int? = null, voltage12v: Double? = null,
+    ) = DiParsData(
+        soc = soc, speed = speed, mileage = mileage, power = power, chargeGunState = chargeGunState,
+        maxBatTemp = null, avgBatTemp = null, minBatTemp = null, chargingStatus = chargingStatus,
+        batteryCapacityKwh = null, totalElecConsumption = null, voltage12v = voltage12v,
+        maxCellVoltage = null, minCellVoltage = null, exteriorTemp = null, gear = gear,
+        powerState = null, insideTemp = null, acStatus = null, acTemp = null, fanLevel = null,
+        acCirc = null, doorFL = doorFL, doorFR = doorFR, doorRL = doorRL, doorRR = doorRR,
+        windowFL = null, windowFR = null, windowRL = null, windowRR = null, sunroof = null,
+        trunk = null, hood = null, seatbeltFL = null, lockFL = null, tirePressFL = tirePressFL,
+        tirePressFR = null, tirePressRL = null, tirePressRR = null, driveMode = null,
+        workMode = null, autoPark = null, rain = null, lightLow = null, drl = null,
+        sunshade = null, sentryState = null, remoteLockState = null,
+    )
+
+    private fun snap(
+        socPercent: Int? = null, powerKw: Int? = null, gun: Int? = null,
+        doorFL: Int? = null, tireFL: Int? = null,
+    ) = CommandDaemon.AutoserviceSnapshot(
+        socPercent = socPercent, powerKw = powerKw, gun = gun, doorFL = doorFL, tireFL = tireFL,
+    )
+
+    private fun payload(d: DiParsData?, auto: CommandDaemon.AutoserviceSnapshot?) =
+        CommandDaemon.buildTelemetryPayload(
+            vehicleId = "way", d = d, auto = auto, liveOnly = false, mateVersion = "test",
+        )
+
+    @Test
+    fun `agreeing sources produce the same soc either way`() {
+        // The no-op guarantee: when di+ and autoservice agree (the healthy case per the parity
+        // corpus), which one "wins" must not matter to the payload's value.
+        val json = payload(diPars(soc = 60, chargeGunState = 2), snap(socPercent = 60, gun = 2))
+        assertEquals(60, json.getJSONObject("telemetry").getInt("soc"))
+        assertEquals(60, json.getJSONObject("diplus").getInt("soc"))
+    }
+
+    @Test
+    fun `autoservice soc overrides a stale di+ soc in both mirrors`() {
+        // The bug this whole change fixes: di+ frozen at 55 while autoservice tracks 62.
+        val json = payload(diPars(soc = 55, chargeGunState = 2), snap(socPercent = 62, gun = 2))
+        assertEquals(62, json.getJSONObject("telemetry").getInt("soc"))
+        assertEquals(62, json.getJSONObject("diplus").getInt("soc"))
+    }
+
+    @Test
+    fun `soc falls back to di+ per-field when autoservice read fails, doors still come from autoservice`() {
+        val json = payload(
+            diPars(soc = 55, doorFL = 1, tirePressFL = 240),
+            snap(socPercent = null, doorFL = 0, tireFL = 245),
+        )
+        val diplus = json.getJSONObject("diplus")
+        assertEquals(55, diplus.getInt("soc")) // autoservice failed -> di+ fallback
+        assertEquals(0, diplus.getInt("door_fl")) // autoservice succeeded -> autoservice wins
+        assertEquals(245, diplus.getInt("tire_press_fl_kpa"))
+    }
+
+    @Test
+    fun `di+-only fields serialize as null, not absent or zero, when di+ is down`() {
+        val json = payload(d = null, auto = snap(socPercent = 71, gun = 2))
+        val diplus = json.getJSONObject("diplus")
+        assertTrue(diplus.has("gear"))
+        assertEquals(JSONObject.NULL, diplus.get("gear"))
+        assertEquals(71, diplus.getInt("soc"))
+    }
+
+    @Test
+    fun `both sources absent does not throw`() {
+        payload(d = null, auto = null)
     }
 }

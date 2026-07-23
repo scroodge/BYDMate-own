@@ -170,6 +170,61 @@ object CommandDaemon {
         lastKnownGear == 1 || (gunState != null && gunState in 2..5)
 
     /**
+     * One round of autoservice reads taken together, so a single push sees a consistent view and
+     * the same values feed both the payload and the parity log line. Every field is nullable
+     * because each underlying read returns null on any failure — that is what lets the merge in
+     * [buildTelemetryPayload] fall back to di+ *field by field* rather than all-or-nothing.
+     */
+    internal data class AutoserviceSnapshot(
+        val socPercent: Int? = null,
+        val powerKw: Int? = null,
+        val gun: Int? = null,
+        val chargingType: Int? = null,
+        val voltage12v: Double? = null,
+        val doorFL: Int? = null, val doorFR: Int? = null,
+        val doorRL: Int? = null, val doorRR: Int? = null,
+        val trunk: Int? = null, val hood: Int? = null,
+        val tireFL: Int? = null, val tireFR: Int? = null,
+        val tireRL: Int? = null, val tireRR: Int? = null,
+        val sohPercent: Int? = null,
+        val kwhCharged: Float? = null,
+    )
+
+    /**
+     * Whether the car is charging. **The autoservice gun state decides alone whenever it is
+     * readable**; [diPlusChargingStatus] is consulted only when autoservice gave us nothing.
+     *
+     * The old formula OR-ed the two (`chargingStatus > 0 || gun in 2..5`), which latches: di+ is
+     * known to freeze its values while parked/charging (2026-07-23 field evidence — `soc` and
+     * `power` static for 11 min while the pack actually charged), and a frozen `chargingStatus > 0`
+     * would then keep reporting "charging" forever after the gun was physically unplugged.
+     */
+    internal fun isChargingFrom(gun: Int?, diPlusChargingStatus: Int?): Boolean =
+        if (gun != null) gun in 2..5 else (diPlusChargingStatus != null && diPlusChargingStatus > 0)
+
+    /**
+     * Whether the car is parked. Gear is authoritative when known (`1` = P); only when di+ is down
+     * — gear has no autoservice equivalent — does this fall back to "not charging".
+     *
+     * The two payload builders used to disagree here: the di+ path said `gear == 1` while the
+     * autoservice fallback said `!isCharging`, so a car parked *and* charging was reported parked
+     * by one and not-parked by the other.
+     */
+    internal fun isParkedFrom(gear: Int?, isCharging: Boolean): Boolean =
+        if (gear != null) gear == 1 else !isCharging
+
+    /**
+     * AC/DC label from a charge-type code. Both sources use the same 2 = AC / 3..5 = DC encoding
+     * but read *different* fids — autoservice `FID_CHARGING_TYPE` vs di+ `chargeGunState` — so the
+     * caller passes whichever it has rather than this function picking a source.
+     */
+    internal fun chargeTypeFrom(code: Int?): String? = when (code) {
+        2 -> "AC"
+        in 3..5 -> "DC"
+        else -> null
+    }
+
+    /**
      * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
      * interval + work — measured 8-9s for a 3s interval once DiPars, the telemetry POST and
      * the command poll were all counted. Never returns negative (a slow iteration simply
@@ -374,6 +429,10 @@ object CommandDaemon {
                         gunChanged = gunChanged,
                     )
                     if (plan.push) {
+                        // Read once per push attempt: feeds the merged payload in both branches
+                        // below, and (per buildTelemetryPayload's precedence) autoservice wins the
+                        // shared fields whenever di+ is fresh too, not only when di+ is down.
+                        val autoSnap = readAutoserviceSnapshot()
                         val pushed = latestData.takeIf { diPlusFresh }?.let { data ->
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
                             // Parked + nothing material moved => live_only: the server refreshes
@@ -421,13 +480,13 @@ object CommandDaemon {
                                         base12v = v12
                                         lastFullPushAt = now
                                     }
-                                    pushTelemetry(ok, conf, data, liveOnly)
+                                    pushTelemetry(ok, conf, data, autoSnap, liveOnly)
                                     true
                                 }
                             }
                         } ?: run {
-                            // di+ is down or stuck stale (diPlusFresh == false). Only fall back
-                            // to autoservice-only telemetry when there's real evidence the car is
+                            // di+ is down or stuck stale (diPlusFresh == false). Only push an
+                            // autoservice-only sample when there's real evidence the car is
                             // parked/charging — see shouldUseAutoserviceFallback for why this
                             // never guesses during a drive. Normally that evidence is di+'s last
                             // known state before it went dark. But if di+ has never answered at
@@ -435,21 +494,17 @@ object CommandDaemon {
                             // e.g. right after a daemon restart on a car where di+ never comes
                             // up), the last-known state can never clear the gate either, so the
                             // daemon would stay silent forever even while genuinely
-                            // parked/charging. In that specific case only, take one fresh direct
-                            // autoservice gun-state read as the evidence instead.
+                            // parked/charging. In that specific case only, the just-read
+                            // autoSnap.gun stands in as the evidence instead.
                             val neverSeenDiPlus = lastKnownGear == null && lastKnownGunState == null
-                            val liveGunState = if (neverSeenDiPlus) {
-                                readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
-                            } else {
-                                null
-                            }
+                            val liveGunState = if (neverSeenDiPlus) autoSnap.gun else null
                             when {
                                 shouldDeferToApp(beaconAgeMs(now), liveOnly = false) -> {
                                     logSkip(now, "app alive — VoltFlow Mate is sending")
                                     false
                                 }
                                 shouldUseAutoserviceFallback(lastKnownGear, lastKnownGunState ?: liveGunState) -> {
-                                    pushAutoserviceFallback(ok, conf)
+                                    pushTelemetry(ok, conf, data = null, auto = autoSnap, liveOnly = false)
                                     true
                                 }
                                 else -> {
@@ -648,9 +703,11 @@ object CommandDaemon {
 
     /**
      * Live SOC via autoservice directly (DEV_STATISTIC=1014, FID_SOC=1246777400, TX_GET_FLOAT=7)
-     * — same fid as [com.bydmate.app.data.autoservice.FidRegistry.FID_SOC]. Read-only, used only
-     * to log a parity check against di+'s SOC while evaluating dropping the di+ dependency
-     * (docs/EV_PRO_APP_ANALYSIS.md, backlog B-07). Never fed into the cloud payload.
+     * — same fid as [com.bydmate.app.data.autoservice.FidRegistry.FID_SOC]. Primary source of
+     * `soc` in [buildTelemetryPayload] as of 2026-07-23 (backlog B-07): a 1236-sample parity
+     * corpus off this car showed di+ freezing this exact value for 11+ minutes during a live
+     * charge while this read kept tracking reality, confirmed against the dash (autoservice
+     * 74%/dash 75% vs di+'s stale 55%).
      */
     private fun readSocPercentAutoservice(): Float? = try {
         val proc = Runtime.getRuntime().exec("service call autoservice 7 i32 1014 i32 1246777400")
@@ -666,10 +723,10 @@ object CommandDaemon {
 
     /**
      * Live engine power (kW) via autoservice directly (DEV_ENGINE=1012, FID_ENGINE_POWER=339738656,
-     * TX_GET_INT=5) — same fid di+'s 发动机功率 ultimately reads. Read-only parity-check twin of
-     * [readSocPercentAutoservice]; see that doc for why. Sanity envelope matches
-     * IternioTelemetryClient's [-300, +500] range, tightened to the ±350 the FidRegistry doc note
-     * already used for this fid.
+     * TX_GET_INT=5) — same fid di+'s 发动机功率 ultimately reads. Primary source of `power_kw` in
+     * [buildTelemetryPayload]; see [readSocPercentAutoservice] for the promotion rationale.
+     * Sanity envelope matches IternioTelemetryClient's [-300, +500] range, tightened to the ±350
+     * the FidRegistry doc note already used for this fid.
      */
     private fun readEnginePowerKwAutoservice(): Int? = try {
         val proc = Runtime.getRuntime().exec("service call autoservice 5 i32 1012 i32 339738656")
@@ -705,30 +762,6 @@ object CommandDaemon {
     }
 
     /**
-     * Door/trunk/hood open state via autoservice directly (dev=1001, transact 5) — same fids as
-     * [com.bydmate.app.data.autoservice.FidRegistry.FID_DOOR_FL] and friends (CANFD branch,
-     * live-validated against di+ 2026-07-22, see docs/BACKLOG.md B-07). Read-only parity check,
-     * never fed into the cloud payload — same rationale as [readSocPercentAutoservice]. Returns
-     * a compact "fl/fr/rl/rr/trunk/hood" string (each 0/1, "?" on read failure) to keep the log
-     * line short rather than six separate fields.
-     */
-    private fun readBodyworkOpenStatesAutoservice(): String {
-        fun bit(fid: Int) = readAutoserviceIntFid(1001, fid)?.toString() ?: "?"
-        return "${bit(692060168)}/${bit(692060170)}/${bit(692060172)}/${bit(692060174)}/" +
-            "${bit(692060186)}/${bit(692060188)}"
-    }
-
-    /**
-     * Tire pressure (kPa) via autoservice directly (dev=1001, transact 5) — same fids as
-     * [com.bydmate.app.data.autoservice.FidRegistry.FID_TIRE_PRESSURE_FL] and friends (not
-     * platform-conditional, live-validated against di+ 2026-07-22).
-     */
-    private fun readTirePressuresAutoservice(): String {
-        fun v(fid: Int) = readAutoserviceIntFid(1001, fid)?.toString() ?: "?"
-        return "${v(-1728052956)}/${v(-1728052952)}/${v(-1728052948)}/${v(-1728052944)}"
-    }
-
-    /**
      * Re-asserts WiFi via shell-uid `svc wifi enable` — idempotent no-op if already on. Never
      * throws: a failure here must not take down the daemon's poll/telemetry loops.
      */
@@ -742,29 +775,32 @@ object CommandDaemon {
         }
     }
 
-    /** Push one telemetry sample to the cloud ingest endpoint (contract: docs/cloud-telemetry-contract-ru.md). */
-    private fun pushTelemetry(ok: OkHttpClient, conf: Conf, data: DiParsData, liveOnly: Boolean = false) {
+    /**
+     * Push one telemetry sample to the cloud ingest endpoint (contract:
+     * docs/cloud-telemetry-contract-ru.md). [data] is null when di+ is unreachable — the payload
+     * then carries only what autoservice can supply, which is why the caller must have cleared
+     * [shouldUseAutoserviceFallback] first.
+     */
+    private fun pushTelemetry(
+        ok: OkHttpClient,
+        conf: Conf,
+        data: DiParsData?,
+        auto: AutoserviceSnapshot,
+        liveOnly: Boolean = false,
+    ) {
         try {
-            val kwhCharged = readKwhCharged()
-            val sohPercent = readSohPercent()
-            // Parity check only — logged, never sent to the cloud. See readSocPercentAutoservice.
-            val autoserviceSoc = readSocPercentAutoservice()
-            val autoservicePowerKw = readEnginePowerKwAutoservice()
-            if (autoserviceSoc != null || autoservicePowerKw != null) {
+            // Parity line: autoservice is now the source of these fields, so this records what di+
+            // *would* have said. Divergence here means di+ has gone stale, not that we sent it.
+            if (data != null) {
                 log(
-                    "autoservice check: soc=$autoserviceSoc (diplus=${data.soc}) " +
-                        "power_kw=$autoservicePowerKw (diplus=${data.power})"
+                    "parity: soc=${auto.socPercent}(di+ ${data.soc}) pw=${auto.powerKw}(di+ ${data.power}) " +
+                        "doors=${auto.doorFL}${auto.doorFR}${auto.doorRL}${auto.doorRR}" +
+                        "(di+ ${data.doorFL}${data.doorFR}${data.doorRL}${data.doorRR}) " +
+                        "tires=${auto.tireFL}/${auto.tireFR}/${auto.tireRL}/${auto.tireRR}" +
+                        "(di+ ${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
                 )
             }
-            val bodyworkStates = readBodyworkOpenStatesAutoservice()
-            val tirePressures = readTirePressuresAutoservice()
-            log(
-                "autoservice check2: doors/trunk/hood(fl/fr/rl/rr/trunk/hood)=$bodyworkStates " +
-                    "(diplus=${data.doorFL}/${data.doorFR}/${data.doorRL}/${data.doorRR}/${data.trunk}/${data.hood}) " +
-                    "tires_kpa(fl/fr/rl/rr)=$tirePressures " +
-                    "(diplus=${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
-            )
-            val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent, liveOnly).toString()
+            val payload = buildTelemetryPayload(conf.vehicleId, data, auto, liveOnly).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -775,153 +811,126 @@ object CommandDaemon {
                 .build()
             ok.newCall(request).execute().use {
                 val mode = if (liveOnly) " live_only" else ""
-                log("telemetry HTTP ${it.code} (soc=${data.soc} pwr_state=${data.powerState}$mode)")
+                val src = if (data != null) "" else " (di+ down)"
+                log("telemetry HTTP ${it.code} (soc=${auto.socPercent ?: data?.soc} pwr_state=${data?.powerState}$mode$src)")
             }
         } catch (e: Exception) {
             log("telemetry push failed: ${e.message}")
         }
     }
 
-    /**
-     * Pushes a telemetry sample built entirely from autoservice reads — no di+ involved. Used
-     * only when [shouldUseAutoserviceFallback] has already confirmed the car is parked/charging;
-     * di+-only fields (speed, gear, climate, temps, etc.) are simply absent, same as any other
-     * partial sample. See docs/EV_PRO_APP_ANALYSIS.md and the "Parked/charging telemetry
-     * fallback" plan (2026-07-22) for why this exists and what it deliberately does not cover.
-     */
-    private fun pushAutoserviceFallback(ok: OkHttpClient, conf: Conf) {
-        try {
-            val payload = buildAutoserviceFallbackPayload(conf.vehicleId)
-            val diplus = payload.optJSONObject("diplus")
-            log(
-                "telemetry (di+ down, autoservice fallback): soc=${diplus?.opt("soc")} " +
-                    "gun=${diplus?.opt("charge_gun_state")}"
-            )
-            val request = Request.Builder()
-                .url(conf.telemetryUrl)
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("X-API-Key", conf.apiKey)
-                .header("X-Vehicle-Id", conf.vehicleId)
-                .header("X-App", "VoltFlow-Mate-Daemon")
-                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .build()
-            ok.newCall(request).execute().use { log("telemetry HTTP ${it.code} (autoservice fallback)") }
-        } catch (e: Exception) {
-            log("autoservice fallback push failed: ${e.message}")
-        }
-    }
+    /** Takes one consistent round of autoservice reads. See [AutoserviceSnapshot]. */
+    private fun readAutoserviceSnapshot(): AutoserviceSnapshot = AutoserviceSnapshot(
+        socPercent = readSocPercentAutoservice()?.toInt(),
+        powerKw = readEnginePowerKwAutoservice(),
+        gun = readAutoserviceIntFid(1009, 876609586), // FID_GUN_CONNECT_STATE
+        chargingType = readAutoserviceIntFid(1009, 876609592), // FID_CHARGING_TYPE
+        voltage12v = readAutoserviceFloatFid(1001, 1128267816), // FID_OTA_BATTERY_POWER_VOLTAGE
+        doorFL = readAutoserviceIntFid(1001, 692060168),
+        doorFR = readAutoserviceIntFid(1001, 692060170),
+        doorRL = readAutoserviceIntFid(1001, 692060172),
+        doorRR = readAutoserviceIntFid(1001, 692060174),
+        trunk = readAutoserviceIntFid(1001, 692060186),
+        hood = readAutoserviceIntFid(1001, 692060188),
+        tireFL = readAutoserviceIntFid(1001, -1728052956),
+        tireFR = readAutoserviceIntFid(1001, -1728052952),
+        tireRL = readAutoserviceIntFid(1001, -1728052948),
+        tireRR = readAutoserviceIntFid(1001, -1728052944),
+        sohPercent = readSohPercent(),
+        kwhCharged = readKwhCharged(),
+    )
 
     /**
-     * Assembles a telemetry payload purely from autoservice reads (dev=1001 bodywork/tyre,
-     * dev=1009 charging, dev=1012 engine, dev=1014 statistic — see [FidRegistry] for the fid
-     * catalog). Only fields already live-validated against di+ (2026-07-22) are populated;
-     * everything di+-only stays null via the same [putN] nullable-field convention
-     * [buildTelemetryPayload] already uses, so downstream consumers see a normal partial sample,
-     * not a malformed one.
+     * Builds the cloud telemetry payload by merging the two sources **per field**, with
+     * autoservice taking precedence over di+ wherever it has a live-validated fid.
+     *
+     * Why autoservice wins unconditionally rather than only when di+ looks stale: a 1236-sample
+     * parity corpus off this car (2026-07-23) shows the two agree *exactly* — delta 0 across
+     * 55…77% — whenever di+ is demonstrably live (its own `power` matching autoservice). Every
+     * divergence in the corpus sits inside a window where di+ is independently shown to be frozen,
+     * and there autoservice is the source still tracking reality. So promoting it is a no-op in
+     * the healthy case and a correction in the stale case, with no heuristic to get wrong.
+     *
+     * Degradation is per field, not all-or-nothing: every `readAutoservice*` returns null on
+     * failure, so an autoservice outage silently reverts each affected field to di+.
+     *
+     * @param d di+ sample, or null when di+ is unreachable — then its exclusive fields (speed,
+     *   gear, climate, temps, cell voltages, windows…) serialize as JSON null, the same partial
+     *   sample shape [putN] already produces for any missing field.
+     * @param auto autoservice snapshot, or null when only di+ is available.
+     * @param mateVersion injectable so unit tests need not touch [BuildConfig].
      */
-    private fun buildAutoserviceFallbackPayload(vehicleId: String): JSONObject {
-        val soc = readSocPercentAutoservice()?.toInt()
-        val powerKw = readEnginePowerKwAutoservice()
-        val gun = readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
-        val chargingType = readAutoserviceIntFid(1009, 876609592) // FID_CHARGING_TYPE
-        val voltage12v = readAutoserviceFloatFid(1001, 1128267816) // FID_OTA_BATTERY_POWER_VOLTAGE
-        val doorFL = readAutoserviceIntFid(1001, 692060168)
-        val doorFR = readAutoserviceIntFid(1001, 692060170)
-        val doorRL = readAutoserviceIntFid(1001, 692060172)
-        val doorRR = readAutoserviceIntFid(1001, 692060174)
-        val trunk = readAutoserviceIntFid(1001, 692060186)
-        val hood = readAutoserviceIntFid(1001, 692060188)
-        val tireFL = readAutoserviceIntFid(1001, -1728052956)
-        val tireFR = readAutoserviceIntFid(1001, -1728052952)
-        val tireRL = readAutoserviceIntFid(1001, -1728052948)
-        val tireRR = readAutoserviceIntFid(1001, -1728052944)
-        val sohPercent = readSohPercent()
-        val kwhCharged = readKwhCharged()
-        val isCharging = gun != null && gun in 2..5
-
-        val diplus = JSONObject().apply {
-            putN("soc", soc); putN("power_kw", powerKw); putN("charge_gun_state", gun)
-            putN("voltage_12v", voltage12v)
-            putN("door_fl", doorFL); putN("door_fr", doorFR); putN("door_rl", doorRL); putN("door_rr", doorRR)
-            putN("trunk", trunk); putN("hood", hood)
-            putN("tire_press_fl_kpa", tireFL); putN("tire_press_fr_kpa", tireFR)
-            putN("tire_press_rl_kpa", tireRL); putN("tire_press_rr_kpa", tireRR)
-        }
-        val telemetry = JSONObject().apply {
-            putN("soc", soc); putN("power_kw", powerKw); putN("aux_voltage_v", voltage12v)
-            put("is_charging", isCharging)
-            putN("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
-            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
-            putN("charge_type", if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
-            put("is_parked", !isCharging)
-            putN("soh_percent", sohPercent?.toDouble())
-        }
-        return JSONObject().apply {
-            put("schema_version", 1)
-            put("vehicle_id", vehicleId)
-            put("device_time", isoNow())
-            put("source", "BYDMate")
-            put("mate_version", BuildConfig.VERSION_NAME)
-            put("telemetry", telemetry)
-            put("diplus", diplus)
-            put("location", JSONObject())
-        }
-    }
-
-    private fun buildTelemetryPayload(
+    internal fun buildTelemetryPayload(
         vehicleId: String,
-        d: DiParsData,
-        kwhCharged: Float? = null,
-        sohPercent: Int? = null,
+        d: DiParsData?,
+        auto: AutoserviceSnapshot?,
         liveOnly: Boolean = false,
+        mateVersion: String = BuildConfig.VERSION_NAME,
     ): JSONObject {
-        val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
+        val cellDelta = if (d?.maxCellVoltage != null && d.minCellVoltage != null) {
             d.maxCellVoltage!! - d.minCellVoltage!!
         } else {
             null
         }
-        val gun = d.chargeGunState
-        val isCharging = (d.chargingStatus != null && d.chargingStatus!! > 0) ||
-            (gun != null && gun in 2..5)
+
+        // Merged fields — autoservice first, di+ as the per-field fallback. `power` bridges
+        // types: autoservice reports whole kW (Int), di+ reports fractional (Double).
+        val soc = auto?.socPercent ?: d?.soc
+        val powerKw = auto?.powerKw?.toDouble() ?: d?.power
+        val gun = auto?.gun ?: d?.chargeGunState
+        val voltage12v = auto?.voltage12v ?: d?.voltage12v
+        val doorFL = auto?.doorFL ?: d?.doorFL
+        val doorFR = auto?.doorFR ?: d?.doorFR
+        val doorRL = auto?.doorRL ?: d?.doorRL
+        val doorRR = auto?.doorRR ?: d?.doorRR
+        val trunk = auto?.trunk ?: d?.trunk
+        val hood = auto?.hood ?: d?.hood
+        val tireFL = auto?.tireFL ?: d?.tirePressFL
+        val tireFR = auto?.tireFR ?: d?.tirePressFR
+        val tireRL = auto?.tireRL ?: d?.tirePressRL
+        val tireRR = auto?.tireRR ?: d?.tirePressRR
+
+        val isCharging = isChargingFrom(auto?.gun, d?.chargingStatus)
+        val chargeType = chargeTypeFrom(auto?.chargingType ?: d?.chargeGunState)
 
         val diplus = JSONObject().apply {
-            putN("soc", d.soc); putN("speed_kmh", d.speed); putN("mileage_km", d.mileage)
-            putN("power_kw", d.power); putN("charge_gun_state", d.chargeGunState)
-            putN("max_battery_temp_c", d.maxBatTemp); putN("avg_battery_temp_c", d.avgBatTemp)
-            putN("min_battery_temp_c", d.minBatTemp); putN("charging_status", d.chargingStatus)
-            putN("battery_capacity_kwh", d.batteryCapacityKwh)
-            putN("total_elec_consumption_kwh", d.totalElecConsumption)
-            putN("voltage_12v", d.voltage12v); putN("max_cell_voltage_v", d.maxCellVoltage)
-            putN("min_cell_voltage_v", d.minCellVoltage); putN("cell_delta_v", cellDelta)
-            putN("exterior_temp_c", d.exteriorTemp); putN("gear", d.gear); putN("power_state", d.powerState)
-            putN("inside_temp_c", d.insideTemp); putN("ac_status", d.acStatus); putN("ac_temp_c", d.acTemp)
-            putN("fan_level", d.fanLevel); putN("ac_circ", d.acCirc)
-            putN("door_fl", d.doorFL); putN("door_fr", d.doorFR); putN("door_rl", d.doorRL); putN("door_rr", d.doorRR)
-            putN("window_fl_percent", d.windowFL); putN("window_fr_percent", d.windowFR)
-            putN("window_rl_percent", d.windowRL); putN("window_rr_percent", d.windowRR)
-            putN("sunroof_percent", d.sunroof); putN("trunk", d.trunk); putN("hood", d.hood)
-            putN("seatbelt_fl", d.seatbeltFL); putN("lock_fl", d.lockFL)
-            putN("tire_press_fl_kpa", d.tirePressFL); putN("tire_press_fr_kpa", d.tirePressFR)
-            putN("tire_press_rl_kpa", d.tirePressRL); putN("tire_press_rr_kpa", d.tirePressRR)
-            putN("drive_mode", d.driveMode); putN("work_mode", d.workMode); putN("auto_park", d.autoPark)
-            putN("rain", d.rain); putN("light_low", d.lightLow); putN("drl", d.drl)
-            putN("sunshade_percent", d.sunshade)
-            putN("sentry_state", d.sentryState); putN("remote_lock_state", d.remoteLockState)
-            putN("stall_sentry_mode", d.stallSentryMode)
+            putN("soc", soc); putN("speed_kmh", d?.speed); putN("mileage_km", d?.mileage)
+            putN("power_kw", powerKw); putN("charge_gun_state", gun)
+            putN("max_battery_temp_c", d?.maxBatTemp); putN("avg_battery_temp_c", d?.avgBatTemp)
+            putN("min_battery_temp_c", d?.minBatTemp); putN("charging_status", d?.chargingStatus)
+            putN("battery_capacity_kwh", d?.batteryCapacityKwh)
+            putN("total_elec_consumption_kwh", d?.totalElecConsumption)
+            putN("voltage_12v", voltage12v); putN("max_cell_voltage_v", d?.maxCellVoltage)
+            putN("min_cell_voltage_v", d?.minCellVoltage); putN("cell_delta_v", cellDelta)
+            putN("exterior_temp_c", d?.exteriorTemp); putN("gear", d?.gear); putN("power_state", d?.powerState)
+            putN("inside_temp_c", d?.insideTemp); putN("ac_status", d?.acStatus); putN("ac_temp_c", d?.acTemp)
+            putN("fan_level", d?.fanLevel); putN("ac_circ", d?.acCirc)
+            putN("door_fl", doorFL); putN("door_fr", doorFR); putN("door_rl", doorRL); putN("door_rr", doorRR)
+            putN("window_fl_percent", d?.windowFL); putN("window_fr_percent", d?.windowFR)
+            putN("window_rl_percent", d?.windowRL); putN("window_rr_percent", d?.windowRR)
+            putN("sunroof_percent", d?.sunroof); putN("trunk", trunk); putN("hood", hood)
+            putN("seatbelt_fl", d?.seatbeltFL); putN("lock_fl", d?.lockFL)
+            putN("tire_press_fl_kpa", tireFL); putN("tire_press_fr_kpa", tireFR)
+            putN("tire_press_rl_kpa", tireRL); putN("tire_press_rr_kpa", tireRR)
+            putN("drive_mode", d?.driveMode); putN("work_mode", d?.workMode); putN("auto_park", d?.autoPark)
+            putN("rain", d?.rain); putN("light_low", d?.lightLow); putN("drl", d?.drl)
+            putN("sunshade_percent", d?.sunshade)
+            putN("sentry_state", d?.sentryState); putN("remote_lock_state", d?.remoteLockState)
+            putN("stall_sentry_mode", d?.stallSentryMode)
         }
 
         val telemetry = JSONObject().apply {
-            putN("soc", d.soc); putN("speed_kmh", d.speed?.toDouble()); putN("power_kw", d.power)
-            putN("battery_temp_c", d.avgBatTemp?.toDouble()); putN("cabin_temp_c", d.insideTemp?.toDouble())
-            putN("outside_temp_c", d.exteriorTemp?.toDouble()); putN("aux_voltage_v", d.voltage12v)
-            putN("cell_voltage_min_v", d.minCellVoltage); putN("cell_voltage_max_v", d.maxCellVoltage)
-            putN("cell_delta_v", cellDelta); putN("odometer_km", d.mileage)
+            putN("soc", soc); putN("speed_kmh", d?.speed?.toDouble()); putN("power_kw", powerKw)
+            putN("battery_temp_c", d?.avgBatTemp?.toDouble()); putN("cabin_temp_c", d?.insideTemp?.toDouble())
+            putN("outside_temp_c", d?.exteriorTemp?.toDouble()); putN("aux_voltage_v", voltage12v)
+            putN("cell_voltage_min_v", d?.minCellVoltage); putN("cell_voltage_max_v", d?.maxCellVoltage)
+            putN("cell_delta_v", cellDelta); putN("odometer_km", d?.mileage)
             put("is_charging", isCharging)
-            putN("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
-            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
-            putN("charge_type", if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
-            put("is_parked", d.gear == 1)
-            putN("soh_percent", sohPercent?.toDouble())
+            putN("charge_power_kw", if (isCharging) powerKw?.let { abs(it) } else null)
+            putN("kwh_charged", if (isCharging) auto?.kwhCharged?.toDouble() else null)
+            putN("charge_type", if (isCharging) chargeType else null)
+            put("is_parked", isParkedFrom(d?.gear, isCharging))
+            putN("soh_percent", auto?.sohPercent?.toDouble())
         }
 
         return JSONObject().apply {
@@ -929,7 +938,7 @@ object CommandDaemon {
             put("vehicle_id", vehicleId)
             put("device_time", isoNow())
             put("source", "BYDMate")
-            put("mate_version", BuildConfig.VERSION_NAME)
+            put("mate_version", mateVersion)
             // Parked heartbeat with nothing material changed: server refreshes live state only.
             // Omitted (not false) when unset so a normal sample keeps its exact current shape.
             if (liveOnly) put("live_only", true)
