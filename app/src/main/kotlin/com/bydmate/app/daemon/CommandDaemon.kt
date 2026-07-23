@@ -190,6 +190,8 @@ object CommandDaemon {
         val powerKw: Int? = null,
         val gun: Int? = null,
         val chargingType: Int? = null,
+        /** Raw BMS state. Diagnostic only; it is not di+'s ChargingStatus encoding. */
+        val chargingBmsState: Int? = null,
         val voltage12v: Double? = null,
         val doorFL: Int? = null, val doorFR: Int? = null,
         val doorRL: Int? = null, val doorRR: Int? = null,
@@ -882,6 +884,7 @@ object CommandDaemon {
         powerKw = readEnginePowerKwAutoservice(),
         gun = readAutoserviceIntFid(1009, 876609586), // FID_GUN_CONNECT_STATE
         chargingType = readAutoserviceIntFid(1009, 876609592), // FID_CHARGING_TYPE
+        chargingBmsState = readAutoserviceIntFid(1009, 876609560), // FID_CHARGING_BMS_STATE
         voltage12v = readAutoserviceFloatFid(1001, 1128267816), // FID_OTA_BATTERY_POWER_VOLTAGE
         doorFL = readAutoserviceIntFid(1001, 692060168),
         doorFR = readAutoserviceIntFid(1001, 692060170),
@@ -1048,6 +1051,9 @@ object CommandDaemon {
                 putN("power_kw", powerKw)
                 putN("gun_state", gun)
                 putN("charging_type", auto?.chargingType)
+                // Keep the raw BMS code visible for on-car parity capture. It must not be
+                // relabelled as di+'s ChargingStatus until their state machines are mapped.
+                putN("charging_bms_state", auto?.chargingBmsState)
                 putN("voltage_12v", voltage12v)
                 putN("soh_percent", auto?.sohPercent)
                 putN("charging_capacity_kwh", auto?.kwhCharged)

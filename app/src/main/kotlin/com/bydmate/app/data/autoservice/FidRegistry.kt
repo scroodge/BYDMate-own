@@ -52,7 +52,8 @@ object FidRegistry {
      *  power-cycle; resets on new charging session (gun reconnect or BMS reset). */
     const val FID_CHARGING_CAPACITY = 666894360
     /** BMS charging state: 1=CHARGING, 2=FINISH, 13=PAUSE (other values observed
-     *  but not used). transact 5 (int). */
+     *  but not used). On `way`, parked/unplugged observed 15; this is a distinct
+     *  state machine from di+'s ChargingStatus and is diagnostic only. transact 5 (int). */
     const val FID_CHARGING_BMS_STATE = 876609560
 
     // === Bodywork fids (dev=1001) ===

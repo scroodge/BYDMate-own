@@ -303,9 +303,10 @@ class CommandDaemonTest {
 
     private fun snap(
         socPercent: Int? = null, powerKw: Int? = null, gun: Int? = null,
-        doorFL: Int? = null, tireFL: Int? = null,
+        chargingBmsState: Int? = null, doorFL: Int? = null, tireFL: Int? = null,
     ) = CommandDaemon.AutoserviceSnapshot(
-        socPercent = socPercent, powerKw = powerKw, gun = gun, doorFL = doorFL, tireFL = tireFL,
+        socPercent = socPercent, powerKw = powerKw, gun = gun,
+        chargingBmsState = chargingBmsState, doorFL = doorFL, tireFL = tireFL,
     )
 
     private fun payload(d: DiParsData?, auto: CommandDaemon.AutoserviceSnapshot?) =
@@ -348,6 +349,14 @@ class CommandDaemonTest {
         assertFalse(json.has("diplus"))
         assertEquals(JSONObject.NULL, json.getJSONObject("telemetry").get("is_parked"))
         assertEquals(71, json.getJSONObject("autoservice").getInt("soc_percent"))
+    }
+
+    @Test
+    fun `direct payload preserves raw BMS state as a diagnostic without charging-status mapping`() {
+        val json = payload(d = null, auto = snap(gun = 1, chargingBmsState = 15))
+        val autoservice = json.getJSONObject("autoservice")
+        assertEquals(15, autoservice.getInt("charging_bms_state"))
+        assertFalse(json.getJSONObject("telemetry").getBoolean("is_charging"))
     }
 
     @Test
