@@ -60,6 +60,16 @@ object CommandDaemon {
      */
     private const val DIPLUS_STALE_MS = TELEMETRY_TTL_MS * 3
 
+    /**
+     * How long di+'s reported values may sit byte-identical, while there is positive evidence the
+     * car isn't actually static, before [isDiPlusValueStale] flags it. Distinct from
+     * [DIPLUS_STALE_MS]: that one catches `fetch()` failing; this one catches `fetch()` *succeeding
+     * with a frozen answer* — the failure mode observed live on 2026-07-23 (di+ reported
+     * `soc=55, power=0.0` unchanged for 11+ minutes during an active charge). 3 minutes: long
+     * enough that normal poll jitter or a momentary di+ hiccup can't trip it.
+     */
+    private const val DIPLUS_VALUE_STALE_MS = 180_000L
+
     /** How often the daemon pushes a telemetry sample to the cloud (keeps data flowing when the app is dead). */
     private const val TELEMETRY_PUSH_MS = 60_000L
 
@@ -225,6 +235,41 @@ object CommandDaemon {
     }
 
     /**
+     * Cheap change-detector for di+: the fields that must move whenever the car is doing
+     * anything (charging, driving, or even just sitting on a slowly draining 12V battery).
+     * Byte-identical signatures across polls, held long enough, are the "fetch() succeeds but
+     * the answer never changes" failure mode [DIPLUS_VALUE_STALE_MS] exists to catch.
+     */
+    internal fun diPlusValueSignature(d: DiParsData): String =
+        "${d.soc}|${d.power}|${d.mileage}|${d.voltage12v}|${d.chargeGunState}"
+
+    /**
+     * Whether di+'s current signature looks frozen rather than genuinely idle. Two conditions,
+     * both required:
+     *  1. the signature has held for at least [DIPLUS_VALUE_STALE_MS] ([signatureUnchangedSinceMs]
+     *     is when it last *changed*, so `now - signatureUnchangedSinceMs` is how long it's held), and
+     *  2. positive evidence the car isn't actually static — either [charging] is true (autoservice's
+     *     gun state says power is flowing, so di+'s numbers *should* be moving), or autoservice's
+     *     SOC has changed more recently than the signature did ([autoserviceSocMovedSinceMs], null
+     *     if it has never been observed to move).
+     *
+     * Without clause 2, a genuinely parked, non-charging car with a flat SOC would trip this for
+     * every long park — a 13-hour overnight window in the field corpus had di+ static that whole
+     * time for exactly that legitimate reason.
+     */
+    internal fun isDiPlusValueStale(
+        now: Long,
+        signatureUnchangedSinceMs: Long,
+        autoserviceSocMovedSinceMs: Long?,
+        charging: Boolean,
+    ): Boolean {
+        val frozenLongEnough = now - signatureUnchangedSinceMs >= DIPLUS_VALUE_STALE_MS
+        val hasMovementEvidence = charging ||
+            (autoserviceSocMovedSinceMs != null && autoserviceSocMovedSinceMs > signatureUnchangedSinceMs)
+        return frozenLongEnough && hasMovementEvidence
+    }
+
+    /**
      * Fixed-rate pacing. Sleeping the full interval after doing the work makes the period
      * interval + work — measured 8-9s for a 3s interval once DiPars, the telemetry POST and
      * the command poll were all counted. Never returns negative (a slow iteration simply
@@ -378,6 +423,12 @@ object CommandDaemon {
         // call site, not by these two.
         var lastKnownGear: Int? = null
         var lastKnownGunState: Int? = null
+        // Step 2 (log-only) staleness tracking — see isDiPlusValueStale. Only touched while di+ is
+        // fresh, since that's the only time there is a di+ signature to compare against.
+        var lastDiPlusSignature: String? = null
+        var diPlusSignatureUnchangedSinceMs: Long = 0L
+        var lastAutoserviceSocForStaleness: Int? = null
+        var autoserviceSocMovedAtMs: Long? = null
 
         runBlocking {
             while (true) {
@@ -434,6 +485,22 @@ object CommandDaemon {
                         // shared fields whenever di+ is fresh too, not only when di+ is down.
                         val autoSnap = readAutoserviceSnapshot()
                         val pushed = latestData.takeIf { diPlusFresh }?.let { data ->
+                            // Step 2, log-only: detect di+ answering with a frozen value (as
+                            // opposed to not answering at all, which diPlusFresh already covers).
+                            val sig = diPlusValueSignature(data)
+                            if (sig != lastDiPlusSignature) {
+                                lastDiPlusSignature = sig
+                                diPlusSignatureUnchangedSinceMs = now
+                            }
+                            if (autoSnap.socPercent != null && autoSnap.socPercent != lastAutoserviceSocForStaleness) {
+                                autoserviceSocMovedAtMs = now
+                                lastAutoserviceSocForStaleness = autoSnap.socPercent
+                            }
+                            val chargingNow = isChargingFrom(autoSnap.gun, data.chargingStatus)
+                            if (isDiPlusValueStale(now, diPlusSignatureUnchangedSinceMs, autoserviceSocMovedAtMs, chargingNow)) {
+                                val frozenMin = (now - diPlusSignatureUnchangedSinceMs) / 60_000
+                                log("di+ value-stale=true (sig frozen ${frozenMin}m, autoservice soc=${autoSnap.socPercent})")
+                            }
                             val state = IternioIntervalPolicy.classifyFromDiPars(data)
                             // Parked + nothing material moved => live_only: the server refreshes
                             // live state and skips the history/hourly/trip writes. Charging is
