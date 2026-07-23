@@ -105,3 +105,30 @@ as a di+ template field.
    engine. No di+ fallback is permitted for telemetry.
 4. Build/install only after the desired promotions are agreed explicitly.
 
+## Drive-recorder evidence (direct-only branch)
+
+The foreground service writes one JSON line after every direct poll (normally
+every three seconds) to:
+
+```text
+/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/telemetry/direct_drive_recorder.jsonl
+```
+
+Each line contains the raw validated autoservice snapshot, an
+`engine_available` result, and a GPS speed/accuracy/**moving** marker. It does
+not store GPS coordinates and does not use GPS to fill an unavailable vehicle
+speed or gear field. `unsupported_fields` is written on every line, including
+when the direct engine is unavailable. The log keeps the current 2 MiB segment
+and one `.prev` segment so a drive cannot consume unbounded storage.
+
+After a drive, retrieve it without modifying the car:
+
+```sh
+adb -s 192.168.43.71:5555 pull \
+  /storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/telemetry/direct_drive_recorder.jsonl
+```
+
+Compare GPS movement-marker intervals with SOC/power/12-V and the direct
+availability result. A direct `speed` or `gear` field remains unsupported until
+it has its own safe, on-car validated reader; a zero during parking is not
+evidence of a valid mapping.

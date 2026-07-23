@@ -25,6 +25,7 @@ import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.VehicleCommandPoller
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
+import com.bydmate.app.data.autoservice.DirectDriveRecorder
 import com.bydmate.app.data.autoservice.AutoserviceLiveSnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
@@ -74,6 +75,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var rangeCalculator: RangeCalculator
     @Inject lateinit var autoserviceDetector: com.bydmate.app.data.charging.AutoserviceChargingDetector
     @Inject lateinit var autoserviceClient: com.bydmate.app.data.autoservice.AutoserviceClient
+    @Inject lateinit var directDriveRecorder: DirectDriveRecorder
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
@@ -764,6 +766,10 @@ class TrackingService : Service(), LocationListener {
                         _diPlusConnected.value = false
                         _autoserviceFallback.value = ownSnapshot
                         _lastData.value = data
+                        // Every direct read is retained locally for the first real
+                        // drive validation. GPS marks motion only; it never fills an
+                        // unavailable autoservice vehicle field.
+                        directDriveRecorder.record(ownSnapshot, _lastLocation.value)
 
                         // These legacy consumers receive the direct display carrier.
                         // Its unavailable fields are null; no di+ values enter it.
@@ -935,6 +941,10 @@ class TrackingService : Service(), LocationListener {
                         _diPlusConnected.value = false
                         _autoserviceFallback.value = null
                         _lastData.value = null
+                        directDriveRecorder.recordEngineUnavailable(
+                            capturedAtMs = System.currentTimeMillis(),
+                            location = _lastLocation.value,
+                        )
                         if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
                             currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
                                 .coerceAtMost(MAX_POLL_INTERVAL_MS)

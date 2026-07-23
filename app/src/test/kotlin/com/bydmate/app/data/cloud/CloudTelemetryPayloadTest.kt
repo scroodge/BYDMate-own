@@ -6,6 +6,7 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CloudTelemetryPayloadTest {
@@ -43,7 +44,7 @@ class CloudTelemetryPayloadTest {
         assertEquals(27.5, snapshot.speedKmh!!, 0.0001)
         assertEquals(-4.0, snapshot.powerKw!!, 0.0001)
         assertEquals(true, snapshot.isCharging)
-        assertEquals(false, snapshot.isParked)
+        assertNull(snapshot.isParked)
 
         val payload = JSONObject(CloudTelemetryPayload.build("way", snapshot))
         val telemetry = payload.getJSONObject("telemetry")
