@@ -83,6 +83,7 @@ fun GatewayScreen(
     val context = LocalContext.current
     val isRunning by TrackingService.isRunning.collectAsStateWithLifecycle()
     val diPlusConnected by TrackingService.diPlusConnected.collectAsStateWithLifecycle()
+    val autoserviceFallback by TrackingService.autoserviceFallback.collectAsStateWithLifecycle()
     val data by TrackingService.lastData.collectAsStateWithLifecycle()
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
@@ -130,6 +131,7 @@ fun GatewayScreen(
         StatusCard(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
+            autoserviceFallbackActive = autoserviceFallback != null,
             cloudSyncStatus = state.cloudSyncStatus,
             onStart = { TrackingService.start(context) },
             onStop = { TrackingService.stop(context) },
@@ -430,6 +432,7 @@ private fun AdvancedFeaturesCard(
 private fun StatusCard(
     isRunning: Boolean,
     diPlusConnected: Boolean,
+    autoserviceFallbackActive: Boolean,
     cloudSyncStatus: String?,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -440,6 +443,7 @@ private fun StatusCard(
         Spacer(modifier = Modifier.height(10.dp))
         StatusRow(strings.service, if (isRunning) strings.running else strings.stopped, isRunning)
         StatusRow("DiPlus", if (diPlusConnected) strings.connected else strings.waiting, diPlusConnected)
+        StatusRow(strings.directByd, if (autoserviceFallbackActive) strings.connected else strings.waiting, autoserviceFallbackActive)
         cloudSyncStatus?.let {
             Spacer(modifier = Modifier.height(6.dp))
             Text(it, color = if (it.isErrorStatus()) AccentOrange else TextSecondary, fontSize = 12.sp)
@@ -783,6 +787,7 @@ private data class GatewayStrings(
     val stopped: String,
     val connected: String,
     val waiting: String,
+    val directByd: String,
     val start: String,
     val stop: String,
     val latestData: String,
@@ -851,6 +856,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             stopped = "Остановлен",
             connected = "Подключен",
             waiting = "Ожидание",
+            directByd = "Прямой BYD",
             start = "Запустить",
             stop = "Остановить",
             latestData = "Последние данные авто",
@@ -916,6 +922,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             stopped = "Stopped",
             connected = "Connected",
             waiting = "Waiting",
+            directByd = "Direct BYD",
             start = "Start",
             stop = "Stop",
             latestData = "Latest vehicle data",
@@ -981,6 +988,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             stopped = "Спынены",
             connected = "Падключаны",
             waiting = "Чаканне",
+            directByd = "Прамы BYD",
             start = "Запусціць",
             stop = "Спыніць",
             latestData = "Апошнія даныя аўто",

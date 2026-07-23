@@ -51,6 +51,8 @@ engineering notes in [`project-notes.md`](project-notes.md).
 | B-09 | FID-таблица как server-pushed JSON, не хардкод в APK | app / cloud | M | `todo` [verify] | Новый сигнал/модель авто добавляется конфигом на сервере, без релиза APK; старые установки без конфига продолжают работать на текущих хардкод-значениях (fallback). |
 | B-10 | Автоматический keep-alive WiFi на стоянке | daemon | S | `in-progress` | ✅ 2026-07-21: тумблер **Настройки → Cloud Sync → «Keep Wi-Fi awake while parked»** → `keep_wifi_awake=1` в `voltflow_cmd.conf` → демон каждые ~60 с шлёт `svc wifi enable` (`CommandDaemon.shouldRefreshWifiKeepalive`, тесты зелёные). Выключено по умолчанию. ✅ **2026-07-23: проверено живьём** — тик `wifi keepalive: svc wifi enable (exit=0)` идёт стабильно каждые ~60 с в `voltflow_cmd_daemon.log`, пережил рестарт и демона, и приложения. Осталось: подтвердить именно длинную стоянку >9 мин без ручного тумблера DiLink «Keep network on while parked». |
 
+**B-07a foreground fallback (2026-07-23):** when di+ fails, `TrackingService` now reads only the already validated direct fields (SOC, engine power, gun state, 12 V, SoH/charging diagnostics), keeps the APK screen and cloud stream alive, and labels the active `Прямой BYD` path. The fallback does not fabricate a `diplus` block and does not guess unvalidated vehicle speed, gear, odometer, temperature or climate fids. A `getDouble` probe for the vendor-SDK speed candidate caused the `autoservice` Binder to return `Broken pipe`; the service recovered, but that transaction is explicitly excluded pending a safe, live-validated reader design.
+
 ---
 
 ## Техдолг / риски (перенесены из ROADMAP)

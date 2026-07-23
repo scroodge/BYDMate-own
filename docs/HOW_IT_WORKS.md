@@ -27,10 +27,9 @@ come back from it.**
 | Local DB | Room, schema version 16 |
 | Distribution | **debug-signed APK only**, published to GitHub Releases |
 
-It is *not* a standalone reader. It depends on **di+ (D+, `vandiplus`)** being
-installed and configured — D+ is the process that talks to the vehicle CAN bus and
-exposes it over localhost HTTP. VoltFlow Mate is a consumer of that, plus an
-optional second reader path through the BYD `autoservice` binder.
+Its primary reader is **di+ (D+, `vandiplus`)**, which exposes vehicle signals over
+localhost HTTP. VoltFlow Mate also has a direct, read-only BYD `autoservice` Binder
+path for a validated core subset when di+ is unavailable.
 
 **The original BYDMate app is *not* a runtime dependency.** VoltFlow Mate is a fork
 of it (hence the `com.bydmate.app` Kotlin package and the GPLv3 attribution in
@@ -39,9 +38,10 @@ Provenance only — the data source is di+.
 
 ### Dependency reality check — read this before anything else
 
-> **VoltFlow Mate does not read the car on its own. D+ is a hard dependency, and
-> as of 0.5.1 there is no fallback path.** If you believe otherwise, this is the
-> section to check first — and see §11 for why it is also partly *by design*.
+> **D+ is no longer a single point of failure for core foreground telemetry.** When
+> its HTTP read fails, the app uses the direct BYD Binder for validated SOC, power,
+> charge-gun state and 12 V data, and continues cloud telemetry. D+ remains primary
+> for the richer signal set and for all command/sentry functions.
 
 **The whole pipeline lives inside one null check** (`TrackingService.kt:749`):
 
@@ -55,9 +55,13 @@ if (data != null) {
 }
 ```
 
-There is **no alternative producer**. When D+ returns null the app does not switch
-sources — it sends *nothing*, stretches the poll interval toward
-`MAX_POLL_INTERVAL_MS`, and sets `_diPlusConnected = false`.
+On a failed read, the app marks D+ disconnected and attempts a bounded direct-Binder
+fallback every three seconds. After three failures it also begins the normal D+
+relaunch watchdog. The fallback publishes only values from validated fids; all
+unavailable fields remain null rather than being inferred. Cloud payloads from this
+path deliberately omit the `diplus` object and retain the direct values in the
+normal telemetry and `autoservice` blocks. GPS speed is used only for cloud cadence
+while D+ is down.
 
 It goes further than depending on D+: it **actively repairs** it.
 `DiPlusWatchdog.shouldRelaunch()` triggers `tryLaunchDiPlus()`
@@ -76,7 +80,7 @@ The v0.5.1 changelog states it directly:
 | Mechanism | Independent of what | Still needs D+? |
 |---|---|---|
 | `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Yes** — reads D+ over HTTP, actuates via `sendCmd` |
-| `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` (29 fids, hand-rolled binary ADB protocol) | **D+ entirely** — real, wired to the cloud's `autoservice` block, 16/16 fids validated against D+ on 2026-07-22 | **No** — but it is a *supplement*: needs ADB, and covers a fraction of the ~48 signals D+ supplies |
+| `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` (29 fids, hand-rolled binary ADB protocol) | **D+ for validated core reads** — supplies foreground fallback and daemon data | **No for SOC/power/gun/12 V/SoH diagnostics**; needs ADB and still covers only a fraction of the richer signal set |
 
 So survival genuinely is the app's own algorithm — but it is independence from
 *BYD force-stopping the app*, not from D+.
@@ -600,5 +604,5 @@ vehicle id are present — the same hard gate applies to telemetry and trip summ
 - **Float instantaneous power is impossible.** Engine power is an *integer-kW* field in BYD's own data; reading the same fid as float returns a `-1.0` sentinel, and no battery-current fid exists so `P = V × I` is out either. D+ faithfully passes the integer, and so does this app.
 - **The BMS `kwh_charged` counter is cell-only** — roughly 47 % below grid-metered energy. It is sent as a **diagnostic** and must not be used for cost. VoltFlow deliberately computes cost from `SOC_delta% × capacity ÷ efficiency`. This was tried the other way and reverted; do not re-propose it.
 - **A full `nativestack` port was evaluated and rejected** — ~40 per-vehicle-validated fids, more on-device ADB load, and no new data, while D+ still cannot be removed (its stall-sentry keeps the head unit awake while parked and it is the only actuation channel).
-- **D+ cannot be dropped yet.** B-07 (replacing D+ reads with direct autoservice reads) is still in the evidence-gathering phase — hence the parity logging in §7.
+- **D+ cannot be dropped yet.** B-07 now has a direct foreground fallback for its validated core fields, but speed, gear, odometer, temperatures and climate still require per-vehicle discovery and live parity validation before they can replace di+.
 - **Termux and Shizuku do not bypass the platform lock.** They need the same one-time ADB/root bootstrap. The unlock is done on the tablet, without a computer, but it cannot be skipped.

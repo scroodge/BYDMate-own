@@ -26,6 +26,7 @@ import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.VehicleCommandPoller
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
+import com.bydmate.app.data.autoservice.AutoserviceLiveSnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
@@ -51,6 +52,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -155,6 +157,9 @@ class TrackingService : Service(), LocationListener {
         private const val GUN_STATE_POLL_EVERY_N_TICKS = 5
         private const val NULL_WARNING_THRESHOLD = 3
         private const val MAX_POLL_INTERVAL_MS = 60_000L
+        /** Direct Binder reads are intentionally less frequent than the normal 1 Hz di+ poll. */
+        private const val AUTOSERVICE_FALLBACK_POLL_INTERVAL_MS = 3_000L
+        private const val AUTOSERVICE_FALLBACK_READ_TIMEOUT_MS = 3_000L
         // Cool-down between D+ relaunch attempts while it is still silent. Caps
         // log noise / launcher pressure when D+ refuses to come back up.
         private const val DIPLUS_RELAUNCH_COOLDOWN_MS = 5L * 60_000L
@@ -198,6 +203,10 @@ class TrackingService : Service(), LocationListener {
 
         private val _diPlusConnected = MutableStateFlow(true)
         val diPlusConnected: StateFlow<Boolean> = _diPlusConnected
+
+        /** Non-null only while the foreground service is keeping core telemetry alive without di+. */
+        private val _autoserviceFallback = MutableStateFlow<AutoserviceLiveSnapshot?>(null)
+        val autoserviceFallback: StateFlow<AutoserviceLiveSnapshot?> = _autoserviceFallback
 
         /**
          * True while the BYD built-in camera surface (`com.byd.avc`) is in
@@ -752,6 +761,7 @@ class TrackingService : Service(), LocationListener {
                         lastDiPlusRelaunchTs = 0L
                         currentPollIntervalMs = POLL_INTERVAL_MS
                         _diPlusConnected.value = true
+                        _autoserviceFallback.value = null
                         _lastData.value = data
 
                         // Feed DiPlus data to Alice for real device states
@@ -935,11 +945,9 @@ class TrackingService : Service(), LocationListener {
                     } else {
                         consecutiveNullCount++
                         renewWakeLockIfNeeded()
+                        val now = System.currentTimeMillis()
                         if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
                             _diPlusConnected.value = false
-                            currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
-                                .coerceAtMost(MAX_POLL_INTERVAL_MS)
-                            val now = System.currentTimeMillis()
                             if (DiPlusWatchdog.shouldRelaunch(
                                     failuresCount = consecutiveNullCount,
                                     threshold = NULL_WARNING_THRESHOLD,
@@ -953,6 +961,22 @@ class TrackingService : Service(), LocationListener {
                                 lastDiPlusRelaunchTs = now
                             }
                         }
+                        val fallback = readAutoserviceFallback(now)
+                        if (fallback != null) {
+                            _diPlusConnected.value = false
+                            publishAutoserviceFallback(fallback)
+                            // Keep direct Binder load bounded while preserving a responsive
+                            // foreground screen and cloud stream. The regular di+ watchdog
+                            // above still keeps trying to restore the richer source.
+                            currentPollIntervalMs = AUTOSERVICE_FALLBACK_POLL_INTERVAL_MS
+                        } else {
+                            _autoserviceFallback.value = null
+                            _lastData.value = null
+                            if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
+                                currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
+                                    .coerceAtMost(MAX_POLL_INTERVAL_MS)
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Polling error: ${e.message}", e)
@@ -961,6 +985,122 @@ class TrackingService : Service(), LocationListener {
             }
         }
     }
+
+    /**
+     * Reads only the fids already validated on this vehicle. This is intentionally
+     * separate from normal polling: unvalidated speed/gear/climate fids must not be
+     * guessed or sent merely to make a partial fallback look complete.
+     */
+    private suspend fun readAutoserviceFallback(nowMs: Long): AutoserviceLiveSnapshot? {
+        if (!settingsRepository.isAutoserviceEnabled()) return null
+        return try {
+            val available = withTimeoutOrNull(AUTOSERVICE_FALLBACK_READ_TIMEOUT_MS) {
+                autoserviceClient.isAvailable()
+            } ?: false
+            if (!available) return null
+            val snapshot = withTimeoutOrNull(AUTOSERVICE_FALLBACK_READ_TIMEOUT_MS) {
+                AutoserviceLiveSnapshot(
+                    battery = autoserviceClient.readBatterySnapshot(),
+                    charging = autoserviceClient.readChargingSnapshot(),
+                    enginePowerKw = autoserviceClient.getEnginePowerKw(),
+                    capturedAtMs = nowMs,
+                )
+            }
+            snapshot?.takeIf { it.hasUsableTelemetry() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "autoservice fallback read failed: ${e.message}")
+            null
+        }
+    }
+
+    /** Publishes a truthful partial state to the UI and cloud while di+ is unavailable. */
+    private suspend fun publishAutoserviceFallback(fallback: AutoserviceLiveSnapshot) {
+        _autoserviceFallback.value = fallback
+        val displayData = fallback.toDisplayData()
+        _lastData.value = displayData
+        val rangeKm = rangeCalculator.estimate(soc = displayData.soc, totalElecKwh = null)
+        _lastRangeKm.value = rangeKm
+        displayData.soc?.let { settingsRepository.saveLastKnownSoc(it) }
+        updateNotification(displayData)
+
+        val location = _lastLocation.value
+        val gpsSpeedKmh = location
+            ?.takeIf { it.hasSpeed() }
+            ?.speed
+            ?.times(3.6f)
+            ?.toDouble()
+        val snapshot = VehicleTelemetrySnapshot.from(
+            // Keep the cloud's `diplus` block null: these values came from the
+            // Binder, not from a stale or reconstructed di+ response.
+            data = null,
+            battery = fallback.battery,
+            charging = fallback.charging,
+            enginePowerKw = fallback.enginePowerKw,
+            capturedAtMs = fallback.capturedAtMs,
+            rangeEstKm = rangeKm,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = location,
+            fallbackSpeedKmh = gpsSpeedKmh,
+        )
+        maybeSendCloudTelemetry(snapshot, fallback.capturedAtMs)
+        Log.i(TAG, "di+ unavailable; autoservice fallback: soc=${fallback.socPercent} " +
+            "power=${fallback.enginePowerKw} gun=${fallback.gunState} 12v=${fallback.auxVoltageV}")
+    }
+
+    /** Converts the direct fields to the established display carrier; unknown values remain null. */
+    private fun AutoserviceLiveSnapshot.toDisplayData(): DiParsData = DiParsData(
+        soc = socPercent,
+        speed = null,
+        mileage = null,
+        power = enginePowerKw?.toDouble(),
+        chargeGunState = gunState,
+        maxBatTemp = null,
+        avgBatTemp = null,
+        minBatTemp = null,
+        chargingStatus = charging?.bmsState,
+        batteryCapacityKwh = null,
+        totalElecConsumption = null,
+        voltage12v = auxVoltageV,
+        maxCellVoltage = null,
+        minCellVoltage = null,
+        exteriorTemp = null,
+        gear = null,
+        powerState = null,
+        insideTemp = null,
+        acStatus = null,
+        acTemp = null,
+        fanLevel = null,
+        acCirc = null,
+        doorFL = null,
+        doorFR = null,
+        doorRL = null,
+        doorRR = null,
+        windowFL = null,
+        windowFR = null,
+        windowRL = null,
+        windowRR = null,
+        sunroof = null,
+        trunk = null,
+        hood = null,
+        seatbeltFL = null,
+        lockFL = null,
+        tirePressFL = null,
+        tirePressFR = null,
+        tirePressRL = null,
+        tirePressRR = null,
+        driveMode = null,
+        workMode = null,
+        autoPark = null,
+        rain = null,
+        lightLow = null,
+        drl = null,
+        sunshade = null,
+        sentryState = null,
+        remoteLockState = null,
+    )
 
     /**
      * Read the autoservice gun-connect-state and, when it crosses

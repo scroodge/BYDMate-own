@@ -926,16 +926,21 @@ class SettingsViewModel @Inject constructor(
             val canEnableLiveSync = url.startsWith("https://", ignoreCase = true) &&
                 state.cloudSyncVehicleId.trim().isNotBlank()
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, canEnableLiveSync.toString())
+            val directFallback = TrackingService.autoserviceFallback.value
+            val location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null
             val snapshot = VehicleTelemetrySnapshot.from(
-                data = TrackingService.lastData.value,
-                battery = null,
-                charging = null,
-                enginePowerKw = null,
+                // lastData is a display carrier while fallback is active; do not
+                // present those direct values as an actual di+ response in a test payload.
+                data = if (directFallback == null) TrackingService.lastData.value else null,
+                battery = directFallback?.battery,
+                charging = directFallback?.charging,
+                enginePowerKw = directFallback?.enginePowerKw,
                 capturedAtMs = System.currentTimeMillis(),
                 rangeEstKm = TrackingService.lastRangeKm.value,
                 currentTripDistanceKm = TrackingService.tripDistanceKm.value,
                 currentTripConsumptionKwh100km = null,
-                location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null,
+                location = location,
+                fallbackSpeedKmh = location?.takeIf { it.hasSpeed() }?.speed?.times(3.6f)?.toDouble(),
             )
             _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test...")) }
             val result = cloudTelemetrySender?.sendTest(snapshot)

@@ -1,5 +1,7 @@
 package com.bydmate.app.data.cloud
 
+import com.bydmate.app.data.autoservice.BatteryReading
+import com.bydmate.app.data.autoservice.ChargingReading
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import org.json.JSONObject
@@ -7,6 +9,51 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CloudTelemetryPayloadTest {
+    @Test
+    fun `autoservice fallback keeps core telemetry without fabricating a diplus block`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = null,
+            battery = BatteryReading(
+                sohPercent = 98f,
+                socPercent = 87f,
+                lifetimeKwh = null,
+                lifetimeMileageKm = null,
+                voltage12v = 12.6f,
+                readAtMs = 1_700_000_000_000L,
+            ),
+            charging = ChargingReading(
+                gunConnectState = 2,
+                chargingType = 2,
+                chargeBatteryVoltV = null,
+                batteryType = null,
+                chargingCapacityKwh = 2.559f,
+                bmsState = 1,
+                readAtMs = 1_700_000_000_000L,
+            ),
+            enginePowerKw = -4,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+            fallbackSpeedKmh = 27.5,
+        )
+
+        assertEquals(87, snapshot.soc)
+        assertEquals(27.5, snapshot.speedKmh!!, 0.0001)
+        assertEquals(-4.0, snapshot.powerKw!!, 0.0001)
+        assertEquals(true, snapshot.isCharging)
+        assertEquals(false, snapshot.isParked)
+
+        val payload = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        val telemetry = payload.getJSONObject("telemetry")
+        assertEquals(87, telemetry.getInt("soc"))
+        assertEquals(27.5, telemetry.getDouble("speed_kmh"), 0.0001)
+        assertEquals(-4.0, telemetry.getDouble("power_kw"), 0.0001)
+        assertEquals(false, payload.has("diplus"))
+        assertEquals(87.0, payload.getJSONObject("autoservice").getDouble("soc_percent"), 0.0001)
+    }
+
     @Test
     fun `payload includes DiPlus cell voltages and delta`() {
         val snapshot = VehicleTelemetrySnapshot.from(

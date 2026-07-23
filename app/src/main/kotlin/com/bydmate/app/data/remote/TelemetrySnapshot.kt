@@ -61,11 +61,15 @@ data class VehicleTelemetrySnapshot(
             currentTripDistanceKm: Double?,
             currentTripConsumptionKwh100km: Double?,
             location: Location?,
+            /** GPS speed used only while di+ is unavailable; it is never put in the di+ block. */
+            fallbackSpeedKmh: Double? = null,
         ): VehicleTelemetrySnapshot {
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
             val gunState = charging?.gunConnectState ?: data?.chargeGunState
             val isCharging = gunState?.let { it in CHARGING_GUN_STATES }
+            val saneFallbackSpeed = fallbackSpeedKmh?.takeIf { it.isFinite() && it in 0.0..350.0 }
+            val speedKmh = data?.speed?.toDouble() ?: saneFallbackSpeed
             val chargePower = if (isCharging == true) {
                 powerKw?.takeIf { it < 0.0 }?.let { -it } ?: 0.0
             } else {
@@ -75,8 +79,8 @@ data class VehicleTelemetrySnapshot(
                 capturedAtMs = capturedAtMs,
                 deviceTimeIso = Instant.ofEpochMilli(capturedAtMs).toString(),
                 diPlusData = data,
-                soc = data?.soc,
-                speedKmh = data?.speed?.toDouble(),
+                soc = data?.soc ?: battery?.socPercent?.toInt()?.takeIf { it in 0..100 },
+                speedKmh = speedKmh,
                 powerKw = powerKw,
                 batteryTempC = data?.avgBatTemp?.toDouble(),
                 cabinTempC = data?.insideTemp?.toDouble(),
@@ -103,7 +107,8 @@ data class VehicleTelemetrySnapshot(
                 rangeEstKm = rangeEstKm,
                 currentTripDistanceKm = currentTripDistanceKm,
                 currentTripConsumptionKwh100km = currentTripConsumptionKwh100km,
-                isParked = data?.gear?.let { it == 1 },
+                isParked = data?.gear?.let { it == 1 }
+                    ?: speedKmh?.let { it <= PARKED_SPEED_THRESHOLD_KMH && isCharging != true },
                 tirePressFL = data?.tirePressFL,
                 tirePressFR = data?.tirePressFR,
                 tirePressRL = data?.tirePressRL,
@@ -127,6 +132,8 @@ data class VehicleTelemetrySnapshot(
                 autoserviceLifetimeKwh = battery?.lifetimeKwh,
             )
         }
+
+        private const val PARKED_SPEED_THRESHOLD_KMH = 0.5
     }
 }
 
