@@ -1,6 +1,7 @@
 package com.bydmate.app.daemon
 
 import com.bydmate.app.BuildConfig
+import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import kotlinx.coroutines.runBlocking
@@ -374,6 +375,8 @@ object CommandDaemon {
             .readTimeout(10, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .build()
+        // Reuses `ok` rather than a second OkHttpClient — di+ is a cheap localhost call.
+        val diPars = DiParsClient(ok)
         var lastTelemetryPushAt = 0L
         // Separate from [lastTelemetryPushAt] on purpose: fast-mode status pushes must not
         // keep resetting the history rhythm, or a car watched for an hour would store no
@@ -392,13 +395,10 @@ object CommandDaemon {
         // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
         // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
         var lastWifiKeepAliveAt = 0L
-        // Last gear/gun state exposed to the command guard. In the direct-only
-        // branch gear remains null until a safe autoservice fid is validated; the
-        // guard then fails closed rather than consulting di+.
-        // `latestData` itself is never cleared to
-        // null once di+ has answered once — a failed fetch() just leaves it stale — so these
-        // are captured separately at the moment of each successful fetch and read back once
-        // di+ is judged unreachable (see DIPLUS_STALE_MS below). Gates the autoservice-only
+        // Last known gear/gun state, captured across di+ fetches. `latestData` itself is never
+        // cleared to null once di+ has answered once — a failed fetch() just leaves it stale —
+        // so these are captured separately at the moment of each successful fetch and read back
+        // once di+ is judged unreachable (see DIPLUS_STALE_MS below). Gates the autoservice-only
         // fallback — see shouldUseAutoserviceFallback. Both stay null for the life of the
         // process if di+ never answers even once (e.g. it's not running on this car at all);
         // that cold-start case is covered separately by a live autoservice read at the fallback
@@ -428,16 +428,25 @@ object CommandDaemon {
                         lastWifiKeepAliveAt = now
                     }
 
-                    // Direct-engine-only telemetry. The DiPars-shaped object is a
-                    // compatibility carrier for the existing command guard; it is
-                    // populated exclusively from autoservice and leaves unknown
-                    // fields null.
+                    // Poll di+ every refresh again (Step 1 of the di+ restoration plan): it is
+                    // the only source for gear/speed, and without it neither the DRIVING guard
+                    // below nor the state classifier can ever see anything but PARKED/CHARGING —
+                    // a regression that was live and unnoticed for days (see plan doc). Autoservice
+                    // is still read every refresh too; when di+ answers, `latestData` carries real
+                    // gear/speed. When it doesn't, `toSafetyData()` remains the fallback carrier
+                    // exactly as before (gear/speed null, command guard fails closed).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
+                        val diPlus = diPars.fetch()
                         val direct = readAutoserviceSnapshot()
-                        latestData = direct.toSafetyData()
+                        latestData = diPlus ?: direct.toSafetyData()
                         latestDataAt = now
-                        lastKnownGear = null
-                        lastKnownGunState = direct.gun
+                        // gear has no autoservice equivalent, so a failed fetch must not erase
+                        // the last successfully-read value — that's the whole point of "last
+                        // known before di+ went dark" for shouldUseAutoserviceFallback below.
+                        // gun state is always refreshed from autoservice's live read (or di+'s,
+                        // when it just answered) since that reading stays independently fresh.
+                        if (diPlus != null) lastKnownGear = diPlus.gear
+                        lastKnownGunState = diPlus?.chargeGunState ?: direct.gun
                     }
                     val directFresh = latestData != null && now - latestDataAt <= DIPLUS_STALE_MS
 

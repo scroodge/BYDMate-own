@@ -22,6 +22,7 @@ import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.remote.AlicePollingManager
+import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.autoservice.DirectDriveRecorder
@@ -57,6 +58,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class TrackingService : Service(), LocationListener {
 
+    @Inject lateinit var diParsClient: DiParsClient
     @Inject lateinit var tripTracker: TripTracker
     @Inject lateinit var chargeRepository: ChargeRepository
     @Inject lateinit var tripRepository: com.bydmate.app.data.repository.TripRepository
@@ -748,12 +750,19 @@ class TrackingService : Service(), LocationListener {
         pollingJob = serviceScope.launch {
             while (true) {
                 try {
-                    // Telemetry is direct-engine-only in this branch. Di+ remains
-                    // available for command actuation / stall-sentry, but is never
-                    // read here or used to fill a missing direct field.
+                    // di+ is polled every tick again (Step 1 of the di+ restoration plan): it is
+                    // the only source for gear/speed, and without it state classification
+                    // (CloudTelemetryCadence, TripTracker, the daemon's DRIVING guard) can only
+                    // ever see PARKED/CHARGING — a regression that was live and unnoticed for
+                    // days. Autoservice stays the primary source for everything else (soc, power,
+                    // doors, tires, etc.) unchanged — this only restores gear/speed onto the
+                    // existing carrier, it does not change what wins per field (that's Step 3).
+                    val diPlus = diParsClient.fetch()
                     val ownSnapshot = readAutoserviceFallback(System.currentTimeMillis())
                     if (ownSnapshot != null) {
-                        val data = ownSnapshot.toDisplayData()
+                        val data = ownSnapshot.toDisplayData().let { base ->
+                            if (diPlus != null) base.copy(gear = diPlus.gear, speed = diPlus.speed) else base
+                        }
                         consecutiveNullCount = 0
                         currentPollIntervalMs = AUTOSERVICE_FALLBACK_POLL_INTERVAL_MS
                         _diPlusConnected.value = false
