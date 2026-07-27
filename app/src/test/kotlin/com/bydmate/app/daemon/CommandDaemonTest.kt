@@ -1,5 +1,6 @@
 package com.bydmate.app.daemon
 
+import com.bydmate.app.data.remote.DiParsData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -234,5 +235,117 @@ class CommandDaemonTest {
         // Models the cold-start case: lastKnownGear is null (di+ never answered), but the call
         // site substituted a fresh direct autoservice gun-state read of 3 (DC) as evidence.
         assertTrue(CommandDaemon.shouldUseAutoserviceFallback(lastKnownGear = null, gunState = 3))
+    }
+
+    private fun diPars(
+        soc: Int? = null,
+        power: Double? = null,
+        mileage: Double? = null,
+        voltage12v: Double? = null,
+        chargeGunState: Int? = null,
+    ) = DiParsData(
+        soc = soc, speed = null, mileage = mileage, power = power, chargeGunState = chargeGunState,
+        maxBatTemp = null, avgBatTemp = null, minBatTemp = null, chargingStatus = null,
+        batteryCapacityKwh = null, totalElecConsumption = null, voltage12v = voltage12v,
+        maxCellVoltage = null, minCellVoltage = null, exteriorTemp = null, gear = null,
+        powerState = null, insideTemp = null, acStatus = null, acTemp = null, fanLevel = null,
+        acCirc = null, doorFL = null, doorFR = null, doorRL = null, doorRR = null,
+        windowFL = null, windowFR = null, windowRL = null, windowRR = null, sunroof = null,
+        trunk = null, hood = null, seatbeltFL = null, lockFL = null, tirePressFL = null,
+        tirePressFR = null, tirePressRL = null, tirePressRR = null, driveMode = null,
+        workMode = null, autoPark = null, rain = null, lightLow = null, drl = null,
+        sunshade = null, sentryState = null, remoteLockState = null,
+    )
+
+    // di+ value-staleness detection (isDiPlusValueStale / diPlusValueSignature). Ported from the
+    // 2026-07-27 field investigation into a frozen-but-successful di+ read (soc/power static for
+    // 11+ minutes during an active charge) — see DIPLUS_VALUE_STALE_MS's doc comment.
+    private val staleMs = 180_000L // mirrors DIPLUS_VALUE_STALE_MS
+
+    @Test
+    fun `frozen signature while charging with autoservice tracking is stale`() {
+        assertTrue(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + staleMs,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = t0 + 60_000L,
+                charging = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `frozen signature for hours while genuinely parked and flat is not stale`() {
+        // The 13-hour overnight window in the field corpus: di+ static the whole time for a
+        // legitimate reason (nothing was happening). No movement evidence -> not flagged.
+        assertFalse(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + 13 * 3_600_000L,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = null,
+                charging = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `not yet held long enough is not stale even with movement evidence`() {
+        assertFalse(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + staleMs - 1,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = t0 + 1,
+                charging = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `exactly at the threshold is stale`() {
+        assertTrue(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + staleMs,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = null,
+                charging = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `autoservice soc moving after the signature froze is movement evidence even when not charging`() {
+        // e.g. a slow 12V/vampire drain the daemon doesn't classify as "charging" but that still
+        // proves the car isn't static.
+        assertTrue(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + staleMs,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = t0 + 90_000L,
+                charging = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `autoservice soc movement before the signature froze is stale evidence, not fresh`() {
+        // Moved once, then both sources went flat together — that's not ongoing movement.
+        assertFalse(
+            CommandDaemon.isDiPlusValueStale(
+                now = t0 + staleMs,
+                signatureUnchangedSinceMs = t0,
+                autoserviceSocMovedSinceMs = t0 - 1,
+                charging = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `diPlusValueSignature changes when any tracked field changes`() {
+        val base = diPars(soc = 60, power = -4.0, chargeGunState = 2)
+        val sig1 = CommandDaemon.diPlusValueSignature(base)
+        val sig2 = CommandDaemon.diPlusValueSignature(diPars(soc = 61, power = -4.0, chargeGunState = 2))
+        val sig3 = CommandDaemon.diPlusValueSignature(diPars(soc = 60, power = -4.0, chargeGunState = 2))
+        assertTrue(sig1 != sig2)
+        assertEquals(sig1, sig3)
     }
 }

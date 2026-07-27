@@ -4,7 +4,7 @@ Actionable, prioritized task list. Milestone-level view lives in
 [`ROADMAP.md`](ROADMAP.md); shipped detail in [`CHANGELOG.md`](../CHANGELOG.md);
 engineering notes in [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-07-20 · база: `main` @ `0.5.0` (`versionCode 336`, подготовлен к публикации).
+- **Обновлено:** 2026-07-27 · база: `main` @ `0.5.1` (`versionCode 337`) + 2 коммита сверху (watchdog auto-relaunch, gunState-фолбэк).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `done`.
 - Оценка: S (<½ дня) · M (1–2 дня) · L (>2 дня / кросс-репо).

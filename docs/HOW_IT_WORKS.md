@@ -109,9 +109,11 @@ evidence-gathering step toward it, not its arrival.
 - **Background-restriction warning** — appears if DiLink's "Disable background Apps" is still on for this app, with a deep link to that DiLink settings screen.
 - **Language switcher** (BE / RU / EN).
 
-The richer screens from the fork parent (`DashboardScreen`, `TripsScreen`,
-`ChargesScreen`, `MapScreen`, `PlacesScreen`, `AutomationScreen`) still exist in the
-source tree but are **not wired into navigation** in this build.
+`DashboardScreen`, `SettingsScreen` and `WelcomeScreen` from the fork parent were
+deleted outright (their settings functionality was folded into `GatewayScreen`).
+The remaining richer screens (`TripsScreen`, `ChargesScreen`, `MapScreen`,
+`PlacesScreen`, `AutomationScreen`) still exist in the source tree but are **not
+wired into navigation** in this build.
 
 ---
 
