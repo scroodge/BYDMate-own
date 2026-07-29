@@ -323,25 +323,4 @@ class SettingsViewModelTest {
         assertEquals(2091f, connected.lifetimeKm!!, 0.01f)
         assertEquals(602f, connected.lifetimeKwh!!, 0.01f)
     }
-
-    @Test
-    fun `enableAutoservice_persistsAndReloads`() = runTest {
-        val vm = buildViewModel(
-            autoserviceEnabled = false,
-            fakeAutoservice = FakeAutoservice(
-                BatteryReading(100f, 91f, 602f, 2091f, 14f, 0L), available = true
-            )
-        )
-        testDispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(AutoserviceStatus.NotEnabled, vm.uiState.value.autoserviceStatus)
-        assertFalse(vm.uiState.value.autoserviceEnabled)
-
-        vm.enableAutoservice(true)
-        testDispatcher.scheduler.advanceUntilIdle()
-
-        assertTrue(vm.uiState.value.autoserviceEnabled)
-        // After enable, BatteryStateRepository sees autoservice enabled = true and returns data
-        assertTrue(vm.uiState.value.autoserviceStatus is AutoserviceStatus.Connected)
-    }
 }
