@@ -46,6 +46,12 @@ class CloudTelemetryCadence {
     internal companion object {
         const val MOVING_SPEED_THRESHOLD_KMH = 0.5
         const val CHARGING_POWER_THRESHOLD_KW = 0.1
-        const val DRIVE_LATCH_MS = 10 * 60 * 1000L
+        // C-3: latch keeping 1 Hz cloud cadence after the last drive signal so a
+        // brief P at a traffic light doesn't drop us to the 30 s parked heartbeat
+        // mid-drive. 10 min was far longer than any junction stop and made every real
+        // stop cost 10 min of 1 Hz traffic before economy resumed; 2 min still absorbs
+        // stop-and-go while restoring parked economy ~5× sooner. Tunable — validate on
+        // a drive→park cycle (watch cloud cadence drop to 30 s ~2 min after stopping).
+        const val DRIVE_LATCH_MS = 2 * 60 * 1000L
     }
 }
