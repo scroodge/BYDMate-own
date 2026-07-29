@@ -74,6 +74,10 @@ open class DiParsClient @Inject constructor(
         private const val TAG = "DiParsClient"
         private const val BASE_URL = "http://127.0.0.1:8988/api/getDiPars"
         private const val GET_VAL_URL = "http://127.0.0.1:8988/api/getVal"
+        // The two getVal fields (stall-sentry config + power-state label) are
+        // descriptive telemetry strings that change rarely; refresh them at this
+        // cadence instead of every tick to save two localhost round-trips per second.
+        private const val VAL_REFRESH_INTERVAL_MS = 30_000L
         private const val TEMPLATE =
             "SOC:{电量百分比}|Speed:{车速}|Mileage:{里程}|Power:{发动机功率}" +
             "|ChargeGun:{充电枪插枪状态}|MaxBatTemp:{最高电池温度}" +
@@ -121,6 +125,13 @@ open class DiParsClient @Inject constructor(
             raw?.takeIf { it in MIN_PLAUSIBLE_TEMP_C..MAX_PLAUSIBLE_TEMP_C }
     }
 
+    // Cached getVal results (see VAL_REFRESH_INTERVAL_MS). @Volatile because fetch()
+    // may run concurrently from the poll loop and the charging detector; a rare
+    // double-refresh is harmless since the values are idempotent.
+    @Volatile private var cachedStallSentryMode: String? = null
+    @Volatile private var cachedPowerStateLabel: String? = null
+    @Volatile private var lastValFetchMs: Long = 0L
+
     open suspend fun fetch(): DiParsData? = withContext(Dispatchers.IO) {
         try {
             val httpUrl = BASE_URL.toHttpUrl().newBuilder()
@@ -142,11 +153,15 @@ open class DiParsClient @Inject constructor(
             }
 
             val base = parse(json.optString("val", ""))
-            val stallSentry = fetchVal("熄火录像配置开关")
-            val powerLabel = fetchVal("电源状态")
+            val now = System.currentTimeMillis()
+            if (now - lastValFetchMs >= VAL_REFRESH_INTERVAL_MS) {
+                lastValFetchMs = now
+                cachedStallSentryMode = fetchVal("熄火录像配置开关") ?: cachedStallSentryMode
+                cachedPowerStateLabel = fetchVal("电源状态") ?: cachedPowerStateLabel
+            }
             base.copy(
-                stallSentryMode = stallSentry ?: base.stallSentryMode,
-                powerStateLabel = powerLabel ?: base.powerStateLabel,
+                stallSentryMode = cachedStallSentryMode ?: base.stallSentryMode,
+                powerStateLabel = cachedPowerStateLabel ?: base.powerStateLabel,
             )
         } catch (e: Exception) {
             Log.e(TAG, "fetch failed: ${e.message}")

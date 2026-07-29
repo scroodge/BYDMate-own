@@ -79,6 +79,14 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // C-4: rarely-changing settings the 1 Hz poll loop needs are observed once via
+    // Room Flow instead of re-queried every tick (~259k SQLite reads/day avoided).
+    // Seeded then kept live by collectors in startPolling; reads in the loop are
+    // plain in-memory booleans that still react immediately to UI toggles.
+    @Volatile private var cloudSyncEnabledCached: Boolean = false
+    @Volatile private var autoserviceEnabledCached: Boolean = false
+    @Volatile private var omitGpsCached: Boolean = false
     private var pollingJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var locationManager: LocationManager? = null
@@ -741,6 +749,30 @@ class TrackingService : Service(), LocationListener {
     private fun startPolling() {
         Log.i(TAG, "Starting polling with interval=${POLL_INTERVAL_MS}ms")
         pollingJob = serviceScope.launch {
+            // Seed then observe the settings the loop reads, so each 1 Hz tick hits
+            // memory instead of running three SQLite queries. Collectors live in this
+            // job's scope and are cancelled with it; writes (e.g. autoservice
+            // auto-enable below) propagate back through the same Flow.
+            cloudSyncEnabledCached = settingsRepository.getString(
+                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
+                com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED,
+            ) == "true"
+            autoserviceEnabledCached = settingsRepository.isAutoserviceEnabled()
+            omitGpsCached = settingsRepository.getString(
+                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false",
+            ) == "true"
+            launch {
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED)
+                    .collect { cloudSyncEnabledCached = (it ?: com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) == "true" }
+            }
+            launch {
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_AUTOSERVICE_ENABLED)
+                    .collect { autoserviceEnabledCached = (it ?: "false") == "true" }
+            }
+            launch {
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS)
+                    .collect { omitGpsCached = (it ?: "false") == "true" }
+            }
             while (true) {
                 try {
                     val data = diParsClient.fetch()
@@ -865,12 +897,9 @@ class TrackingService : Service(), LocationListener {
                         updateNotification(data)
                         maybeLogSessionSummary(nowMs, data, sessionId)
                         renewWakeLockIfNeeded()
-                        val cloudEnabled = settingsRepository.getString(
-                            com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED,
-                            com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED
-                        ) == "true"
+                        val cloudEnabled = cloudSyncEnabledCached
                         if (cloudEnabled) {
-                            var autoserviceOn = settingsRepository.isAutoserviceEnabled()
+                            var autoserviceOn = autoserviceEnabledCached
                             if (!autoserviceOn && runCatching { autoserviceClient.isAvailable() }.getOrDefault(false)) {
                                 settingsRepository.setAutoserviceEnabled(true)
                                 autoserviceOn = true
@@ -905,10 +934,7 @@ class TrackingService : Service(), LocationListener {
                                 }.getOrNull()
                             } else null
                             val resolvedSoh = sohResolver.resolveSohPercent(telemetryBattery)
-                            val omitGps = settingsRepository.getString(
-                                com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS,
-                                "false",
-                            ) == "true"
+                            val omitGps = omitGpsCached
                             val locationForCloud = when {
                                 omitGps -> null
                                 !hasLocationPermission() -> null
