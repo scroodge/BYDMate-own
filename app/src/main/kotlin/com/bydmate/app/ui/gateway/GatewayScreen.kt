@@ -87,6 +87,7 @@ fun GatewayScreen(
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
     val location by TrackingService.lastLocation.collectAsStateWithLifecycle()
+    val lastDiPlusUpdateMs by TrackingService.lastDiPlusUpdateMs.collectAsStateWithLifecycle()
     val strings = gatewayStrings(state.appLanguage)
 
     // Re-check the head-unit "Disable background Apps" restriction on every resume,
@@ -151,6 +152,7 @@ fun GatewayScreen(
             rangeKm = rangeKm,
             tripDistanceKm = tripDistanceKm,
             hasLocation = location != null,
+            lastUpdateMs = lastDiPlusUpdateMs,
             strings = strings,
         )
 
@@ -510,10 +512,36 @@ private fun LiveDataCard(
     rangeKm: Double?,
     tripDistanceKm: Double?,
     hasLocation: Boolean,
+    lastUpdateMs: Long,
     strings: GatewayStrings,
 ) {
     GatewayCard {
         Text(strings.latestData, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (lastUpdateMs > 0L) {
+            // B-1: D+ data freshness. Ticks up while D+ is quiet; past the stale
+            // threshold the values below are likely frozen, so the badge turns orange.
+            // Reflects fetch success (not value change), so a parked static car is fine.
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(lastUpdateMs) {
+                while (true) {
+                    nowMs = System.currentTimeMillis()
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
+            val ageSec = ((nowMs - lastUpdateMs) / 1000).coerceAtLeast(0)
+            val stale = ageSec >= 10
+            val ageText = when {
+                ageSec < 60 -> "${ageSec}s"
+                ageSec < 3600 -> "${ageSec / 60}m"
+                else -> "${ageSec / 3600}h"
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "⟳ $ageText" + if (stale) " ⚠" else "",
+                color = if (stale) AccentOrange else TextSecondary,
+                fontSize = 12.sp,
+            )
+        }
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric("SOC", fmt(soc?.toDouble(), 0, "%"), Modifier.weight(1f))

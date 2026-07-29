@@ -206,6 +206,14 @@ class TrackingService : Service(), LocationListener {
         private val _diPlusConnected = MutableStateFlow(true)
         val diPlusConnected: StateFlow<Boolean> = _diPlusConnected
 
+        private val _lastDiPlusUpdateMs = MutableStateFlow(0L)
+        // Timestamp of the last successful D+ fetch. Drives the UI freshness signal:
+        // when D+ goes quiet (null returns / frozen connection) this stops advancing,
+        // so the "N s ago" age climbs and warns that LiveDataCard values are stale.
+        // Tracks fetch success (not value change), so a parked, static car never
+        // false-triggers it.
+        val lastDiPlusUpdateMs: StateFlow<Long> = _lastDiPlusUpdateMs
+
         /**
          * True while the BYD built-in camera surface (`com.byd.avc`) is in
          * foreground — covers reverse, slow-forward auto-pop, 360° button and
@@ -782,6 +790,7 @@ class TrackingService : Service(), LocationListener {
                         currentPollIntervalMs = POLL_INTERVAL_MS
                         _diPlusConnected.value = true
                         _lastData.value = data
+                        _lastDiPlusUpdateMs.value = System.currentTimeMillis()
 
                         // Feed DiPlus data to Alice for real device states
                         alicePollingManager.latestData = data
