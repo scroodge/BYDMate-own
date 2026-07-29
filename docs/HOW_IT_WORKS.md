@@ -39,9 +39,12 @@ Provenance only — the data source is di+.
 
 ### Dependency reality check — read this before anything else
 
-> **VoltFlow Mate does not read the car on its own. D+ is a hard dependency, and
-> as of 0.5.1 there is no fallback path.** If you believe otherwise, this is the
-> section to check first — and see §11 for why it is also partly *by design*.
+> **VoltFlow Mate does not read the car on its own — D+ is a hard dependency.** The
+> app's own telemetry loop has **no fallback**: when D+ returns null it sends nothing.
+> The one exception is the survival **daemon**, which (B-07) now pushes an
+> autoservice-only telemetry payload while parked or charging if D+ goes silent — see
+> §7. If you believe there is broader independence than that, this is the section to
+> check first, and see §11 for why D+ still cannot be removed entirely.
 
 **The whole pipeline lives inside one null check** (`TrackingService.kt:749`):
 
@@ -55,9 +58,10 @@ if (data != null) {
 }
 ```
 
-There is **no alternative producer**. When D+ returns null the app does not switch
-sources — it sends *nothing*, stretches the poll interval toward
-`MAX_POLL_INTERVAL_MS`, and sets `_diPlusConnected = false`.
+There is **no alternative producer in the app.** When D+ returns null the app does not
+switch sources — it sends *nothing*, stretches the poll interval toward
+`MAX_POLL_INTERVAL_MS`, and sets `_diPlusConnected = false`. (The daemon is the sole
+exception, and only while parked/charging — see §7's autoservice fallback.)
 
 It goes further than depending on D+: it **actively repairs** it.
 `DiPlusWatchdog.shouldRelaunch()` triggers `tryLaunchDiPlus()`
@@ -71,11 +75,18 @@ The v0.5.1 changelog states it directly:
 > меняется**) … в облако эти значения пока не отправляются.
 > … Основной pipeline телеметрии/команд не изменился.
 
+**Since then (on `main`, post-0.5.1 changelog), the daemon went past logging.**
+`CommandDaemon.pushAutoserviceFallback` now POSTs an autoservice-only telemetry payload
+to the cloud when D+ is stale **and** the car is parked or charging (§7). The app loop
+above is unchanged — the fallback is daemon-only and never runs while driving — so the
+quoted "источник данных пока не меняется" still holds for the app, but no longer for the
+daemon.
+
 **What *is* the app's own — the part easily conflated with independence:**
 
 | Mechanism | Independent of what | Still needs D+? |
 |---|---|---|
-| `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Yes** — reads D+ over HTTP, actuates via `sendCmd` |
+| `CommandDaemon` as a shell-uid `app_process` | **BYD's process killer** — survives the power-off force-stop | **Mostly** — reads D+ over HTTP and actuates via `sendCmd`, but falls back to an autoservice-only telemetry push when D+ is stale while parked/charging (§7) |
 | `AdbOnDeviceClient` + `AutoserviceClient` + `FidRegistry` (29 fids, hand-rolled binary ADB protocol) | **D+ entirely** — real, wired to the cloud's `autoservice` block, 16/16 fids validated against D+ on 2026-07-22 | **No** — but it is a *supplement*: needs ADB, and covers a fraction of the ~48 signals D+ supplies |
 
 So survival genuinely is the app's own algorithm — but it is independence from
@@ -94,8 +105,11 @@ could not be removed.
 If you are looking for where the "no third-party app" architecture is described,
 that is [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) — a comparison table
 describing **competitor BYD EV Pro's** design — plus backlog item **B-07**, filed
-under *кандидаты, не запланировано*. The parity logging added in 0.5.1 is the first
-evidence-gathering step toward it, not its arrival.
+under *кандидаты, не запланировано*. The parity logging added in 0.5.1 was the first
+evidence-gathering step; the daemon's parked/charging autoservice fallback (§7) is the
+first slice of B-07 to actually ship. D+ still cannot be removed, though — actuation and
+the stall-sentry above, plus the app's own read path still has no fallback and driving
+still relies on D+.
 
 ### The UI is one screen
 
@@ -521,7 +535,7 @@ Every command is acked back with `{"id", "status", "result"}` where status is
 - **Config:** `TrackingService.exportDaemonConfig()` writes `voltflow_cmd.conf` (url / api_key / vehicle_id / `keep_wifi_awake`) to shell-readable external storage, because the daemon runs as uid shell and cannot read app-private settings.
 - **Telemetry cadence:** normal 60 s, immediate on gun-state change, and 3 s `live_only` status while a `live_fast_seconds` grant is active. It does **not** use the Room queue — it is best-effort, its job is to keep live state and the command path alive until the app runs again, not to replace the durable app queue.
 - **Wi-Fi keep-alive (opt-in):** DiLink drops Wi-Fi ~9 min after power-off. The documented fix is the head-unit's own "Keep network on while parked" toggle. Alternatively, enabling **Settings → Cloud Sync → "Keep Wi-Fi awake while parked"** makes the daemon run `svc wifi enable` every ~60 s itself — idempotent, cheap, no ADB round-trip (it already is shell uid). Off by default pending more real-car testing.
-- **Autoservice parity logging (always-on when the daemon runs):** every push, the daemon also reads SOC, engine power, doors/trunk/hood and tire pressures straight from the `autoservice` binder and logs them next to the D+ values. **Nothing from this path is sent to the cloud** — it is evidence-gathering for backlog B-07 (dropping the D+ dependency for reads). The fids come from the real BYD vendor SDK (`android.hardware.bydauto.BYDAutoFeatureIds`, decompiled from the car's own `framework.jar`), and 16/16 validated live against D+ on 2026-07-22.
+- **Autoservice reads (always-on when the daemon runs):** every push, the daemon also reads SOC, engine power, doors/trunk/hood and tire pressures straight from the `autoservice` binder and logs them next to the D+ values (`autoservice check` / `check2`). This began as parity logging for backlog B-07 (dropping the D+ dependency for reads). **It has since grown a real send path:** when D+ is stale (`DIPLUS_STALE_MS`) **and** the last-known state is parked or charging (`shouldUseAutoserviceFallback`), `pushAutoserviceFallback` POSTs an **autoservice-only** telemetry payload — SOC, power, gun state, 12 V, doors/trunk/hood, tyres, SoH, kWh — to the cloud, so data keeps flowing without D+. It never runs while driving (the fallback has no `gear`/`speed` of its own), and is **not yet field-validated**. The fids come from the real BYD vendor SDK (`android.hardware.bydauto.BYDAutoFeatureIds`, decompiled from the car's own `framework.jar`), and 16/16 validated live against D+ on 2026-07-22.
 - **Survives:** power-off / sleep. **Does not survive:** a full reboot — but the app auto-starts on boot and `ensureCommandDaemonRunning()` redeploys and relaunches it, so a reboot self-heals with no manual ADB.
 - **Log:** `/data/local/tmp/voltflow_cmd_daemon.log`. **Kill switch:** `touch /data/local/tmp/voltflow_cmd_daemon.disabled`.
 
@@ -602,5 +616,5 @@ vehicle id are present — the same hard gate applies to telemetry and trip summ
 - **Float instantaneous power is impossible.** Engine power is an *integer-kW* field in BYD's own data; reading the same fid as float returns a `-1.0` sentinel, and no battery-current fid exists so `P = V × I` is out either. D+ faithfully passes the integer, and so does this app.
 - **The BMS `kwh_charged` counter is cell-only** — roughly 47 % below grid-metered energy. It is sent as a **diagnostic** and must not be used for cost. VoltFlow deliberately computes cost from `SOC_delta% × capacity ÷ efficiency`. This was tried the other way and reverted; do not re-propose it.
 - **A full `nativestack` port was evaluated and rejected** — ~40 per-vehicle-validated fids, more on-device ADB load, and no new data, while D+ still cannot be removed (its stall-sentry keeps the head unit awake while parked and it is the only actuation channel).
-- **D+ cannot be dropped yet.** B-07 (replacing D+ reads with direct autoservice reads) is still in the evidence-gathering phase — hence the parity logging in §7.
+- **D+ still cannot be dropped.** B-07 (replacing D+ reads with direct autoservice reads) has *partly* shipped: the daemon now sends an autoservice-only payload while parked/charging when D+ is stale (§7). But driving still relies on D+ for reads, the app's own loop has no fallback, and D+ remains the only actuation channel and stall-sentry — so the dependency stands.
 - **Termux and Shizuku do not bypass the platform lock.** They need the same one-time ADB/root bootstrap. The unlock is done on the tablet, without a computer, but it cannot be skipped.

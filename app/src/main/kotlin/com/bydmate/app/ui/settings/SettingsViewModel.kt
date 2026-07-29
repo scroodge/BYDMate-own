@@ -16,7 +16,6 @@ import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.remote.DiParsClient
-import com.bydmate.app.data.remote.InsightsManager
 import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
@@ -159,7 +158,6 @@ class SettingsViewModel @Inject constructor(
     private val energyDataReader: EnergyDataReader,
     private val diParsClient: DiParsClient,
     private val idleDrainDao: IdleDrainDao,
-    private val insightsManager: InsightsManager,
     private val adbOnDeviceClient: AdbOnDeviceClient,
     private val batteryStateRepository: BatteryStateRepository,
     private val cloudTelemetrySender: CloudTelemetrySender? = null,
@@ -650,56 +648,6 @@ class SettingsViewModel @Inject constructor(
             val log = prefs.getString(BootReceiver.KEY_CHAIN_LOG, null)
             if (log.isNullOrBlank()) null else log
         } catch (_: Exception) { null }
-    }
-
-    fun saveOpenRouterApiKey(value: String) {
-        _uiState.update { it.copy(openRouterApiKey = value) }
-        viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_OPENROUTER_API_KEY, value)
-        }
-    }
-
-    fun selectModel(model: OpenRouterModel) {
-        _uiState.update { it.copy(
-            openRouterModel = model.id,
-            openRouterModelName = model.name,
-            showModelPicker = false
-        ) }
-        viewModelScope.launch {
-            settingsRepository.setString(SettingsRepository.KEY_OPENROUTER_MODEL, model.id)
-        }
-    }
-
-    fun showModelPicker() {
-        val apiKey = _uiState.value.openRouterApiKey
-        if (apiKey.isBlank()) return
-        _uiState.update { it.copy(showModelPicker = true, modelsLoading = true) }
-        viewModelScope.launch {
-            val models = insightsManager.getModels(apiKey)
-            _uiState.update { it.copy(availableModels = models, modelsLoading = false) }
-        }
-    }
-
-    fun hideModelPicker() {
-        _uiState.update { it.copy(showModelPicker = false) }
-    }
-
-    fun saveAiSettings() {
-        val apiKey = _uiState.value.openRouterApiKey
-        val model = _uiState.value.openRouterModel
-        if (apiKey.isBlank() || model.isBlank()) {
-            _uiState.update { it.copy(aiSaveStatus = "Укажите API-ключ и модель") }
-            return
-        }
-        _uiState.update { it.copy(aiSaveStatus = "Загрузка инсайта...") }
-        viewModelScope.launch {
-            val insight = insightsManager.refresh()
-            if (insight != null) {
-                _uiState.update { it.copy(aiSaveStatus = "Готово! Переключитесь на Главную") }
-            } else {
-                _uiState.update { it.copy(aiSaveStatus = "Ошибка получения инсайта") }
-            }
-        }
     }
 
     // --- Smart Home (hidden) ---

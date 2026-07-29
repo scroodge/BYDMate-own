@@ -30,8 +30,6 @@ import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.local.entity.TripPointEntity
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiPlusDbReader
-import com.bydmate.app.data.remote.InsightsManager
-import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
@@ -236,9 +234,6 @@ class SettingsViewModelTest {
             DiPlusDbReader(), settingsRepo, tripSummaryCloudSync
         )
 
-        val openRouterClient = OpenRouterClient(httpClient)
-        val insightsManager = InsightsManager(ctx, openRouterClient, tripDao, idleDrainDao, settingsRepo)
-
         val batteryHealthRepo = BatteryHealthRepository(StubBatterySnapshotDao())
         val batteryStateRepo = BatteryStateRepository(
             fakeAutoservice,
@@ -256,7 +251,6 @@ class SettingsViewModelTest {
             energyDataReader = energyReader,
             diParsClient = DiParsClient(httpClient),
             idleDrainDao = idleDrainDao,
-            insightsManager = insightsManager,
             adbOnDeviceClient = FakeAdbClient(),
             batteryStateRepository = batteryStateRepo,
             voltflowLinkClient = VoltflowLinkClient(httpClient),
