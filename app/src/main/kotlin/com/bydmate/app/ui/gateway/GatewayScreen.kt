@@ -132,6 +132,8 @@ fun GatewayScreen(
             diPlusConnected = diPlusConnected,
             cloudSyncStatus = state.cloudSyncStatus,
             cloudSyncStatusIsError = state.cloudSyncStatusIsError,
+            lastSyncTs = state.lastCloudSyncTs,
+            lastSyncOk = state.lastCloudSyncOk,
             onStart = { TrackingService.start(context) },
             onStop = { TrackingService.stop(context) },
             strings = strings,
@@ -434,6 +436,8 @@ private fun StatusCard(
     diPlusConnected: Boolean,
     cloudSyncStatus: String?,
     cloudSyncStatusIsError: Boolean,
+    lastSyncTs: Long,
+    lastSyncOk: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     strings: GatewayStrings,
@@ -446,6 +450,30 @@ private fun StatusCard(
         cloudSyncStatus?.let {
             Spacer(modifier = Modifier.height(6.dp))
             Text(it, color = if (cloudSyncStatusIsError) AccentOrange else TextSecondary, fontSize = 12.sp)
+        }
+        if (lastSyncTs > 0L) {
+            // B-2: live "last synced N ago" indicator. Ticks once a second while the
+            // screen is open; language-neutral (glyph + s/m/h + ✓/✗) to avoid the
+            // inline-i18n block. Orange when the last attempt failed.
+            var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(lastSyncTs) {
+                while (true) {
+                    nowMs = System.currentTimeMillis()
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
+            val ageSec = ((nowMs - lastSyncTs) / 1000).coerceAtLeast(0)
+            val ageText = when {
+                ageSec < 60 -> "${ageSec}s"
+                ageSec < 3600 -> "${ageSec / 60}m"
+                else -> "${ageSec / 3600}h"
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "⟳ $ageText ${if (lastSyncOk) "✓" else "✗"}",
+                color = if (lastSyncOk) TextSecondary else AccentOrange,
+                fontSize = 12.sp,
+            )
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {

@@ -142,6 +142,8 @@ data class SettingsUiState(
     val cloudSyncKeepWifiAwake: Boolean = false,
     val cloudSyncStatus: String? = null,
     val cloudSyncStatusIsError: Boolean = false,
+    val lastCloudSyncTs: Long = 0L,
+    val lastCloudSyncOk: Boolean = false,
     val cloudSyncLinkCode: String = "",
     val cloudSyncAdvancedOpen: Boolean = false,
     val cloudSyncLinking: Boolean = false,
@@ -177,6 +179,23 @@ class SettingsViewModel @Inject constructor(
 
     init {
         loadSettings()
+        observeLastCloudSync()
+    }
+
+    /**
+     * B-2: keep the "last synced" indicator live while the screen is open. The cloud
+     * sender writes KEY_CLOUD_SYNC_LAST_TS after every attempt; observing it (Room
+     * Flow) refreshes the timestamp without reopening the screen. Kept separate from
+     * cloudSyncStatus so a background sync never clobbers the manual-test status.
+     */
+    private fun observeLastCloudSync() {
+        viewModelScope.launch {
+            settingsRepository.observeString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS).collect {
+                val ts = it?.toLongOrNull() ?: 0L
+                val ok = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, "false") == "true"
+                _uiState.update { s -> s.copy(lastCloudSyncTs = ts, lastCloudSyncOk = ok) }
+            }
+        }
     }
 
     /** Load all settings from the repository on init. */
