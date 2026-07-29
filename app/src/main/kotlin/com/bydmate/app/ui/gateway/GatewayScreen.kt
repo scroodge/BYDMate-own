@@ -131,6 +131,7 @@ fun GatewayScreen(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
             cloudSyncStatus = state.cloudSyncStatus,
+            cloudSyncStatusIsError = state.cloudSyncStatusIsError,
             onStart = { TrackingService.start(context) },
             onStop = { TrackingService.stop(context) },
             strings = strings,
@@ -163,6 +164,7 @@ fun GatewayScreen(
             omitGps = state.cloudSyncOmitGps,
             keepWifiAwake = state.cloudSyncKeepWifiAwake,
             status = state.cloudSyncStatus,
+            statusIsError = state.cloudSyncStatusIsError,
             onEnabled = viewModel::toggleCloudSync,
             onUrl = viewModel::updateCloudSyncUrl,
             onLinkCode = viewModel::updateCloudSyncLinkCode,
@@ -431,6 +433,7 @@ private fun StatusCard(
     isRunning: Boolean,
     diPlusConnected: Boolean,
     cloudSyncStatus: String?,
+    cloudSyncStatusIsError: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     strings: GatewayStrings,
@@ -442,7 +445,7 @@ private fun StatusCard(
         StatusRow("DiPlus", if (diPlusConnected) strings.connected else strings.waiting, diPlusConnected)
         cloudSyncStatus?.let {
             Spacer(modifier = Modifier.height(6.dp))
-            Text(it, color = if (it.isErrorStatus()) AccentOrange else TextSecondary, fontSize = 12.sp)
+            Text(it, color = if (cloudSyncStatusIsError) AccentOrange else TextSecondary, fontSize = 12.sp)
         }
         Spacer(modifier = Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -520,6 +523,7 @@ private fun CloudSyncCard(
     omitGps: Boolean,
     keepWifiAwake: Boolean,
     status: String?,
+    statusIsError: Boolean,
     onEnabled: (Boolean) -> Unit,
     onUrl: (String) -> Unit,
     onLinkCode: (String) -> Unit,
@@ -689,7 +693,7 @@ private fun CloudSyncCard(
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 it,
-                color = if (it.isErrorStatus()) AccentOrange else AccentGreen,
+                color = if (statusIsError) AccentOrange else AccentGreen,
                 fontSize = 12.sp,
             )
         }
@@ -1038,11 +1042,6 @@ private fun gatewayStrings(language: String): GatewayStrings =
             parkedNetworkAction = "Сетка на стаянцы",
         )
     }
-
-private fun String.isErrorStatus(): Boolean =
-    contains("failed", ignoreCase = true) ||
-        contains("ошиб", ignoreCase = true) ||
-        contains("памыл", ignoreCase = true)
 
 private fun fmt(value: Double?, digits: Int, suffix: String): String =
     if (value != null && value.isFinite()) "%.${digits}f%s".format(value, suffix) else "--"

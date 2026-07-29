@@ -141,6 +141,7 @@ data class SettingsUiState(
     val cloudSyncOmitGps: Boolean = false,
     val cloudSyncKeepWifiAwake: Boolean = false,
     val cloudSyncStatus: String? = null,
+    val cloudSyncStatusIsError: Boolean = false,
     val cloudSyncLinkCode: String = "",
     val cloudSyncAdvancedOpen: Boolean = false,
     val cloudSyncLinking: Boolean = false,
@@ -235,7 +236,7 @@ class SettingsViewModel @Inject constructor(
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
             val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncKeepWifiAwake = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE, "false") == "true"
-            val cloudSyncStatus = formatCloudSyncStatus()
+            val cloudSyncStatusPair = formatCloudSyncStatus()
             val appLanguage = settingsRepository.getString(
                 SettingsRepository.KEY_APP_LANGUAGE,
                 SettingsRepository.DEFAULT_APP_LANGUAGE,
@@ -274,7 +275,8 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncWifiOnly = cloudSyncWifiOnly,
                     cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncKeepWifiAwake = cloudSyncKeepWifiAwake,
-                    cloudSyncStatus = cloudSyncStatus,
+                    cloudSyncStatus = cloudSyncStatusPair?.first,
+                    cloudSyncStatusIsError = cloudSyncStatusPair?.second ?: false,
                     appLanguage = appLanguage,
                 )
             }
@@ -484,6 +486,7 @@ class SettingsViewModel @Inject constructor(
                         "Увядзіце 6-значны код з VoltFlow",
                         "Enter the 6-digit code from VoltFlow",
                     ),
+                    cloudSyncStatusIsError = true,
                 )
             }
             return
@@ -498,6 +501,7 @@ class SettingsViewModel @Inject constructor(
                         "Падключэнне да VoltFlow…",
                         "Connecting to VoltFlow…",
                     ),
+                    cloudSyncStatusIsError = false,
                 )
             }
 
@@ -517,6 +521,7 @@ class SettingsViewModel @Inject constructor(
                                 "VoltFlow падключаны. Захавайце налады або адправіць тэст.",
                                 "VoltFlow linked. Save settings or send a test.",
                             ),
+                            cloudSyncStatusIsError = false,
                         )
                     }
                     if (state.cloudSyncVehicleId.trim().isNotBlank()) {
@@ -532,6 +537,7 @@ class SettingsViewModel @Inject constructor(
                                 "Памылка падключэння: ${result.message}",
                                 "Link failed: ${result.message}",
                             ),
+                            cloudSyncStatusIsError = true,
                         )
                     }
                 }
@@ -595,6 +601,9 @@ class SettingsViewModel @Inject constructor(
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, state.cloudSyncOmitGps.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE, state.cloudSyncKeepWifiAwake.toString())
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, enabled.toString())
+            val statusIsError = url.isBlank() ||
+                !url.startsWith("https://", ignoreCase = true) ||
+                vehicleId.isBlank()
             val status = if (url.isBlank()) {
                 cloudText("Endpoint URL пустой", "Endpoint URL пусты", "Endpoint URL is empty")
             } else if (!url.startsWith("https://", ignoreCase = true)) {
@@ -609,6 +618,7 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncEnabled = enabled,
                     cloudSyncUrl = url,
                     cloudSyncStatus = status,
+                    cloudSyncStatusIsError = statusIsError,
                 )
             }
         }
@@ -642,7 +652,7 @@ class SettingsViewModel @Inject constructor(
                 currentTripConsumptionKwh100km = null,
                 location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null,
             )
-            _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test...")) }
+            _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test..."), cloudSyncStatusIsError = false) }
             val result = cloudTelemetrySender?.sendTest(snapshot)
                 ?: Result.failure(IllegalStateException(cloudText("Cloud sender недоступен", "Cloud sender недаступны", "Cloud sender is unavailable")))
             if (result.isFailure && !state.cloudSyncEnabled) {
@@ -651,6 +661,7 @@ class SettingsViewModel @Inject constructor(
             _uiState.update {
                 it.copy(
                     cloudSyncEnabled = result.isSuccess && canEnableLiveSync,
+                    cloudSyncStatusIsError = result.isFailure,
                     cloudSyncUrl = url,
                     cloudSyncStatus = result.fold(
                         onSuccess = {
@@ -782,7 +793,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    private suspend fun formatCloudSyncStatus(): String? {
+    private suspend fun formatCloudSyncStatus(): Pair<String, Boolean>? {
         val ts = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS, "0").toLongOrNull() ?: 0L
         if (ts <= 0L) return null
         val ok = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, "false") == "true"
@@ -797,11 +808,12 @@ class SettingsViewModel @Inject constructor(
             SettingsRepository.LANGUAGE_EN -> if (ok) "Sync OK" else "Sync failed"
             else -> if (ok) "Сінхранізацыя OK" else "Памылка сінхранізацыі"
         }
-        return buildString {
+        val text = buildString {
             append("$prefix: ${formatTs(ts)}")
             if (ack.isNotBlank()) append("; $ack")
             if (!ok && message.isNotBlank()) append(" ($message)")
         }
+        return text to !ok
     }
 
     private fun cloudText(ru: String, be: String, en: String): String =
