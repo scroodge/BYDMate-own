@@ -2,6 +2,9 @@ package com.bydmate.app.ui.gateway
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -56,6 +59,7 @@ import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.util.BackgroundRestriction
 import com.bydmate.app.util.HeadUnitSettings
+import com.bydmate.app.util.LogRecorder
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.settings.AdbStatus
 import com.bydmate.app.ui.settings.SettingsViewModel
@@ -202,6 +206,8 @@ fun GatewayScreen(
             strings = strings,
         )
 
+        LogCaptureCard(strings = strings)
+
         UpdatesCard(
             autoCheckUpdates = autoCheckUpdates,
             onAutoCheckChange = onAutoCheckUpdatesChange,
@@ -301,6 +307,74 @@ private fun UpdatesCard(
             colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
         ) {
             Text(strings.checkUpdatesNow, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun LogCaptureCard(strings: GatewayStrings) {
+    val context = LocalContext.current
+    val isRecording by LogRecorder.isRecording.collectAsStateWithLifecycle()
+    // hasLog is a file check, not reactive; it is re-read on every recomposition,
+    // and isRecording flipping (start/stop) always triggers one, so the Save
+    // button enables as soon as a stopped session leaves a file behind.
+    val hasLog = isRecording || LogRecorder.hasLog(context)
+
+    val saveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                LogRecorder.logFile(context).inputStream().use { it.copyTo(out) }
+            } ?: error("no output stream")
+        }.isSuccess
+        Toast.makeText(
+            context,
+            if (ok) strings.logSaved else strings.logSaveFailed,
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    GatewayCard {
+        Text(strings.logCaptureTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(strings.logCaptureSubtitle, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+        if (isRecording) {
+            Text(strings.logRecording, color = AccentOrange, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+        Button(
+            onClick = {
+                if (isRecording) {
+                    LogRecorder.stop()
+                } else if (!LogRecorder.start(context)) {
+                    Toast.makeText(context, strings.logStartFailed, Toast.LENGTH_LONG).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isRecording) AccentOrange else AccentGreen,
+                contentColor = NavyDark,
+            ),
+        ) {
+            Text(if (isRecording) strings.logStop else strings.logStart, fontWeight = FontWeight.Bold)
+        }
+        Button(
+            onClick = {
+                val name = "vfm-log-${System.currentTimeMillis()}.txt"
+                runCatching { saveLauncher.launch(name) }
+            },
+            enabled = hasLog,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = CardSurfaceElevated,
+                contentColor = TextPrimary,
+                disabledContainerColor = CardSurfaceElevated,
+                disabledContentColor = TextMuted,
+            ),
+        ) {
+            Text(strings.logSave, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -898,6 +972,15 @@ private data class GatewayStrings(
     val adbGuideAction: String,
     val parkedNetworkHint: String,
     val parkedNetworkAction: String,
+    val logCaptureTitle: String,
+    val logCaptureSubtitle: String,
+    val logRecording: String,
+    val logStart: String,
+    val logStop: String,
+    val logSave: String,
+    val logSaved: String,
+    val logSaveFailed: String,
+    val logStartFailed: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -966,6 +1049,15 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbGuideAction = "Открыть инструкцию",
             parkedNetworkHint = "Чтобы данные шли при выключенной машине, включите «Keep network on while parked» — Wi-Fi не отключится на стоянке.",
             parkedNetworkAction = "Сеть на стоянке",
+            logCaptureTitle = "Журнал диагностики",
+            logCaptureSubtitle = "Запишите лог приложения для отправки разработчику. Работает без ADB и компьютера.",
+            logRecording = "● Идёт запись…",
+            logStart = "Начать запись лога",
+            logStop = "Остановить запись",
+            logSave = "Сохранить лог в файл…",
+            logSaved = "Лог сохранён.",
+            logSaveFailed = "Не удалось сохранить лог.",
+            logStartFailed = "Не удалось запустить запись лога на этом устройстве.",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -1031,6 +1123,15 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbGuideAction = "Open guide",
             parkedNetworkHint = "For data while the car is off, enable “Keep network on while parked” so Wi-Fi stays up after parking.",
             parkedNetworkAction = "Network while parked",
+            logCaptureTitle = "Diagnostic log",
+            logCaptureSubtitle = "Record the app log to share with the developer. Works with no ADB and no computer.",
+            logRecording = "● Recording…",
+            logStart = "Start log recording",
+            logStop = "Stop recording",
+            logSave = "Save log to file…",
+            logSaved = "Log saved.",
+            logSaveFailed = "Could not save the log.",
+            logStartFailed = "Could not start log recording on this device.",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -1096,6 +1197,15 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbGuideAction = "Адкрыць інструкцыю",
             parkedNetworkHint = "Каб даныя ішлі пры выключанай машыне, уключыце «Keep network on while parked» — Wi-Fi не адключыцца на стаянцы.",
             parkedNetworkAction = "Сетка на стаянцы",
+            logCaptureTitle = "Журнал дыягностыкі",
+            logCaptureSubtitle = "Запішыце лог праграмы, каб адправіць распрацоўніку. Працуе без ADB і камп'ютара.",
+            logRecording = "● Ідзе запіс…",
+            logStart = "Пачаць запіс лога",
+            logStop = "Спыніць запіс",
+            logSave = "Захаваць лог у файл…",
+            logSaved = "Лог захаваны.",
+            logSaveFailed = "Не ўдалося захаваць лог.",
+            logStartFailed = "Не ўдалося запусціць запіс лога на гэтай прыладзе.",
         )
     }
 
