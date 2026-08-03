@@ -75,7 +75,7 @@ skips, the first push after handover is a **full** sample — a real parked hist
 
 ### Fast D → P → power-off handoff
 
-The cloud sender retains its 10-minute drive latch after D/R/N or movement so a brief P blip
+The cloud sender retains its 2-minute drive latch after D/R/N or movement so a brief P blip
 does not split a trip. It nevertheless recognizes a real shutdown separately: when an already
 parked `gear=P` sample is followed by an explicit DiPars `powerState` transition from on to off,
 the final sample is queued and flushed immediately. `TrackingService` serializes that enqueue

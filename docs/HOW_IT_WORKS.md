@@ -5,6 +5,7 @@ exactly what leaves the car. Written against `versionName 0.5.1` / `versionCode 
 
 Companion documents:
 
+- [`TELEMETRY_MAP.md`](TELEMETRY_MAP.md) — one-page map of what is stored locally vs sent to the cloud, and when.
 - [`cloud-telemetry-contract-ru.md`](cloud-telemetry-contract-ru.md) — field-by-field wire contract (RU).
 - [`REMOTE_COMMAND_DAEMON.md`](REMOTE_COMMAND_DAEMON.md) — the parked/off shell daemon.
 - [`DIPLUS_DATA.md`](DIPLUS_DATA.md) — what DiPlus and the BYD `autoservice` binder can actually read.
@@ -276,9 +277,13 @@ refreshes AI insights if configured.
 ### 4.1 Enqueue cadence — how often a sample is recorded
 
 Decided in `CloudTelemetrySender.decide()`, with state classified by
-`CloudTelemetryCadence`. The cadence has a **10-minute drive latch**: after any
-D/R/N gear or movement, the state stays `DRIVING` even if D+ briefly reports P —
-so a red light does not split a trip.
+`CloudTelemetryCadence`. The cadence has a **2-minute drive latch**
+(`DRIVE_LATCH_MS`): after any D/R/N gear or movement, the state stays `DRIVING`
+even if D+ briefly reports P — so a red light does not split a trip. It was 10
+minutes originally; that was far longer than any junction stop and made every
+real park cost 10 minutes of 1 Hz traffic before the 30 s parked heartbeat
+resumed. 2 minutes still absorbs stop-and-go while restoring parked economy ~5×
+sooner.
 
 | State | Sample interval |
 |---|---|

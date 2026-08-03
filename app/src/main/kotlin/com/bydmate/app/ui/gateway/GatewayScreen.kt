@@ -326,7 +326,7 @@ private fun LogCaptureCard(strings: GatewayStrings) {
         if (uri == null) return@rememberLauncherForActivityResult
         val ok = runCatching {
             context.contentResolver.openOutputStream(uri)?.use { out ->
-                LogRecorder.logFile(context).inputStream().use { it.copyTo(out) }
+                LogRecorder.writeAllTo(context, out)
             } ?: error("no output stream")
         }.isSuccess
         Toast.makeText(
