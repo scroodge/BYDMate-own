@@ -362,7 +362,18 @@ private fun LogCaptureCard(strings: GatewayStrings) {
         Button(
             onClick = {
                 val name = "vfm-log-${System.currentTimeMillis()}.txt"
-                runCatching { saveLauncher.launch(name) }
+                // Prefer the system file picker (SAF) where it exists. On the BYD head
+                // unit DocumentsUI is gutted and CREATE_DOCUMENT resolves to nothing, so
+                // launch() throws ActivityNotFoundException — fall back to Downloads.
+                val launched = runCatching { saveLauncher.launch(name) }.isSuccess
+                if (!launched) {
+                    val path = LogRecorder.exportToDownloads(context, name)
+                    Toast.makeText(
+                        context,
+                        if (path != null) "${strings.logSaved} $path" else strings.logSaveFailed,
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
             },
             enabled = hasLog,
             modifier = Modifier.fillMaxWidth(),

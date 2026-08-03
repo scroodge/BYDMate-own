@@ -1,6 +1,9 @@
 package com.bydmate.app.util
 
+import android.content.ContentValues
 import android.content.Context
+import android.os.Environment
+import android.provider.MediaStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -57,5 +60,35 @@ object LogRecorder {
         process?.destroy()
         process = null
         _isRecording.value = false
+    }
+
+    /**
+     * Copies the captured log into the public Downloads collection via MediaStore.
+     * This is the head-unit fallback for [android.content.Intent.ACTION_CREATE_DOCUMENT]:
+     * the BYD ROM ships a gutted DocumentsUI that registers no file-picker activity,
+     * so SAF launches throw ActivityNotFoundException. MediaStore needs no picker and
+     * no storage permission for the app's own new entry. Returns the public relative
+     * path (e.g. "Download/vfm-log-….txt") on success, or null if there is nothing to
+     * export or the write failed.
+     */
+    fun exportToDownloads(context: Context, displayName: String): String? {
+        val file = logFile(context)
+        if (!file.exists() || file.length() == 0L) return null
+        return try {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: return null
+            resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }
+            } ?: return null
+            "${Environment.DIRECTORY_DOWNLOADS}/$displayName"
+        } catch (_: Exception) {
+            null
+        }
     }
 }
