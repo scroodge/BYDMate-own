@@ -272,6 +272,14 @@ class CloudTelemetrySender @Inject constructor(
         pendingStatusPingPayload = null
         if (config.wifiOnly && !isWifiConnected()) return
         val result = client.send(config.url, config.apiKey, config.vehicleId, payload)
+        // Renewal path for fast mode: once the live view is open these pings are the most
+        // frequent thing the car sends, so reading the grant back off them keeps the window
+        // alive without depending on the (now 60s) command poll.
+        if (result is CloudSendResult.Success) {
+            onLiveFastGranted(
+                CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1).liveFastSeconds,
+            )
+        }
         // Logged because this path is otherwise invisible: it writes no queue row and no
         // history row, so without this line a ping that never fired looks exactly like a
         // ping that fired and was ignored downstream.
@@ -379,6 +387,10 @@ class CloudTelemetrySender @Inject constructor(
                 is CloudSendResult.Success -> {
                     val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = items.size)
                     lastAck = ack
+                    // Entry path for fast mode: this is the batch flush (15s driving, 60s
+                    // parked/charging), so it is what bounds how long a car takes to notice
+                    // someone opened the live view now that the command poll idles at 60s.
+                    onLiveFastGranted(ack.liveFastSeconds)
                     if (ack.isFullyAcknowledged()) {
                         items.forEach { queueDao.markFinished(it.id, null, now) }
                         // Guarded by sampleCount: if a sample folded into the hour while this

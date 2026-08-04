@@ -89,6 +89,9 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var omitGpsCached: Boolean = false
     private var pollingJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    /** Renews [wakeLock] independently of the polling loop — see [startWakeLockRenewal]. */
+    @Volatile private var wakeLockRenewThread: Thread? = null
     private var locationManager: LocationManager? = null
     private var consecutiveNullCount = 0
     private var firstDataReceived = false
@@ -597,6 +600,8 @@ class TrackingService : Service(), LocationListener {
             Log.w(TAG, "Failed to remove location updates: ${e.message}")
         }
 
+        wakeLockRenewThread?.interrupt()
+        wakeLockRenewThread = null
         wakeLock?.let { if (it.isHeld) it.release() }
         _isRunning.value = false
 
@@ -1230,17 +1235,62 @@ class TrackingService : Service(), LocationListener {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "bydmate:tracking")
         wakeLock?.acquire(WAKE_LOCK_DURATION_MS)
         lastWakeLockRenewTs = System.currentTimeMillis()
+        Log.i(TAG, "wakelock acquired (${WAKE_LOCK_DURATION_MS / 60_000}min)")
+        startWakeLockRenewal()
     }
 
+    /**
+     * Renews the partial wakelock from its own thread.
+     *
+     * Renewal used to be driven **only** from the polling loop, which deadlocks: the wakelock is
+     * what keeps the CPU awake for that loop, and that loop was the only thing that renewed it.
+     * Once the platform froze the loop past [WAKE_LOCK_DURATION_MS] the lock expired and could
+     * never be re-acquired from inside the very loop it was protecting. Measured in the field on
+     * 2026-08-03 as a 95-minute telemetry stall that ended only when something else woke the
+     * process. A thread that does nothing but renew cannot be starved by the work it protects.
+     */
+    private fun startWakeLockRenewal() {
+        if (wakeLockRenewThread != null) return
+        wakeLockRenewThread = Thread({
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(WAKE_LOCK_RENEW_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+                renewWakeLock()
+            }
+        }, "bydmate-wakelock-renew").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * Unconditional re-acquire. `@Synchronized` because the renewal thread and the polling loop
+     * can both reach it, and release-then-acquire is not atomic.
+     */
+    @Synchronized
+    private fun renewWakeLock() {
+        val lock = wakeLock ?: return
+        try {
+            if (lock.isHeld) lock.release()
+            lock.acquire(WAKE_LOCK_DURATION_MS)
+            lastWakeLockRenewTs = System.currentTimeMillis()
+        } catch (e: Exception) {
+            Log.w(TAG, "wakelock renew failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Kept for the polling-loop call sites as a cheap safety net. It normally early-returns now,
+     * because [startWakeLockRenewal] keeps [lastWakeLockRenewTs] fresh — but if that thread ever
+     * dies, the loop still renews whenever it is running.
+     */
     private fun renewWakeLockIfNeeded() {
         val now = System.currentTimeMillis()
         if (now - lastWakeLockRenewTs < WAKE_LOCK_RENEW_MS) return
-        val lock = wakeLock ?: return
-        if (lock.isHeld) {
-            lock.release()
-        }
-        lock.acquire(WAKE_LOCK_DURATION_MS)
-        lastWakeLockRenewTs = now
+        renewWakeLock()
     }
 
     private fun createNotificationChannel() {

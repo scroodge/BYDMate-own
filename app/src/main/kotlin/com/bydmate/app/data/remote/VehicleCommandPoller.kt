@@ -38,6 +38,26 @@ class VehicleCommandPoller @Inject constructor(
         private const val TAG = "VehicleCmdPoll"
         private const val BASE_POLL_MS = 6000L
         private const val MAX_BACKOFF_MS = 30_000L
+
+        /**
+         * Ceiling on the server-requested poll interval. The server currently asks for 60s
+         * while remote commands are suspended; the cap exists so a bad value can never park
+         * the car on a cadence it would take an APK release to undo.
+         */
+        private const val MAX_SERVER_POLL_MS = 300_000L
+
+        /**
+         * Next poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
+         * field is absent (older server) or nonsensical.
+         *
+         * Polling every 6s around the clock was the single largest source of cloud function
+         * invocations, and while commands are suspended every one of those returns an empty
+         * list. Letting the server set the cadence means it can be tuned — or restored to 6s
+         * the moment commands come back — without shipping an APK.
+         */
+        internal fun pollIntervalMs(serverSeconds: Int): Long =
+            if (serverSeconds <= 0) BASE_POLL_MS
+            else (serverSeconds * 1000L).coerceIn(BASE_POLL_MS, MAX_SERVER_POLL_MS)
     }
 
     private var scope: CoroutineScope? = null
@@ -108,8 +128,9 @@ class VehicleCommandPoller @Inject constructor(
             // Read before the empty-queue return — an idle command queue is the normal case
             // and must not skip the grant. Absent on older servers, which reads as 0 = off.
             cloudTelemetrySender.onLiveFastGranted(json.optInt("live_fast_seconds", 0))
+            val nextPollMs = pollIntervalMs(json.optInt("poll_after_seconds", 0))
             val commands = json.optJSONArray("commands") ?: JSONArray()
-            if (commands.length() == 0) return BASE_POLL_MS
+            if (commands.length() == 0) return nextPollMs
 
             Log.i(TAG, "Received ${commands.length()} command(s)")
             val acks = JSONArray()
@@ -125,7 +146,7 @@ class VehicleCommandPoller @Inject constructor(
             }
 
             postAck(ackUrl, apiKey, vehicleId, acks)
-            BASE_POLL_MS
+            nextPollMs
         } catch (e: Exception) {
             Log.e(TAG, "Poll error: ${e.message}")
             backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)

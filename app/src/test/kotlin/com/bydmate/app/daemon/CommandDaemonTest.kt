@@ -348,4 +348,81 @@ class CommandDaemonTest {
         assertTrue(sig1 != sig2)
         assertEquals(sig1, sig3)
     }
+
+    // --- platform suspend (2026-08-03 field report: 15-minute reporting gaps) ---
+
+    @Test
+    fun `deep sleep is the part of elapsed real time the cpu was not up for`() {
+        assertEquals(900_000L, CommandDaemon.deepSleepMs(elapsedRealtimeMs = 1_000_000L, uptimeMs = 100_000L))
+        assertEquals(0L, CommandDaemon.deepSleepMs(elapsedRealtimeMs = 100_000L, uptimeMs = 100_000L))
+    }
+
+    @Test
+    fun `a clock that appears to run backwards reports no suspend rather than a negative window`() {
+        assertEquals(0L, CommandDaemon.deepSleepMs(elapsedRealtimeMs = 50L, uptimeMs = 100L))
+        assertEquals(0L, CommandDaemon.suspendedSinceLastWakeMs(previousDeepSleepMs = 500L, currentDeepSleepMs = 100L))
+    }
+
+    @Test
+    fun `the fifteen minute field gap is reported as a suspend, ordinary jitter is not`() {
+        // The measured signature: loop frozen ~900s between wakes.
+        val suspended = CommandDaemon.suspendedSinceLastWakeMs(
+            previousDeepSleepMs = 3_600_000L,
+            currentDeepSleepMs = 4_500_000L,
+        )
+        assertEquals(900_000L, suspended)
+        assertTrue(suspended >= CommandDaemon.SUSPEND_REPORT_THRESHOLD_MS)
+        // A normal 6s wake with a little drift must stay quiet.
+        val jitter = CommandDaemon.suspendedSinceLastWakeMs(3_600_000L, 3_600_800L)
+        assertTrue(jitter < CommandDaemon.SUSPEND_REPORT_THRESHOLD_MS)
+    }
+
+    @Test
+    fun `a parked unplugged car is allowed to suspend so it cannot flatten the twelve volt battery`() {
+        assertFalse(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = 1))
+        assertFalse(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = null))
+    }
+
+    @Test
+    fun `a plugged in car stays awake because shore power pays for it`() {
+        // 2..5 mirrors shouldUseAutoserviceFallback's connected range.
+        assertTrue(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = 2))
+        assertTrue(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = 5))
+        assertFalse(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = 6))
+    }
+
+    @Test
+    fun `a watched car stays awake only until the grant expires`() {
+        assertTrue(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = t0 + 1L, gunState = 1))
+        assertFalse(
+            "an expired grant must not strand an unplugged car awake",
+            CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = t0, gunState = 1),
+        )
+    }
+
+    @Test
+    fun `a server that says nothing keeps the built-in six second command poll`() {
+        // An older server omits poll_after_seconds entirely, which reads as 0.
+        assertEquals(6_000L, CommandDaemon.commandPollIntervalMs(0))
+        assertEquals(6_000L, CommandDaemon.commandPollIntervalMs(-1))
+    }
+
+    @Test
+    fun `the server can idle the command poll while remote commands are suspended`() {
+        assertEquals(60_000L, CommandDaemon.commandPollIntervalMs(60))
+    }
+
+    @Test
+    fun `a nonsensical interval can never strand the car off-cadence`() {
+        assertEquals(
+            "below the floor must clamp up, or the poll gets more expensive than before",
+            6_000L,
+            CommandDaemon.commandPollIntervalMs(1),
+        )
+        assertEquals(
+            "above the ceiling must clamp down, or only an APK release could undo it",
+            300_000L,
+            CommandDaemon.commandPollIntervalMs(86_400),
+        )
+    }
 }

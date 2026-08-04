@@ -10,6 +10,15 @@ data class CloudTelemetryAck(
     val skippedStaleCount: Int,
     val error: String?,
     val parseError: String? = null,
+    /**
+     * Seconds of fast live-status cadence the server is granting on this response, or 0.
+     *
+     * The command poll used to be the only carrier for this, which is why it had to run every
+     * ~6s per car — by far the largest source of cloud invocations. Ingest carries it too now,
+     * so the poll can idle at 60s while remote commands are suspended. Absent on older servers,
+     * which reads as 0 and simply lets the current window lapse.
+     */
+    val liveFastSeconds: Int = 0,
 ) {
     fun isFullyAcknowledged(): Boolean =
         parseError == null &&
@@ -63,6 +72,7 @@ object CloudTelemetryAckParser {
                 duplicateCount = resolvedDuplicate,
                 skippedStaleCount = skippedStale,
                 error = json.optString("error", null)?.takeIf { it.isNotBlank() },
+                liveFastSeconds = json.optInt("live_fast_seconds", 0),
             )
         } catch (e: Exception) {
             CloudTelemetryAck(

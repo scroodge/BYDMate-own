@@ -12,6 +12,11 @@ naive "1 POST/sec" assumption was wrong. The only meaningful remaining win is
 **flushing less often during the charging-bulk phase**. Most of the backend egress is
 the server's *read* path, not APK uploads.
 
+> **Update 2026-08-03 — the telemetry path was never the top cost.** Vercel
+> Observability confirmed `/api/bydmate/commands` topped the invocation list, not
+> `/api/bydmate/telemetry`. See "Command poll" at the bottom of this document.
+> Everything above still stands; it just was not the biggest line item.
+
 ## Current behavior (verified)
 
 `CloudTelemetrySender.kt` + `CloudTelemetryCadence.kt`. Local poll runs at 1 Hz
@@ -119,3 +124,56 @@ Changing `cloud_sync_vehicle_id` no longer drops old queued payloads: `flushQueu
 by the `vehicle_id` stored in each payload and sends each group with a matching
 `X-Vehicle-Id` header (`7b37366`). This preserves delivery, but it does **not** merge the server
 history under the old and new IDs. Any batching change must retain this per-vehicle grouping.
+
+---
+
+## Command poll — the actual top consumer ✅ (shipped 2026-08-03)
+
+**Measured, not assumed:** `/api/bydmate/commands` topped Vercel's invocation list.
+
+`CommandDaemon.commandLoop` polls every 6 s on its own thread and — unlike the telemetry
+push — is **not** gated on the app-alive beacon (`shouldDeferToApp` guards pushes only).
+The daemon runs whenever the head unit is powered, so that is ~14,400 requests/car/day,
+plus another ~1,200 from `VehicleCommandPoller` while the app is alive. Against roughly
+2,000 telemetry POSTs/car/day, the command poll is **~87 % of all car→cloud requests** —
+and since `REMOTE_COMMANDS_DISABLED = true` (server, `fd160ea`, 2026-07-23) every single
+one returns `{ commands: [] }` after paying a full key lookup and DB round trip.
+
+**Why it could not simply be slowed down:** the poll was the *only* carrier of the
+`live_fast_seconds` grant. Slowing it to 60 s would have meant up to 60 s before a car
+noticed someone opened the live view.
+
+**The change (both repos):**
+
+1. **Second grant carrier.** The telemetry ingest response now also returns
+   `live_fast_seconds`, computed by the shared `src/lib/bydmate/live-fast.ts` from the
+   profile row the route already loaded for auth — **zero extra queries**. Fast-mode
+   *entry* is now bounded by the telemetry cadence (15 s driving, 60 s parked/charging)
+   instead of the command poll; *renewal* rides the 3 s `live_only` pings, which are the
+   most frequent thing a watched car sends.
+2. **Server-driven poll interval.** The command response carries `poll_after_seconds` —
+   60 s while commands are suspended, 6 s when they are active or a command was just
+   delivered. `VehicleCommandPoller.pollIntervalMs` and `CommandDaemon.commandPollIntervalMs`
+   honour it, clamped to **6–300 s** so a bad value can never park a car on a cadence only
+   an APK release could undo.
+
+**Expected: ~10× fewer command-poll invocations** (~14.4k → ~1.4k/car/day).
+
+**Backward compatibility.** Both fields are additive. An older APK ignores
+`poll_after_seconds` and keeps its built-in 6 s; a missing `live_fast_seconds` reads as 0
+and simply lets the current window lapse. No version gating anywhere — same convention as
+`live_only` / `client_hourly` / `client_trip`.
+
+**Deploy order is safe either way**, but note the win only lands with the APK: cloud-first
+means old clients keep polling at 6 s until they update.
+
+**Restoring remote commands** is a one-line server change: flip `REMOTE_COMMANDS_DISABLED`
+to `false`, which switches `POLL_AFTER_SECONDS` back to `ACTIVE_POLL_AFTER_SECONDS` (6 s).
+No APK release needed.
+
+**Still open (measured but not done):** `updateTelegramLiveWidgets` runs its own `profiles`
+lookup on every ingest — including every 3 s live ping — just to early-exit when no Telegram
+chat is linked; `resolveBydmateApiKeyProfile` already reads that row and could carry
+`telegram_id`. And the PWA's `requestLiveFastStatus` heartbeat (`MobileShell.tsx`, every
+8 s per open tab) is a server action writing one timestamp column under
+`profiles_update_own` RLS — it could be a direct Supabase write with no function invocation.

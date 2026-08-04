@@ -1,5 +1,6 @@
 package com.bydmate.app.daemon
 
+import android.os.SystemClock
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.DiParsClient
@@ -46,6 +47,26 @@ object CommandDaemon {
     private const val DEFAULT_CONF = "/data/local/tmp/voltflow_cmd.conf"
     private const val BASE_POLL_MS = 6000L
     private const val MAX_BACKOFF_MS = 30_000L
+
+    /**
+     * Ceiling on the server-requested command-poll interval, so a bad value can never park the
+     * car on a cadence it would take an APK release to undo.
+     */
+    private const val MAX_SERVER_POLL_MS = 300_000L
+
+    /**
+     * Next command-poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
+     * field is absent (older server) or nonsensical.
+     *
+     * This loop is the daemon's most expensive habit by a wide margin: it is not gated on the
+     * app being alive and runs whenever the head unit is powered, so at 6s it is ~14.4k cloud
+     * invocations per car per day — and while remote commands are suspended every one of them
+     * returns an empty list. Server-driven so the cadence can be restored to 6s without an APK
+     * release when commands come back. Mirrors `VehicleCommandPoller.pollIntervalMs`.
+     */
+    internal fun commandPollIntervalMs(serverSeconds: Int): Long =
+        if (serverSeconds <= 0) BASE_POLL_MS
+        else (serverSeconds * 1000L).coerceIn(BASE_POLL_MS, MAX_SERVER_POLL_MS)
 
     /** How often to refresh telemetry used for movement/voltage guards. */
     private const val TELEMETRY_TTL_MS = 5_000L
@@ -225,6 +246,81 @@ object CommandDaemon {
         (intervalMs - elapsedMs).coerceAtLeast(0L)
 
     /**
+     * Kernel wakelock name and the sysfs nodes that take it. `PowerManager.newWakeLock` needs a
+     * Context and this daemon deliberately has none (see the class doc) — but shell uid can write
+     * `/sys/power/wake_lock`, which is the same suspend-blocker one layer down.
+     */
+    private const val WAKE_LOCK_TAG = "voltflow_daemon"
+    private const val WAKE_LOCK_NODE = "/sys/power/wake_lock"
+    private const val WAKE_UNLOCK_NODE = "/sys/power/wake_unlock"
+
+    /**
+     * Deep sleep in one loop iteration past which the wake is reported as a platform suspend.
+     * 30 s is comfortably above [BASE_POLL_MS] jitter and far below the ~900 s windows measured in
+     * the field, so it flags real suspends without narrating normal operation.
+     */
+    internal const val SUSPEND_REPORT_THRESHOLD_MS = 30_000L
+
+    /**
+     * Total time the SoC has spent suspended since boot: `elapsedRealtime` counts deep sleep,
+     * `uptimeMillis` does not, so their difference is exactly that. Both are Context-free static
+     * reads, which is what makes suspend measurable from a daemon that has no Context.
+     */
+    internal fun deepSleepMs(elapsedRealtimeMs: Long, uptimeMs: Long): Long =
+        (elapsedRealtimeMs - uptimeMs).coerceAtLeast(0L)
+
+    /**
+     * How long the device was suspended between two loop wakes. Never negative — a clock that
+     * appears to go backwards is reported as "no suspend" rather than a nonsense negative window.
+     */
+    internal fun suspendedSinceLastWakeMs(previousDeepSleepMs: Long, currentDeepSleepMs: Long): Long =
+        (currentDeepSleepMs - previousDeepSleepMs).coerceAtLeast(0L)
+
+    /**
+     * Whether this iteration should hold the suspend blocker.
+     *
+     * **Deliberately not "always".** The head unit runs off the 12 V battery, and a parked car that
+     * never suspends will flatten it — the exact failure the 15-minute platform cadence is there to
+     * prevent. So the blocker is held only where staying awake is both useful and safe:
+     *
+     *  - **gun connected** (`chargeGunState in 2..5`, matching [shouldUseAutoserviceFallback]) — the
+     *    car is on shore power, so there is no 12 V cost, and this is the state whose SOC curve and
+     *    cell-delta tail need every row.
+     *  - **fast mode active** — someone has the live view open. Bounded by `liveFastUntilMs`, which
+     *    is extend-only with an expiry, so a crashed tab cannot strand the car awake.
+     *
+     * Parked and unplugged, the daemon lets the platform suspend it. Reporting then stays on the
+     * platform's own wake rhythm; the PWA is what must say "asleep" rather than "offline" for that
+     * window. Freshness there is bounded by the platform, not by anything this file can set.
+     */
+    internal fun shouldHoldWakeLock(now: Long, liveFastUntilMs: Long, gunState: Int?): Boolean =
+        now < liveFastUntilMs || (gunState != null && gunState in 2..5)
+
+    @Volatile private var wakeLockHeld = false
+    @Volatile private var wakeLockFailureLogged = false
+
+    /**
+     * Acquire/release the kernel suspend blocker, idempotently. Writes are best-effort: a head unit
+     * whose sysfs is not shell-writable simply keeps suspending, which is the behaviour we already
+     * have — so a failure is logged once and never throws into the status loop.
+     */
+    private fun setWakeLock(hold: Boolean) {
+        if (hold == wakeLockHeld) return
+        val node = if (hold) WAKE_LOCK_NODE else WAKE_UNLOCK_NODE
+        try {
+            File(node).writeText(WAKE_LOCK_TAG)
+            wakeLockHeld = hold
+            log("wakelock ${if (hold) "acquired" else "released"} ($WAKE_LOCK_TAG)")
+        } catch (e: Exception) {
+            // Log once, not once per 6 s wake, or an unwritable node floods the field log.
+            if (!wakeLockFailureLogged) {
+                wakeLockFailureLogged = true
+                log("wakelock unavailable ($node): ${e.message} — platform suspend stays in charge")
+            }
+        }
+    }
+
+    /**
      * Longest a parked `live_only` run may last before a full sample is forced. Car-off is the
      * daemon's whole reason to exist, so without this an overnight park with flat SOC would store
      * no parked rows at all and leave a single >6h gap — which `bydmate_phantom_drain_daily`
@@ -376,6 +472,11 @@ object CommandDaemon {
         // call site, not by these two.
         var lastKnownGear: Int? = null
         var lastKnownGunState: Int? = null
+        // Suspend accounting. Deep sleep is cumulative since boot, so the *difference* between
+        // two wakes is how long the platform froze this loop. Without this the daemon cannot tell
+        // "nothing happened for 15 minutes" from "I was not running for 15 minutes" — which is
+        // exactly the ambiguity that made the field reports unattributable.
+        var lastDeepSleepMs = deepSleepMs(SystemClock.elapsedRealtime(), SystemClock.uptimeMillis())
 
         runBlocking {
             while (true) {
@@ -388,6 +489,14 @@ object CommandDaemon {
                 val startedAt = System.currentTimeMillis()
                 try {
                     val now = startedAt
+
+                    val deepSleepNow =
+                        deepSleepMs(SystemClock.elapsedRealtime(), SystemClock.uptimeMillis())
+                    val suspendedMs = suspendedSinceLastWakeMs(lastDeepSleepMs, deepSleepNow)
+                    lastDeepSleepMs = deepSleepNow
+                    if (suspendedMs >= SUSPEND_REPORT_THRESHOLD_MS) {
+                        log("platform suspend: loop frozen ${suspendedMs / 1000}s (wakelock held=$wakeLockHeld)")
+                    }
                     if (shouldRefreshWifiKeepalive(now, lastWifiKeepAliveAt, conf.keepWifiAwake)) {
                         refreshWifiKeepalive()
                         lastWifiKeepAliveAt = now
@@ -419,6 +528,10 @@ object CommandDaemon {
                     val gunNow = latestData?.chargeGunState
                     val gunChanged = lastSeenGun != null && gunNow != null && gunNow != lastSeenGun
                     if (gunNow != null) lastSeenGun = gunNow
+                    // Hold the suspend blocker only where it is useful and safe — see
+                    // [shouldHoldWakeLock]. Re-evaluated on every wake, not only when pushing, so
+                    // an unplug releases it immediately instead of at the next cadence tick.
+                    setWakeLock(shouldHoldWakeLock(now, liveFastUntilMs, gunNow))
                     val plan = planPush(
                         now = now,
                         lastTelemetryPushAt = lastTelemetryPushAt,
@@ -554,9 +667,14 @@ object CommandDaemon {
                 continue
             }
             val waited = try {
-                val result = pollOnce(ok, conf, control, latestData)
-                backoffMs = if (result) BASE_POLL_MS else min(backoffMs * 2, MAX_BACKOFF_MS)
-                if (result) BASE_POLL_MS else backoffMs
+                val interval = pollOnce(ok, conf, control, latestData)
+                if (interval != null) {
+                    backoffMs = BASE_POLL_MS
+                    interval
+                } else {
+                    backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
+                    backoffMs
+                }
             } catch (e: Exception) {
                 log("poll error: ${e.message}")
                 backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
@@ -566,14 +684,32 @@ object CommandDaemon {
         }
     }
 
-    /** @return true on a clean poll (HTTP ok), false to trigger backoff. */
+    /**
+     * Extends fast live-status mode from a `live_fast_seconds` grant on any server response.
+     * A grant of 0 — the default on older servers and whenever nobody is watching — simply
+     * lets the current window lapse rather than cancelling it early.
+     */
+    private fun applyLiveFastGrant(json: JSONObject) {
+        val grantSeconds = json.optInt("live_fast_seconds", 0)
+        if (grantSeconds > 0) {
+            liveFastUntilMs = System.currentTimeMillis() + grantSeconds * 1000L
+        }
+    }
+
+    /** Body-string overload for the telemetry pushes, which do not otherwise parse a response. */
+    private fun applyLiveFastGrant(body: String?) {
+        if (body.isNullOrBlank()) return
+        runCatching { applyLiveFastGrant(JSONObject(body)) }
+    }
+
+    /** @return the next poll delay on a clean poll (HTTP ok), or null to trigger backoff. */
     private suspend fun pollOnce(
         ok: OkHttpClient,
         conf: Conf,
         control: DiParsControlClient,
         data: DiParsData?,
-    ): Boolean {
-        val httpUrl = conf.commandsUrl.toHttpUrlOrNull() ?: return false
+    ): Long? {
+        val httpUrl = conf.commandsUrl.toHttpUrlOrNull() ?: return null
         val request = Request.Builder()
             .url(httpUrl)
             .header("X-API-Key", conf.apiKey)
@@ -582,22 +718,20 @@ object CommandDaemon {
             .get()
             .build()
 
-        ok.newCall(request).execute().use { response ->
+        return ok.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 log("poll HTTP ${response.code}")
-                return false
+                return null
             }
             val body = response.body?.string().orEmpty()
             val json = JSONObject(body)
             // Someone has the live view open. Read before the empty-queue return — an idle
             // command queue is the normal case and must not skip the grant. Absent on older
             // servers, which reads as 0 and leaves the current window to lapse.
-            val grantSeconds = json.optInt("live_fast_seconds", 0)
-            if (grantSeconds > 0) {
-                liveFastUntilMs = System.currentTimeMillis() + grantSeconds * 1000L
-            }
+            applyLiveFastGrant(json)
+            val nextPollMs = commandPollIntervalMs(json.optInt("poll_after_seconds", 0))
             val commands = json.optJSONArray("commands") ?: JSONArray()
-            if (commands.length() == 0) return true
+            if (commands.length() == 0) return nextPollMs
 
             log("received ${commands.length()} command(s)")
             val acks = JSONArray()
@@ -609,8 +743,8 @@ object CommandDaemon {
                 acks.put(executeCommand(control, data, id, type, params))
             }
             postAck(ok, conf, acks)
+            nextPollMs
         }
-        return true
     }
 
     private suspend fun executeCommand(
@@ -851,6 +985,10 @@ object CommandDaemon {
             ok.newCall(request).execute().use {
                 val mode = if (liveOnly) " live_only" else ""
                 log("telemetry HTTP ${it.code} (soc=${data.soc} pwr_state=${data.powerState}$mode)")
+                // Second carrier for the fast-status grant, mirroring CloudTelemetrySender.
+                // With the command poll idling at 60s this is what actually enters and renews
+                // fast mode for a car the app is not running on.
+                if (it.isSuccessful) applyLiveFastGrant(it.body?.string())
             }
         } catch (e: Exception) {
             log("telemetry push failed: ${e.message}")
@@ -880,7 +1018,10 @@ object CommandDaemon {
                 .header("X-App", "VoltFlow-Mate-Daemon")
                 .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
-            ok.newCall(request).execute().use { log("telemetry HTTP ${it.code} (autoservice fallback)") }
+            ok.newCall(request).execute().use {
+                log("telemetry HTTP ${it.code} (autoservice fallback)")
+                if (it.isSuccessful) applyLiveFastGrant(it.body?.string())
+            }
         } catch (e: Exception) {
             log("autoservice fallback push failed: ${e.message}")
         }
