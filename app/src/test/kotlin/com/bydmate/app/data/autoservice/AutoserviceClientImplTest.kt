@@ -30,6 +30,12 @@ class AutoserviceClientImplTest {
         override suspend fun isCommandDaemonRunning(): Boolean = false
         override suspend fun isCommandDaemonWatchdogRunning(): Boolean = false
         override suspend fun launchCommandDaemon(scriptPath: String): Boolean = true
+        override suspend fun deployDaemonLauncher(): String? = null
+        override suspend fun ensureCommandDaemonRunning(): DaemonSupervisorResult =
+            DaemonSupervisorResult(
+                adbConnected = connected, daemonRunning = false, watchdogRunning = false,
+                launchAttempted = false, launchOk = false,
+            )
         override suspend fun shutdown() {}
     }
 

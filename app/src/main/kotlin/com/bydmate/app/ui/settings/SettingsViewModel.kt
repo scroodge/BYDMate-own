@@ -87,6 +87,13 @@ sealed class AutoserviceStatus {
 enum class AdbStatus { UNKNOWN, CONNECTING, CONNECTED, FAILED }
 
 /**
+ * Shell-uid survival daemon (CommandDaemon + its watchdog) liveness, checked on
+ * demand over on-device ADB — mirrors [AdbStatus] but adds RUNNING_NO_WATCHDOG,
+ * since a daemon alone won't respawn after a quickboot force-stop.
+ */
+enum class DaemonStatus { UNKNOWN, CHECKING, RUNNING, RUNNING_NO_WATCHDOG, NOT_RUNNING, INSTALLING, INSTALL_FAILED }
+
+/**
  * UI state for the Settings screen.
  * Contains current setting values and export operation status.
  */
@@ -133,6 +140,7 @@ data class SettingsUiState(
     val autoserviceEnabled: Boolean = false,
     val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled,
     val adbStatus: AdbStatus = AdbStatus.UNKNOWN,
+    val daemonStatus: DaemonStatus = DaemonStatus.UNKNOWN,
     val cloudSyncEnabled: Boolean = true,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
     val cloudSyncApiKey: String = "",
@@ -356,6 +364,70 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val ok = runCatching { adbOnDeviceClient.connect().isSuccess }.getOrDefault(false)
             _uiState.update { it.copy(adbStatus = if (ok) AdbStatus.CONNECTED else AdbStatus.FAILED) }
+        }
+    }
+
+    /**
+     * Re-checks the shell-uid survival daemon + its watchdog over on-device ADB.
+     * No-op (stays as-is) if ADB isn't connected yet — there is nothing to check.
+     */
+    fun refreshDaemonStatus() {
+        _uiState.update { it.copy(daemonStatus = DaemonStatus.CHECKING) }
+        viewModelScope.launch {
+            if (!runCatching { adbOnDeviceClient.isConnected() }.getOrDefault(false)) {
+                _uiState.update { it.copy(daemonStatus = DaemonStatus.UNKNOWN) }
+                return@launch
+            }
+            val running = runCatching { adbOnDeviceClient.isCommandDaemonRunning() }.getOrDefault(false)
+            val watchdog = runCatching { adbOnDeviceClient.isCommandDaemonWatchdogRunning() }.getOrDefault(false)
+            _uiState.update {
+                it.copy(
+                    daemonStatus = when {
+                        running && watchdog -> DaemonStatus.RUNNING
+                        running -> DaemonStatus.RUNNING_NO_WATCHDOG
+                        else -> DaemonStatus.NOT_RUNNING
+                    },
+                )
+            }
+        }
+    }
+
+    /**
+     * Manual "install / run daemon" button: connects on-device ADB if needed,
+     * deploys the bundled launcher, and (re)launches the daemon + watchdog — the
+     * same sequence TrackingService runs automatically on every service start,
+     * exposed here so the user can retrigger it without a service restart (e.g.
+     * right after enabling wireless ADB debugging for the first time, or after
+     * the daemon was killed and never came back).
+     */
+    fun installDaemon() {
+        if (_uiState.value.daemonStatus == DaemonStatus.INSTALLING) return
+        _uiState.update { it.copy(daemonStatus = DaemonStatus.INSTALLING) }
+        viewModelScope.launch {
+            val result = runCatching { adbOnDeviceClient.ensureCommandDaemonRunning() }.getOrNull()
+            if (result == null || !result.adbConnected) {
+                _uiState.update { it.copy(daemonStatus = DaemonStatus.INSTALL_FAILED) }
+                return@launch
+            }
+            _uiState.update { it.copy(adbStatus = AdbStatus.CONNECTED) }
+            if (result.launchAttempted) {
+                // setsid detaches the launcher immediately; give it a moment to fork
+                // the daemon before re-checking pidof.
+                kotlinx.coroutines.delay(1500)
+            }
+            val running = runCatching { adbOnDeviceClient.isCommandDaemonRunning() }
+                .getOrDefault(result.daemonRunning)
+            val watchdog = runCatching { adbOnDeviceClient.isCommandDaemonWatchdogRunning() }
+                .getOrDefault(result.watchdogRunning)
+            _uiState.update {
+                it.copy(
+                    daemonStatus = when {
+                        running && watchdog -> DaemonStatus.RUNNING
+                        running -> DaemonStatus.RUNNING_NO_WATCHDOG
+                        else -> DaemonStatus.INSTALL_FAILED
+                    },
+                )
+            }
         }
     }
 

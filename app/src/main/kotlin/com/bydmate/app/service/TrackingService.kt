@@ -171,7 +171,6 @@ class TrackingService : Service(), LocationListener {
         private const val WAKE_LOCK_RENEW_MS = 5L * 60_000L
         private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
         // Bundled launcher asset that spawns the shell-uid survival daemon.
-        private const val DAEMON_LAUNCHER_ASSET = "start_voltflow_cmd.sh"
         const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
@@ -704,51 +703,25 @@ class TrackingService : Service(), LocationListener {
      */
     private suspend fun ensureCommandDaemonRunning() {
         try {
-            if (!adbOnDeviceClient.isConnected() && adbOnDeviceClient.connect().isFailure) {
-                Log.w(TAG, "Daemon supervisor: on-device ADB unavailable, daemon not (re)launched")
-                return
+            val result = adbOnDeviceClient.ensureCommandDaemonRunning()
+            when {
+                !result.adbConnected ->
+                    Log.w(TAG, "Daemon supervisor: on-device ADB unavailable, daemon not (re)launched")
+                result.daemonRunning && result.watchdogRunning ->
+                    Log.i(TAG, "Command daemon and watchdog already running")
+                !result.launchAttempted ->
+                    Log.w(TAG, "Daemon supervisor: launcher not deployed, skipping")
+                else -> {
+                    if (result.daemonRunning && !result.watchdogRunning) {
+                        Log.w(TAG, "Command daemon running without watchdog; relaunching hardened supervisor")
+                    }
+                    Log.i(TAG, "Command daemon launcher (re)start via on-device ADB: ok=${result.launchOk}")
+                }
             }
-            val launcher = deployDaemonLauncher()
-            if (launcher == null) {
-                Log.w(TAG, "Daemon supervisor: launcher not deployed, skipping")
-                return
-            }
-            val daemonRunning = adbOnDeviceClient.isCommandDaemonRunning()
-            val watchdogRunning = adbOnDeviceClient.isCommandDaemonWatchdogRunning()
-            if (daemonRunning && watchdogRunning) {
-                Log.i(TAG, "Command daemon and watchdog already running")
-                return
-            }
-            if (daemonRunning && !watchdogRunning) {
-                Log.w(TAG, "Command daemon running without watchdog; relaunching hardened supervisor")
-            }
-            val ok = adbOnDeviceClient.launchCommandDaemon(launcher)
-            Log.i(TAG, "Command daemon launcher (re)start via on-device ADB: ok=$ok ($launcher)")
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "ensureCommandDaemonRunning failed: ${e.message}")
-        }
-    }
-
-    /**
-     * Copies the bundled `start_voltflow_cmd.sh` launcher from assets to the app's
-     * external files dir (app-writable, shell-readable) so it can be started under the
-     * shell uid without a manual `adb push`. Returns the absolute path, or null on failure.
-     */
-    private fun deployDaemonLauncher(): String? {
-        return try {
-            val dir = getExternalFilesDir(null) ?: return null
-            val script = java.io.File(dir, DAEMON_LAUNCHER_ASSET)
-            assets.open(DAEMON_LAUNCHER_ASSET).use { input ->
-                script.outputStream().use { output -> input.copyTo(output) }
-            }
-            script.setReadable(true, false)
-            script.setExecutable(true, false)
-            script.absolutePath
-        } catch (e: Exception) {
-            Log.w(TAG, "deployDaemonLauncher failed: ${e.message}")
-            null
         }
     }
 

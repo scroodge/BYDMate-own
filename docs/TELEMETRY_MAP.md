@@ -6,7 +6,7 @@ Single-page answer to "where does each piece of telemetry go?". Companion docs:
 [`CLOUD_SYNC_EGRESS_PLAN.md`](CLOUD_SYNC_EGRESS_PLAN.md) (why the cadences are what they are),
 [`REMOTE_COMMAND_DAEMON.md`](REMOTE_COMMAND_DAEMON.md) (the parked/off daemon).
 
-Verified against `main` @ `3a63278`.
+Verified against `main` @ `4fe21aa`. Field-level wire contents are in [§5](#5-wire-fields--what-each-payload-actually-contains).
 
 ## 1. Cloud egress — telemetry (`POST …/api/bydmate/telemetry`)
 
@@ -22,7 +22,7 @@ throttles off that — the APK never posts once per poll.
 | Queue (anti-starve) | Forced **full** parked sample | At least once per **15 min** even with nothing changed (`LIVE_ONLY_MAX_RUN_MS`) — an unbounded `live_only` run would collapse an overnight park into one gap and zero out `bydmate_phantom_drain_daily.idle_hours` | |
 | **Flush** (HTTP POST) | Batch of queued samples + `hourly` + `trips` blocks | Driving & charging tail: every **15 s** or **15** samples; Charging bulk: every **60 s**; Parked/idle: `cloud_sync_interval_sec` (default **60 s**, clamped 5–300) or **120** samples | `flushPending()` |
 | Flush (immediate) | Same | `flushNow`: confirmed P → ignition-off, gear change while not active, non-active state change | |
-| **Status ping** | One `live_only` payload, bypasses the queue entirely | On a moving/charging edge that did not already `flushNow`; **and every 3 s** while a `live_fast_seconds` grant from the ~6 s command poll is active | `sendPendingStatusPing` |
+| **Status ping** | One `live_only` payload, bypasses the queue entirely | On a moving/charging edge that did not already `flushNow`; **and every 3 s** while a `live_fast_seconds` grant is active. The grant now arrives on **two** carriers — the command poll (which idles at 60 s while remote commands are suspended, see §2) and every telemetry ingest response — so fast-mode *entry* is bounded by the flush cadence and *renewal* rides these pings themselves | `sendPendingStatusPing` |
 | **Hourly rollup** | Cumulative per-hour aggregate computed on-device | Folded per non-`live_only` sample; shipped in every flush envelope (≤ 12 blocks); pruned locally after 24 h | `accumulateHourly` |
 | **Trip rollup** | Cumulative client-owned trip block + `trip_id` / `client_trip` on the sample | Opens on IDLE → DRIVING, closes on gear P (≤ 5 km/h) or charging start; a stale open trip is closed at service start after 20 min; ≤ 4 blocks per flush, 24 h retention | `planTrip`, `finalizeStaleOpenTrip` |
 
@@ -39,7 +39,8 @@ queued). Queue is capped at **1000** rows, oldest trimmed.
 | Channel | What | When | Code |
 |---|---|---|---|
 | `POST …/api/bydmate/trip-summaries` | Per-trip aggregates imported from BYD `energydata` | After each `HistoryImporter.runSync()` — TrackingService start / app start, only when the energydata source changed. Batch ≤ 300; sanity caps 2000 km / 500 kWh / 24 h | `TripSummaryCloudSync.kt` |
-| Daemon telemetry push | Reduced Di+ sample, **no GPS**, no Room queue | Only while the app is dead: every **60 s**, immediately on gun-state change, `live_only` every **3 s** during a live-fast grant. Skipped while the app heartbeat file is fresh | `CommandDaemon.kt` |
+| Daemon telemetry push | Own payload, **no GPS**, no Room queue, no `autoservice`/rollup blocks — but a **richer** `diplus` block than the app's (§5.2) | Only while the app is dead: every **60 s**, immediately on gun-state change, `live_only` every **3 s** during a live-fast grant. Skipped while the app heartbeat file is fresh | `CommandDaemon.kt` |
+| Daemon command poll | `GET …/api/bydmate/commands`; carries the `live_fast_seconds` grant back | Every **6 s** by default, but the server sets the cadence via `poll_after_seconds` (**60 s** while remote commands are suspended), clamped client-side to 6–300 s. **Not** gated on the app being alive — it runs whenever the head unit is powered | `CommandDaemon.commandLoop` |
 | `POST /api/state`, `/api/poll`, `/api/ack` | Vehicle state for the Alice voice bridge | Poll every **2.5 s**, state report every 10th poll (~25 s); only when `alice_enabled` | `AlicePollingManager.kt` |
 | `GET api.github.com/…/releases/latest` | Update check — sends no telemetry | At most once per 10 min per session | `UpdateChecker.kt` |
 | `POST …/redeem` | 6-digit VoltFlow link code | User action only | `VoltflowLinkClient.kt` |
@@ -68,3 +69,118 @@ queued). Queue is capped at **1000** rows, oldest trimmed.
   first in the leg, > 12 m off the current corridor (a turn), or 30 s since the last
   kept point. The filter resets on any state change.
 - `cloud_sync_wifi_only` — holds the queue until Wi-Fi is available.
+
+## 5. Wire fields — what each payload actually contains
+
+There are **three** payload builders, not one. Sections 1–2 cover *when* something is
+sent; this covers *what is in it*.
+
+**The rule that governs every table below:** all optional fields go through
+`putIfPresent` / `putN`, so a null is **omitted entirely** — never sent as `null`.
+"Sent" therefore means "the builder can emit it"; whether it appears depends on the car
+reporting the value and on the state gate.
+
+### 5.1 App payload — `CloudTelemetryPayload.build`
+
+**Envelope**
+
+| Field | When |
+|---|---|
+| `schema_version` (=1), `vehicle_id`, `device_time`, `source` (="BYDMate"), `mate_version` | Always |
+| `telemetry {}`, `location {}` | Always present (either may be `{}`) |
+| `diplus {}` | Only when di+ answered |
+| `autoservice {}` | Only when ≥ 1 autoservice field is present |
+| `live_only: true` | Parked, nothing material changed. Omitted, **never** `false` |
+| `client_hourly: true` | Sample folded into an on-device hourly block. Omitted, never `false` |
+| `trip_id` + `client_trip: true` | Only while a client-owned trip is open |
+
+The flush envelope wraps these as `samples[]` plus optional `hourly[]` / `trips[]`.
+
+**`telemetry {}` — 20 fields, state-gated.** P = parked, D = driving, C = charging.
+
+| Field | Sent when | Rounded |
+|---|---|---|
+| `soc` | always | — |
+| `soh_percent` | always, incl. parked (slow-moving, cached BMS value) | — |
+| `is_charging` | not P, or when `soc` is present | — |
+| `speed_kmh`, `power_kw` | D/C, or whenever the value exists at all | — |
+| `charge_power_kw`, `charge_type` | **C only** | — |
+| `kwh_charged` | **C only** | 3 dp |
+| `battery_temp_c`, `cabin_temp_c`, `outside_temp_c`, `battery_voltage_v`, `aux_voltage_v` | **not P** | — |
+| `cell_voltage_min_v`, `cell_voltage_max_v`, `cell_delta_v` | not P, or when min/max known | 4 dp |
+| `odometer_km` | **not P** | — |
+| `range_est_km` | **not P** | 1 dp |
+| `current_trip_distance_km` | **not P** | 3 dp |
+| `current_trip_consumption_kwh_100km` | **not P** | 2 dp |
+
+**`location {}`** — `lat`, `lon`, `accuracy_m`, `bearing_deg`. Emitted as `{}` when
+`cloud_sync_omit_gps` is on, the corridor filter thinned this point, accuracy > 30 m, or
+lat/lon are missing (see §4).
+
+**`diplus {}` — two different shapes.**
+
+- **Parked** (8): `soc`, `gear`, `charge_gun_state`, `speed_kmh`, `power_state`,
+  `voltage_12v`, `sentry_state`, `stall_sentry_mode`
+- **Not parked** (23): `soc`, `gear`, `max/avg/min_battery_temp_c`,
+  `battery_capacity_kwh`, `total_elec_consumption_kwh`, `voltage_12v`,
+  `max_cell_voltage_v`, `min_cell_voltage_v`, `cell_delta_v` (all 4 dp),
+  `sunshade_percent`, `sentry_state`, `remote_lock_state`,
+  `window_fl/fr/rl/rr_percent`, `sunroof_percent`, `lock_fl`, `ac_status`, `ac_temp_c`,
+  `inside_temp_c`
+- **Driving or charging adds 5 more**: `speed_kmh`, `mileage_km`, `power_kw`,
+  `charge_gun_state`, `charging_status`
+
+**`autoservice {}` — 9 fields:** `soc_percent`, `power_kw`, `gun_state`, `bms_state`,
+`charge_capacity_kwh`, `charge_battery_volt`, `battery_type`, `lifetime_mileage_km`,
+`lifetime_kwh`.
+
+### 5.2 Daemon payload A — di+ (`CommandDaemon.buildTelemetryPayload`)
+
+Envelope is `schema_version`, `vehicle_id`, `device_time` (from `isoNow()`, **not** a
+snapshot time), `source`, `mate_version`, `telemetry {}`, `diplus {}`, `location {}`,
+plus `live_only: true` when applicable.
+
+**Never sent by the daemon:** `autoservice {}`, `client_hourly`, `trip_id` /
+`client_trip`. `location` is **always** an empty `{}` — the daemon has no GPS, and the
+key exists only because the ingest schema requires it.
+
+**`telemetry {}` — 17 fields, with no state gating at all** (unlike §5.1):
+`soc`, `speed_kmh`, `power_kw`, `battery_temp_c` (= *avg* battery temp), `cabin_temp_c`,
+`outside_temp_c`, `aux_voltage_v`, `cell_voltage_min_v`, `cell_voltage_max_v`,
+`cell_delta_v`, `odometer_km`, `is_charging` (always, bool), `is_parked` (always, bool,
+from `gear == 1`), `soh_percent`, plus charging-only `charge_power_kw`, `kwh_charged`,
+`charge_type`.
+
+**`diplus {}` — 50 fields, all unconditional.** Everything the app sends **plus**:
+`exterior_temp_c`, `power_state`, `fan_level`, `ac_circ`, `door_fl/fr/rl/rr`, `trunk`,
+`hood`, `seatbelt_fl`, `tire_press_fl/fr/rl/rr_kpa`, `drive_mode`, `work_mode`,
+`auto_park`, `rain`, `light_low`, `drl`, `stall_sentry_mode`.
+
+### 5.3 Daemon payload B — autoservice fallback (`buildAutoserviceFallbackPayload`)
+
+Used **only** when di+ is unreachable *and* `shouldUseAutoserviceFallback` has confirmed
+the car is parked or charging — never during a drive, because this payload has no
+`gear` or `speed` of its own. Has no `live_only` variant.
+
+- **`telemetry {}` (9):** `soc`, `power_kw`, `aux_voltage_v`, `is_charging`, `is_parked`,
+  `soh_percent`, plus charging-only `charge_power_kw`, `kwh_charged`, `charge_type`
+- **`diplus {}` (14):** `soc`, `power_kw`, `charge_gun_state`, `voltage_12v`,
+  `door_fl/fr/rl/rr`, `trunk`, `hood`, `tire_press_fl/fr/rl/rr_kpa`
+
+Note this block is **named** `diplus` but is populated from autoservice reads — the
+server keys off that name, so it is deliberate, but it is confusing when reading raw
+payloads.
+
+### 5.4 Known discrepancies
+
+1. **Phase 1 float rounding never reached the daemon.** The app uses `putRounded`
+   (4 dp cells, 3 dp `kwh_charged`, 1 dp range, 2 dp consumption); both daemon builders
+   use raw `putN`. `cell_delta_v` is a subtraction (`maxCellVoltage - minCellVoltage`) in
+   *both*, which is exactly the `0.019999999999999` case
+   [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md) Phase 1 set out to remove — and the
+   daemon is the writer for most of the day. Not yet fixed.
+2. **`is_parked` is daemon-only.** The app never sends it, so its presence effectively
+   marks a sample as daemon-authored.
+3. **The fallback infers `is_parked` as `!isCharging`**, whereas the di+ path reads
+   `gear == 1`. Benign for a parked, unplugged car, but it is a guess rather than a
+   reading.

@@ -62,6 +62,7 @@ import com.bydmate.app.util.HeadUnitSettings
 import com.bydmate.app.util.LogRecorder
 import com.bydmate.app.ui.components.bydSwitchColors
 import com.bydmate.app.ui.settings.AdbStatus
+import com.bydmate.app.ui.settings.DaemonStatus
 import com.bydmate.app.ui.settings.SettingsViewModel
 import com.bydmate.app.ui.theme.AccentBlue
 import com.bydmate.app.ui.theme.AccentGreen
@@ -105,12 +106,16 @@ fun GatewayScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
                 backgroundRestricted = BackgroundRestriction.isRestricted(context)
                 viewModel.refreshAdbStatus()
+                viewModel.refreshDaemonStatus()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(Unit) { viewModel.refreshAdbStatus() }
+    LaunchedEffect(Unit) {
+        viewModel.refreshAdbStatus()
+        viewModel.refreshDaemonStatus()
+    }
 
     Column(
         modifier = Modifier
@@ -194,6 +199,8 @@ fun GatewayScreen(
         AdvancedFeaturesCard(
             adbStatus = state.adbStatus,
             onConnectAdb = viewModel::connectAdb,
+            daemonStatus = state.daemonStatus,
+            onInstallDaemon = viewModel::installDaemon,
             onOpenGuide = {
                 runCatching {
                     context.startActivity(
@@ -462,6 +469,8 @@ private fun BackgroundRestrictionCard(
 private fun AdvancedFeaturesCard(
     adbStatus: AdbStatus,
     onConnectAdb: () -> Unit,
+    daemonStatus: DaemonStatus,
+    onInstallDaemon: () -> Unit,
     onOpenGuide: () -> Unit,
     onOpenNetworkSettings: () -> Unit,
     strings: GatewayStrings,
@@ -506,6 +515,29 @@ private fun AdvancedFeaturesCard(
                     colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
                 ) { Text(strings.adbGuideAction, fontWeight = FontWeight.Medium) }
             }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        val daemonStatusText = when (daemonStatus) {
+            DaemonStatus.RUNNING -> strings.daemonStatusRunning
+            DaemonStatus.RUNNING_NO_WATCHDOG -> strings.daemonStatusPartial
+            DaemonStatus.CHECKING, DaemonStatus.INSTALLING -> strings.daemonStatusChecking
+            else -> strings.daemonStatusNotRunning
+        }
+        StatusRow(strings.daemonStatusLabel, daemonStatusText, daemonStatus == DaemonStatus.RUNNING)
+        Button(
+            onClick = onInstallDaemon,
+            enabled = daemonStatus != DaemonStatus.INSTALLING && daemonStatus != DaemonStatus.CHECKING,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+        ) {
+            Text(
+                if (daemonStatus == DaemonStatus.INSTALLING) strings.daemonInstalling else strings.daemonInstallAction,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        if (daemonStatus == DaemonStatus.INSTALL_FAILED) {
+            Text(strings.daemonInstallFailedHint, color = AccentOrange, fontSize = 12.sp)
         }
         Text(strings.parkedNetworkHint, color = TextSecondary, fontSize = 11.sp, lineHeight = 16.sp)
         Button(
@@ -981,6 +1013,14 @@ private data class GatewayStrings(
     val adbHowtoToggle: String,
     val adbHowtoBody: String,
     val adbGuideAction: String,
+    val daemonStatusLabel: String,
+    val daemonStatusRunning: String,
+    val daemonStatusPartial: String,
+    val daemonStatusNotRunning: String,
+    val daemonStatusChecking: String,
+    val daemonInstallAction: String,
+    val daemonInstalling: String,
+    val daemonInstallFailedHint: String,
     val parkedNetworkHint: String,
     val parkedNetworkAction: String,
     val logCaptureTitle: String,
@@ -1058,6 +1098,14 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbHowtoToggle = "Как включить беспроводной ADB",
             adbHowtoBody = "ADB включается на самом планшете, без ПК: инженерное меню → TestTools → «Wireless adb debug switch». Затем нажмите «Подключить ADB» и подтвердите «Allow USB debugging?» прямо на экране.",
             adbGuideAction = "Открыть инструкцию",
+            daemonStatusLabel = "Демон восстановления",
+            daemonStatusRunning = "Работает",
+            daemonStatusPartial = "Работает без watchdog",
+            daemonStatusNotRunning = "Не запущен",
+            daemonStatusChecking = "Проверка…",
+            daemonInstallAction = "Установить / запустить демон",
+            daemonInstalling = "Установка…",
+            daemonInstallFailedHint = "Не удалось запустить демон. Проверьте on-device ADB выше.",
             parkedNetworkHint = "Чтобы данные шли при выключенной машине, включите «Keep network on while parked» — Wi-Fi не отключится на стоянке.",
             parkedNetworkAction = "Сеть на стоянке",
             logCaptureTitle = "Журнал диагностики",
@@ -1132,6 +1180,14 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbHowtoToggle = "How to enable wireless ADB",
             adbHowtoBody = "ADB is enabled on the tablet itself, no PC: engineering menu → TestTools → “Wireless adb debug switch”. Then tap “Connect ADB” and confirm “Allow USB debugging?” right on screen.",
             adbGuideAction = "Open guide",
+            daemonStatusLabel = "Survival daemon",
+            daemonStatusRunning = "Running",
+            daemonStatusPartial = "Running, no watchdog",
+            daemonStatusNotRunning = "Not running",
+            daemonStatusChecking = "Checking…",
+            daemonInstallAction = "Install / run daemon",
+            daemonInstalling = "Installing…",
+            daemonInstallFailedHint = "Could not start the daemon. Check on-device ADB above.",
             parkedNetworkHint = "For data while the car is off, enable “Keep network on while parked” so Wi-Fi stays up after parking.",
             parkedNetworkAction = "Network while parked",
             logCaptureTitle = "Diagnostic log",
@@ -1206,6 +1262,14 @@ private fun gatewayStrings(language: String): GatewayStrings =
             adbHowtoToggle = "Як уключыць бесправадны ADB",
             adbHowtoBody = "ADB уключаецца на самім планшэце, без ПК: інжынернае меню → TestTools → «Wireless adb debug switch». Потым націсніце «Падключыць ADB» і пацвердзіце «Allow USB debugging?» прама на экране.",
             adbGuideAction = "Адкрыць інструкцыю",
+            daemonStatusLabel = "Дэман выжывання",
+            daemonStatusRunning = "Працуе",
+            daemonStatusPartial = "Працуе без watchdog",
+            daemonStatusNotRunning = "Не запушчаны",
+            daemonStatusChecking = "Праверка…",
+            daemonInstallAction = "Усталяваць / запусціць дэман",
+            daemonInstalling = "Усталёўка…",
+            daemonInstallFailedHint = "Не ўдалося запусціць дэман. Праверце on-device ADB вышэй.",
             parkedNetworkHint = "Каб даныя ішлі пры выключанай машыне, уключыце «Keep network on while parked» — Wi-Fi не адключыцца на стаянцы.",
             parkedNetworkAction = "Сетка на стаянцы",
             logCaptureTitle = "Журнал дыягностыкі",

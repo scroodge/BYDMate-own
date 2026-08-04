@@ -42,6 +42,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -186,15 +187,26 @@ class SettingsViewModelTest {
         override suspend fun getEnginePowerKw(): Int? = null
     }
 
-    private class FakeAdbClient : AdbOnDeviceClient {
-        override suspend fun connect(): Result<Unit> = Result.success(Unit)
-        override suspend fun isConnected(): Boolean = false
+    private class FakeAdbClient(
+        var connected: Boolean = false,
+        var daemonRunning: Boolean = false,
+        var watchdogRunning: Boolean = false,
+        var ensureResult: com.bydmate.app.data.autoservice.DaemonSupervisorResult? = null,
+    ) : AdbOnDeviceClient {
+        override suspend fun connect(): Result<Unit> = Result.success(Unit).also { connected = true }
+        override suspend fun isConnected(): Boolean = connected
         override suspend fun exec(cmd: String): String? = null
         override suspend fun grantUsageStatsAppop(packageName: String): Boolean = false
         override suspend fun launchDiPlusService(): Boolean = false
-        override suspend fun isCommandDaemonRunning(): Boolean = false
-        override suspend fun isCommandDaemonWatchdogRunning(): Boolean = false
+        override suspend fun isCommandDaemonRunning(): Boolean = daemonRunning
+        override suspend fun isCommandDaemonWatchdogRunning(): Boolean = watchdogRunning
         override suspend fun launchCommandDaemon(scriptPath: String): Boolean = false
+        override suspend fun deployDaemonLauncher(): String? = null
+        override suspend fun ensureCommandDaemonRunning(): com.bydmate.app.data.autoservice.DaemonSupervisorResult =
+            ensureResult ?: com.bydmate.app.data.autoservice.DaemonSupervisorResult(
+                adbConnected = connected, daemonRunning = daemonRunning, watchdogRunning = watchdogRunning,
+                launchAttempted = false, launchOk = false,
+            )
         override suspend fun shutdown() {}
     }
 
@@ -202,7 +214,8 @@ class SettingsViewModelTest {
 
     private fun buildViewModel(
         autoserviceEnabled: Boolean,
-        fakeAutoservice: AutoserviceClient
+        fakeAutoservice: AutoserviceClient,
+        adbClient: AdbOnDeviceClient = FakeAdbClient(),
     ): SettingsViewModel {
         val ctx: Context = ApplicationProvider.getApplicationContext()
 
@@ -251,7 +264,7 @@ class SettingsViewModelTest {
             energyDataReader = energyReader,
             diParsClient = DiParsClient(httpClient),
             idleDrainDao = idleDrainDao,
-            adbOnDeviceClient = FakeAdbClient(),
+            adbOnDeviceClient = adbClient,
             batteryStateRepository = batteryStateRepo,
             voltflowLinkClient = VoltflowLinkClient(httpClient),
         )
@@ -322,5 +335,78 @@ class SettingsViewModelTest {
         assertEquals(100f, connected.sohPercent!!, 0.01f)
         assertEquals(2091f, connected.lifetimeKm!!, 0.01f)
         assertEquals(602f, connected.lifetimeKwh!!, 0.01f)
+    }
+
+    @Test
+    fun `refreshDaemonStatus_adbNotConnected_staysUnknown`() = runTest {
+        val vm = buildViewModel(
+            autoserviceEnabled = false,
+            fakeAutoservice = FakeAutoservice(BatteryReading(null, null, null, null, null, 0L), available = false),
+            adbClient = FakeAdbClient(connected = false),
+        )
+        vm.refreshDaemonStatus()
+        advanceUntilIdle()
+        assertEquals(DaemonStatus.UNKNOWN, vm.uiState.value.daemonStatus)
+    }
+
+    @Test
+    fun `refreshDaemonStatus_daemonAndWatchdogAlive_returnsRunning`() = runTest {
+        val vm = buildViewModel(
+            autoserviceEnabled = false,
+            fakeAutoservice = FakeAutoservice(BatteryReading(null, null, null, null, null, 0L), available = false),
+            adbClient = FakeAdbClient(connected = true, daemonRunning = true, watchdogRunning = true),
+        )
+        vm.refreshDaemonStatus()
+        advanceUntilIdle()
+        assertEquals(DaemonStatus.RUNNING, vm.uiState.value.daemonStatus)
+    }
+
+    @Test
+    fun `refreshDaemonStatus_daemonAliveWithoutWatchdog_returnsRunningNoWatchdog`() = runTest {
+        val vm = buildViewModel(
+            autoserviceEnabled = false,
+            fakeAutoservice = FakeAutoservice(BatteryReading(null, null, null, null, null, 0L), available = false),
+            adbClient = FakeAdbClient(connected = true, daemonRunning = true, watchdogRunning = false),
+        )
+        vm.refreshDaemonStatus()
+        advanceUntilIdle()
+        assertEquals(DaemonStatus.RUNNING_NO_WATCHDOG, vm.uiState.value.daemonStatus)
+    }
+
+    @Test
+    fun `installDaemon_adbUnavailable_returnsInstallFailed`() = runTest {
+        val adb = FakeAdbClient(connected = false).apply {
+            ensureResult = com.bydmate.app.data.autoservice.DaemonSupervisorResult(
+                adbConnected = false, daemonRunning = false, watchdogRunning = false,
+                launchAttempted = false, launchOk = false,
+            )
+        }
+        val vm = buildViewModel(
+            autoserviceEnabled = false,
+            fakeAutoservice = FakeAutoservice(BatteryReading(null, null, null, null, null, 0L), available = false),
+            adbClient = adb,
+        )
+        vm.installDaemon()
+        advanceUntilIdle()
+        assertEquals(DaemonStatus.INSTALL_FAILED, vm.uiState.value.daemonStatus)
+    }
+
+    @Test
+    fun `installDaemon_launchSucceeds_returnsRunning`() = runTest {
+        val adb = FakeAdbClient(connected = true, daemonRunning = true, watchdogRunning = true).apply {
+            ensureResult = com.bydmate.app.data.autoservice.DaemonSupervisorResult(
+                adbConnected = true, daemonRunning = false, watchdogRunning = false,
+                launchAttempted = true, launchOk = true,
+            )
+        }
+        val vm = buildViewModel(
+            autoserviceEnabled = false,
+            fakeAutoservice = FakeAutoservice(BatteryReading(null, null, null, null, null, 0L), available = false),
+            adbClient = adb,
+        )
+        vm.installDaemon()
+        advanceUntilIdle()
+        assertEquals(DaemonStatus.RUNNING, vm.uiState.value.daemonStatus)
+        assertEquals(AdbStatus.CONNECTED, vm.uiState.value.adbStatus)
     }
 }

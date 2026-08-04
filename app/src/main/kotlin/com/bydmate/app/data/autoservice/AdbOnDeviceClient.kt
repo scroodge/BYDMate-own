@@ -10,6 +10,20 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
+ * Outcome of [AdbOnDeviceClient.ensureCommandDaemonRunning]. [launchAttempted] is
+ * false when the daemon + watchdog were already alive (no relaunch needed) or when
+ * the sequence stopped earlier (ADB unavailable / launcher deploy failed) — check
+ * [adbConnected] and [daemonRunning]/[watchdogRunning] first to tell those apart.
+ */
+data class DaemonSupervisorResult(
+    val adbConnected: Boolean,
+    val daemonRunning: Boolean,
+    val watchdogRunning: Boolean,
+    val launchAttempted: Boolean,
+    val launchOk: Boolean,
+)
+
+/**
  * Connects to the on-device ADB daemon at 127.0.0.1:5555 (DiLink has WiFi
  * ADB enabled in dev settings) using a persistent RSA keypair stored in
  * `filesDir/adb_keys/`. Once paired, exposes `exec(cmd)` for one-shot
@@ -63,6 +77,19 @@ interface AdbOnDeviceClient {
      * launch command was issued.
      */
     suspend fun launchCommandDaemon(scriptPath: String): Boolean
+    /**
+     * Copies the bundled `start_voltflow_cmd.sh` launcher from assets to the app's
+     * external files dir (app-writable, shell-readable) so it can be started under the
+     * shell uid without a manual `adb push`. Returns the absolute path, or null on failure.
+     */
+    suspend fun deployDaemonLauncher(): String?
+    /**
+     * Full daemon-supervisor sequence: connect on-device ADB if needed, deploy the
+     * bundled launcher, and (re)launch the daemon if it or its watchdog isn't already
+     * running. Safe no-op on any failure (e.g. ADB not authorised) — see
+     * [DaemonSupervisorResult].
+     */
+    suspend fun ensureCommandDaemonRunning(): DaemonSupervisorResult
     /** Closes any underlying socket. Idempotent. */
     suspend fun shutdown()
 }
@@ -192,6 +219,48 @@ class AdbOnDeviceClientImpl @Inject constructor(
         }
     }
 
+    override suspend fun deployDaemonLauncher(): String? = withContext(Dispatchers.IO) {
+        try {
+            val dir = ctx.getExternalFilesDir(null) ?: return@withContext null
+            val script = java.io.File(dir, DAEMON_LAUNCHER_ASSET)
+            ctx.assets.open(DAEMON_LAUNCHER_ASSET).use { input ->
+                script.outputStream().use { output -> input.copyTo(output) }
+            }
+            script.setReadable(true, false)
+            script.setExecutable(true, false)
+            script.absolutePath
+        } catch (e: Exception) {
+            Log.w(TAG, "deployDaemonLauncher failed: ${e.message}")
+            null
+        }
+    }
+
+    override suspend fun ensureCommandDaemonRunning(): DaemonSupervisorResult {
+        if (!isConnected() && connect().isFailure) {
+            return DaemonSupervisorResult(
+                adbConnected = false, daemonRunning = false, watchdogRunning = false,
+                launchAttempted = false, launchOk = false,
+            )
+        }
+        val launcher = deployDaemonLauncher() ?: return DaemonSupervisorResult(
+            adbConnected = true, daemonRunning = false, watchdogRunning = false,
+            launchAttempted = false, launchOk = false,
+        )
+        val daemonRunning = isCommandDaemonRunning()
+        val watchdogRunning = isCommandDaemonWatchdogRunning()
+        if (daemonRunning && watchdogRunning) {
+            return DaemonSupervisorResult(
+                adbConnected = true, daemonRunning = true, watchdogRunning = true,
+                launchAttempted = false, launchOk = false,
+            )
+        }
+        val ok = launchCommandDaemon(launcher)
+        return DaemonSupervisorResult(
+            adbConnected = true, daemonRunning = daemonRunning, watchdogRunning = watchdogRunning,
+            launchAttempted = true, launchOk = ok,
+        )
+    }
+
     override suspend fun shutdown() {
         withContext(Dispatchers.IO) {
             try {
@@ -215,6 +284,7 @@ class AdbOnDeviceClientImpl @Inject constructor(
 
         // nice-name of the shell-uid survival daemon spawned by start_voltflow_cmd.sh.
         private const val DAEMON_PROCESS_NAME = "voltflow_cmd_daemon"
+        private const val DAEMON_LAUNCHER_ASSET = "start_voltflow_cmd.sh"
         private const val WATCHDOG_HEALTH_CMD =
             "pid=\$(cat /data/local/tmp/voltflow_cmd_watchdog.pid 2>/dev/null); " +
                 "if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null && " +
