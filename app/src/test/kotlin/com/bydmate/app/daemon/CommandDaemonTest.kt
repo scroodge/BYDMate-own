@@ -3,6 +3,7 @@ package com.bydmate.app.daemon
 import com.bydmate.app.data.remote.DiParsData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -410,6 +411,27 @@ class CommandDaemonTest {
     @Test
     fun `the server can idle the command poll while remote commands are suspended`() {
         assertEquals(60_000L, CommandDaemon.commandPollIntervalMs(60))
+    }
+
+    @Test
+    fun `the cell delta subtraction artifact is rounded away`() {
+        // The exact case Phase 1 of CLOUD_OFFLOAD_PLAN.md exists to remove: maxCell - minCell
+        // producing ~20 characters of noise on every sample the daemon sends.
+        assertEquals(0.02, CommandDaemon.roundForWire(0.019999999999999, 4)!!, 0.0)
+        assertEquals(4.1235, CommandDaemon.roundForWire(4.12345678, 4)!!, 0.0)
+    }
+
+    @Test
+    fun `kwh charged keeps three decimals`() {
+        assertEquals(1.235, CommandDaemon.roundForWire(1.2345678, 3)!!, 0.0)
+    }
+
+    @Test
+    fun `a missing or non-finite reading never reaches the wire`() {
+        // NaN/Infinity are not valid JSON numbers, so they must degrade to null, not serialize.
+        assertNull(CommandDaemon.roundForWire(null, 4))
+        assertNull(CommandDaemon.roundForWire(Double.NaN, 4))
+        assertNull(CommandDaemon.roundForWire(Double.POSITIVE_INFINITY, 4))
     }
 
     @Test

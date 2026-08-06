@@ -1031,7 +1031,7 @@ object CommandDaemon {
      * Assembles a telemetry payload purely from autoservice reads (dev=1001 bodywork/tyre,
      * dev=1009 charging, dev=1012 engine, dev=1014 statistic — see [FidRegistry] for the fid
      * catalog). Only fields already live-validated against di+ (2026-07-22) are populated;
-     * everything di+-only stays null via the same [putN] nullable-field convention
+     * everything di+-only is simply omitted via the same [putIfPresent] convention
      * [buildTelemetryPayload] already uses, so downstream consumers see a normal partial sample,
      * not a malformed one.
      */
@@ -1056,21 +1056,21 @@ object CommandDaemon {
         val isCharging = gun != null && gun in 2..5
 
         val diplus = JSONObject().apply {
-            putN("soc", soc); putN("power_kw", powerKw); putN("charge_gun_state", gun)
-            putN("voltage_12v", voltage12v)
-            putN("door_fl", doorFL); putN("door_fr", doorFR); putN("door_rl", doorRL); putN("door_rr", doorRR)
-            putN("trunk", trunk); putN("hood", hood)
-            putN("tire_press_fl_kpa", tireFL); putN("tire_press_fr_kpa", tireFR)
-            putN("tire_press_rl_kpa", tireRL); putN("tire_press_rr_kpa", tireRR)
+            putIfPresent("soc", soc); putIfPresent("power_kw", powerKw); putIfPresent("charge_gun_state", gun)
+            putIfPresent("voltage_12v", voltage12v)
+            putIfPresent("door_fl", doorFL); putIfPresent("door_fr", doorFR); putIfPresent("door_rl", doorRL); putIfPresent("door_rr", doorRR)
+            putIfPresent("trunk", trunk); putIfPresent("hood", hood)
+            putIfPresent("tire_press_fl_kpa", tireFL); putIfPresent("tire_press_fr_kpa", tireFR)
+            putIfPresent("tire_press_rl_kpa", tireRL); putIfPresent("tire_press_rr_kpa", tireRR)
         }
         val telemetry = JSONObject().apply {
-            putN("soc", soc); putN("power_kw", powerKw); putN("aux_voltage_v", voltage12v)
+            putIfPresent("soc", soc); putIfPresent("power_kw", powerKw); putIfPresent("aux_voltage_v", voltage12v)
             put("is_charging", isCharging)
-            putN("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
-            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
-            putN("charge_type", if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
+            putIfPresent("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
+            putRounded("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null, KWH_CHARGED_DECIMALS)
+            putIfPresent("charge_type", if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
             put("is_parked", !isCharging)
-            putN("soh_percent", sohPercent?.toDouble())
+            putIfPresent("soh_percent", sohPercent?.toDouble())
         }
         return JSONObject().apply {
             put("schema_version", 1)
@@ -1101,43 +1101,47 @@ object CommandDaemon {
             (gun != null && gun in 2..5)
 
         val diplus = JSONObject().apply {
-            putN("soc", d.soc); putN("speed_kmh", d.speed); putN("mileage_km", d.mileage)
-            putN("power_kw", d.power); putN("charge_gun_state", d.chargeGunState)
-            putN("max_battery_temp_c", d.maxBatTemp); putN("avg_battery_temp_c", d.avgBatTemp)
-            putN("min_battery_temp_c", d.minBatTemp); putN("charging_status", d.chargingStatus)
-            putN("battery_capacity_kwh", d.batteryCapacityKwh)
-            putN("total_elec_consumption_kwh", d.totalElecConsumption)
-            putN("voltage_12v", d.voltage12v); putN("max_cell_voltage_v", d.maxCellVoltage)
-            putN("min_cell_voltage_v", d.minCellVoltage); putN("cell_delta_v", cellDelta)
-            putN("exterior_temp_c", d.exteriorTemp); putN("gear", d.gear); putN("power_state", d.powerState)
-            putN("inside_temp_c", d.insideTemp); putN("ac_status", d.acStatus); putN("ac_temp_c", d.acTemp)
-            putN("fan_level", d.fanLevel); putN("ac_circ", d.acCirc)
-            putN("door_fl", d.doorFL); putN("door_fr", d.doorFR); putN("door_rl", d.doorRL); putN("door_rr", d.doorRR)
-            putN("window_fl_percent", d.windowFL); putN("window_fr_percent", d.windowFR)
-            putN("window_rl_percent", d.windowRL); putN("window_rr_percent", d.windowRR)
-            putN("sunroof_percent", d.sunroof); putN("trunk", d.trunk); putN("hood", d.hood)
-            putN("seatbelt_fl", d.seatbeltFL); putN("lock_fl", d.lockFL)
-            putN("tire_press_fl_kpa", d.tirePressFL); putN("tire_press_fr_kpa", d.tirePressFR)
-            putN("tire_press_rl_kpa", d.tirePressRL); putN("tire_press_rr_kpa", d.tirePressRR)
-            putN("drive_mode", d.driveMode); putN("work_mode", d.workMode); putN("auto_park", d.autoPark)
-            putN("rain", d.rain); putN("light_low", d.lightLow); putN("drl", d.drl)
-            putN("sunshade_percent", d.sunshade)
-            putN("sentry_state", d.sentryState); putN("remote_lock_state", d.remoteLockState)
-            putN("stall_sentry_mode", d.stallSentryMode)
+            putIfPresent("soc", d.soc); putIfPresent("speed_kmh", d.speed); putIfPresent("mileage_km", d.mileage)
+            putIfPresent("power_kw", d.power); putIfPresent("charge_gun_state", d.chargeGunState)
+            putIfPresent("max_battery_temp_c", d.maxBatTemp); putIfPresent("avg_battery_temp_c", d.avgBatTemp)
+            putIfPresent("min_battery_temp_c", d.minBatTemp); putIfPresent("charging_status", d.chargingStatus)
+            putIfPresent("battery_capacity_kwh", d.batteryCapacityKwh)
+            putIfPresent("total_elec_consumption_kwh", d.totalElecConsumption)
+            putIfPresent("voltage_12v", d.voltage12v)
+            putRounded("max_cell_voltage_v", d.maxCellVoltage, CELL_VOLTAGE_DECIMALS)
+            putRounded("min_cell_voltage_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)
+            putRounded("cell_delta_v", cellDelta, CELL_VOLTAGE_DECIMALS)
+            putIfPresent("exterior_temp_c", d.exteriorTemp); putIfPresent("gear", d.gear); putIfPresent("power_state", d.powerState)
+            putIfPresent("inside_temp_c", d.insideTemp); putIfPresent("ac_status", d.acStatus); putIfPresent("ac_temp_c", d.acTemp)
+            putIfPresent("fan_level", d.fanLevel); putIfPresent("ac_circ", d.acCirc)
+            putIfPresent("door_fl", d.doorFL); putIfPresent("door_fr", d.doorFR); putIfPresent("door_rl", d.doorRL); putIfPresent("door_rr", d.doorRR)
+            putIfPresent("window_fl_percent", d.windowFL); putIfPresent("window_fr_percent", d.windowFR)
+            putIfPresent("window_rl_percent", d.windowRL); putIfPresent("window_rr_percent", d.windowRR)
+            putIfPresent("sunroof_percent", d.sunroof); putIfPresent("trunk", d.trunk); putIfPresent("hood", d.hood)
+            putIfPresent("seatbelt_fl", d.seatbeltFL); putIfPresent("lock_fl", d.lockFL)
+            putIfPresent("tire_press_fl_kpa", d.tirePressFL); putIfPresent("tire_press_fr_kpa", d.tirePressFR)
+            putIfPresent("tire_press_rl_kpa", d.tirePressRL); putIfPresent("tire_press_rr_kpa", d.tirePressRR)
+            putIfPresent("drive_mode", d.driveMode); putIfPresent("work_mode", d.workMode); putIfPresent("auto_park", d.autoPark)
+            putIfPresent("rain", d.rain); putIfPresent("light_low", d.lightLow); putIfPresent("drl", d.drl)
+            putIfPresent("sunshade_percent", d.sunshade)
+            putIfPresent("sentry_state", d.sentryState); putIfPresent("remote_lock_state", d.remoteLockState)
+            putIfPresent("stall_sentry_mode", d.stallSentryMode)
         }
 
         val telemetry = JSONObject().apply {
-            putN("soc", d.soc); putN("speed_kmh", d.speed?.toDouble()); putN("power_kw", d.power)
-            putN("battery_temp_c", d.avgBatTemp?.toDouble()); putN("cabin_temp_c", d.insideTemp?.toDouble())
-            putN("outside_temp_c", d.exteriorTemp?.toDouble()); putN("aux_voltage_v", d.voltage12v)
-            putN("cell_voltage_min_v", d.minCellVoltage); putN("cell_voltage_max_v", d.maxCellVoltage)
-            putN("cell_delta_v", cellDelta); putN("odometer_km", d.mileage)
+            putIfPresent("soc", d.soc); putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
+            putIfPresent("battery_temp_c", d.avgBatTemp?.toDouble()); putIfPresent("cabin_temp_c", d.insideTemp?.toDouble())
+            putIfPresent("outside_temp_c", d.exteriorTemp?.toDouble()); putIfPresent("aux_voltage_v", d.voltage12v)
+            putRounded("cell_voltage_min_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)
+            putRounded("cell_voltage_max_v", d.maxCellVoltage, CELL_VOLTAGE_DECIMALS)
+            putRounded("cell_delta_v", cellDelta, CELL_VOLTAGE_DECIMALS)
+            putIfPresent("odometer_km", d.mileage)
             put("is_charging", isCharging)
-            putN("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
-            putN("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null)
-            putN("charge_type", if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
+            putIfPresent("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
+            putRounded("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null, KWH_CHARGED_DECIMALS)
+            putIfPresent("charge_type", if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
             put("is_parked", d.gear == 1)
-            putN("soh_percent", sohPercent?.toDouble())
+            putIfPresent("soh_percent", sohPercent?.toDouble())
         }
 
         return JSONObject().apply {
@@ -1175,8 +1179,61 @@ object CommandDaemon {
         return fmt.format(Date())
     }
 
-    private fun JSONObject.putN(key: String, value: Any?) {
-        put(key, value ?: JSONObject.NULL)
+    /**
+     * Omits the key entirely when the value is absent, matching
+     * `CloudTelemetryPayload.putIfPresent` in the app.
+     *
+     * This used to write `JSONObject.NULL`, so every key was on the wire on every push —
+     * roughly 30 of the 50 `diplus` keys as literal `null` on a parked car, ~800 bytes a push
+     * and by far the largest remaining payload cost (an order of magnitude more than the
+     * float rounding above). It also polluted the partial index
+     * `bydmate_telemetry_samples_soh_analytics_idx`, whose predicate is
+     * `telemetry ? 'soh_percent'`: jsonb key-existence is true even when the value is null, so
+     * daemon rows with no SoH reading were indexed and then discarded by the query's
+     * `between 0 and 100` check.
+     *
+     * **Safe because absent and null are equivalent everywhere downstream** (checked
+     * 2026-08-06): the Zod fields are `.nullable().optional()`; `telemetry-sanitizer.ts` gates
+     * on `value != null`, which catches `undefined` identically; and the only jsonb
+     * key-existence checks on `telemetry`/`diplus` are the two `soh_percent` ones above. The
+     * `location ? 'lat'` checks in the GPS-retention functions are unaffected — the daemon has
+     * no GPS and already sends `location: {}` with no keys at all.
+     */
+    private fun JSONObject.putIfPresent(key: String, value: Any?) {
+        if (value == null) return
+        put(key, value)
+    }
+
+    /** Wire precision for cell voltages. Mirrors `CloudTelemetryPayload.CELL_VOLTAGE_DECIMALS`. */
+    private const val CELL_VOLTAGE_DECIMALS = 4
+
+    /** Wire precision for `kwh_charged`. Mirrors `CloudTelemetryPayload`'s 3 dp. */
+    private const val KWH_CHARGED_DECIMALS = 3
+
+    /**
+     * Rounds a value before serializing, so raw-double artifacts don't bloat the JSON and the
+     * cloud's telemetry jsonb column.
+     *
+     * The app got this in Phase 1 of `docs/CLOUD_OFFLOAD_PLAN.md`; the daemon never did, even
+     * though it is the writer for most of the day. The worst offender is `cell_delta_v`, which
+     * both builders compute as `maxCellVoltage - minCellVoltage` — exactly the subtraction that
+     * produces `0.019999999999999` (~20 chars) on every sample.
+     *
+     * Matches the decimals `telemetry-sanitizer.ts` already applies server-side, so this is a
+     * no-op for the backend and purely saves wire bytes.
+     *
+     * Non-finite input returns null rather than serializing `NaN`/`Infinity`, which are not
+     * valid JSON numbers.
+     */
+    internal fun roundForWire(value: Double?, decimals: Int): Double? {
+        if (value == null || !value.isFinite()) return null
+        val factor = Math.pow(10.0, decimals.toDouble())
+        return Math.round(value * factor) / factor
+    }
+
+    /** [putIfPresent] with [roundForWire] applied, so an absent reading omits its key as usual. */
+    private fun JSONObject.putRounded(key: String, value: Double?, decimals: Int) {
+        putIfPresent(key, roundForWire(value, decimals))
     }
 
     /** Same regex as AutoserviceClientImpl — parses `Result: Parcel(00000000 <8hex> ...)`. */

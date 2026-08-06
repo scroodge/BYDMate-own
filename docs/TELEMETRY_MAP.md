@@ -76,9 +76,13 @@ There are **three** payload builders, not one. Sections 1–2 cover *when* somet
 sent; this covers *what is in it*.
 
 **The rule that governs every table below:** all optional fields go through
-`putIfPresent` / `putN`, so a null is **omitted entirely** — never sent as `null`.
-"Sent" therefore means "the builder can emit it"; whether it appears depends on the car
-reporting the value and on the state gate.
+`putIfPresent`, so an absent value **omits its key entirely** — no `"key": null` on the
+wire. "Sent" therefore means "the builder can emit it"; whether it actually appears
+depends on the car reporting the value and on the state gate.
+
+This holds for **both** builders as of 2026-08-06. The daemon previously wrote
+`JSONObject.NULL`, putting all 50 `diplus` keys on every push regardless — see §5.4
+item 2 for why that changed and why it was safe.
 
 ### 5.1 App payload — `CloudTelemetryPayload.build`
 
@@ -173,14 +177,41 @@ payloads.
 
 ### 5.4 Known discrepancies
 
-1. **Phase 1 float rounding never reached the daemon.** The app uses `putRounded`
-   (4 dp cells, 3 dp `kwh_charged`, 1 dp range, 2 dp consumption); both daemon builders
-   use raw `putN`. `cell_delta_v` is a subtraction (`maxCellVoltage - minCellVoltage`) in
-   *both*, which is exactly the `0.019999999999999` case
-   [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md) Phase 1 set out to remove — and the
-   daemon is the writer for most of the day. Not yet fixed.
-2. **`is_parked` is daemon-only.** The app never sends it, so its presence effectively
+1. ~~**Phase 1 float rounding never reached the daemon.**~~ **Fixed 2026-08-06.** Both
+   daemon builders now round through `CommandDaemon.roundForWire`: cell voltages
+   (`max/min_cell_voltage_v`, `cell_voltage_min/max_v`, `cell_delta_v`) to 4 dp and
+   `kwh_charged` to 3 dp, matching `CloudTelemetryPayload` and the precision
+   `telemetry-sanitizer.ts` already applies server-side — so it is a no-op for the backend
+   and purely saves wire bytes. The motivating case was `cell_delta_v`, computed as
+   `maxCellVoltage - minCellVoltage` in both builders, which produced
+   `0.019999999999999` (~20 chars) on every push — and the daemon is the writer for most
+   of the day. Rounding changed precision only, not which keys are on the wire (that was
+   item 2, below).
+2. ~~**The daemon sends every key on every push, as `null` when absent.**~~ **Fixed
+   2026-08-06.** The daemon's helper was renamed `putN` → `putIfPresent` and now omits the
+   key, matching the app. This was the largest remaining payload cost: ~30 of the 50
+   `diplus` keys were literal `null` on a parked car, ~800 bytes a push — an order of
+   magnitude more than the float rounding in item 1.
+
+   **Why it was safe** (verified before the change, worth re-checking if any of the three
+   layers is rewritten):
+   - **Zod** (`ingest-payload.ts`): every field is `.nullable().optional()`, so an absent
+     key and a null key both validate.
+   - **Sanitizer** (`telemetry-sanitizer.ts`): gates on `value != null`, which is true for
+     `undefined` too — the carry-forward and plausibility checks cannot tell them apart.
+   - **SQL**: jsonb key-existence (`?`) *does* distinguish them, but the only uses against
+     `telemetry`/`diplus` are the two `soh_percent` ones in
+     `20260710170000_analytics_query_fanout_repairs.sql`. Query results are unchanged
+     because that query also requires `between 0 and 100`, which a null fails — and the
+     partial index `bydmate_telemetry_samples_soh_analytics_idx` gets **smaller and more
+     correct**, since it was indexing daemon rows that had the key but no reading. The
+     `location ? 'lat'` checks in the GPS-retention functions are unaffected: the daemon
+     has no GPS and already sent `location: {}` with no keys at all.
+
+   Only new rows change shape; historical rows keep their explicit nulls until retention
+   purges them.
+3. **`is_parked` is daemon-only.** The app never sends it, so its presence effectively
    marks a sample as daemon-authored.
-3. **The fallback infers `is_parked` as `!isCharging`**, whereas the di+ path reads
+4. **The fallback infers `is_parked` as `!isCharging`**, whereas the di+ path reads
    `gear == 1`. Benign for a parked, unplugged car, but it is a guess rather than a
    reading.
