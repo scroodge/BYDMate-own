@@ -1,5 +1,8 @@
 package com.bydmate.app.daemon
 
+import android.os.Binder
+import android.os.Build
+import android.os.IBinder
 import android.os.SystemClock
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.CommandAllowlist
@@ -16,6 +19,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.lang.reflect.InvocationTargetException
+import java.lang.reflect.Method
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -246,11 +251,16 @@ object CommandDaemon {
         (intervalMs - elapsedMs).coerceAtLeast(0L)
 
     /**
-     * Kernel wakelock name and the sysfs nodes that take it. `PowerManager.newWakeLock` needs a
-     * Context and this daemon deliberately has none (see the class doc) — but shell uid can write
-     * `/sys/power/wake_lock`, which is the same suspend-blocker one layer down.
+     * The shell daemon has no [android.content.Context], so it cannot construct a normal
+     * [android.os.PowerManager.WakeLock]. It can, however, bind to the platform power service
+     * directly. The reflected interface keeps the daemon ABI-aware: DiLink 3 uses Android 10's
+     * six-argument acquire call, while newer DiLink versions may append arguments.
+     *
+     * The sysfs nodes remain a compatibility fallback only. They are denied to shell on the
+     * validated DiLink 3 unit (EACCES), whereas its `IPowerManager` route was proven on-car.
      */
     private const val WAKE_LOCK_TAG = "voltflow_daemon"
+    private const val SHELL_PACKAGE_NAME = "com.android.shell"
     private const val WAKE_LOCK_NODE = "/sys/power/wake_lock"
     private const val WAKE_UNLOCK_NODE = "/sys/power/wake_unlock"
 
@@ -296,28 +306,161 @@ object CommandDaemon {
     internal fun shouldHoldWakeLock(now: Long, liveFastUntilMs: Long, gunState: Int?): Boolean =
         now < liveFastUntilMs || (gunState != null && gunState in 2..5)
 
+    private enum class WakeLockBackend { POWER_MANAGER, SYSFS }
+
+    private data class PowerManagerWakeLock(
+        val service: Any,
+        val acquire: Method,
+        val release: Method,
+    ) {
+        fun acquire(token: IBinder) {
+            val types = acquire.parameterTypes
+            val args = Array<Any?>(types.size) { index ->
+                when (index) {
+                    0 -> token
+                    1 -> PARTIAL_WAKE_LOCK
+                    2 -> WAKE_LOCK_TAG
+                    3 -> SHELL_PACKAGE_NAME
+                    else -> defaultArgument(types[index])
+                }
+            }
+            acquire.invoke(service, *args)
+        }
+
+        fun release(token: IBinder) {
+            release.invoke(service, token, 0)
+        }
+
+        private companion object {
+            const val PARTIAL_WAKE_LOCK = 0x00000001
+
+            fun defaultArgument(type: Class<*>): Any? = when (type) {
+                Int::class.javaPrimitiveType -> 0
+                Long::class.javaPrimitiveType -> 0L
+                Boolean::class.javaPrimitiveType -> false
+                Float::class.javaPrimitiveType -> 0f
+                Double::class.javaPrimitiveType -> 0.0
+                else -> null
+            }
+        }
+    }
+
+    private val wakeLockToken = Binder()
     @Volatile private var wakeLockHeld = false
-    @Volatile private var wakeLockFailureLogged = false
+    private var activeWakeLockBackend: WakeLockBackend? = null
+    private var powerManagerWakeLock: PowerManagerWakeLock? = null
+    private var powerManagerWakeLockInitAttempted = false
+    private var powerManagerWakeLockFailureLogged = false
+    private var sysfsWakeLockFailureLogged = false
 
     /**
-     * Acquire/release the kernel suspend blocker, idempotently. Writes are best-effort: a head unit
-     * whose sysfs is not shell-writable simply keeps suspending, which is the behaviour we already
-     * have — so a failure is logged once and never throws into the status loop.
+     * Resolve the hidden platform interface by reflection rather than compiling against a
+     * version-specific `IPowerManager` stub. We validate the stable first five acquire arguments
+     * before using it; appended platform arguments receive their AIDL defaults (null/zero).
      */
+    private fun powerManagerWakeLock(): PowerManagerWakeLock? {
+        powerManagerWakeLock?.let { return it }
+        if (powerManagerWakeLockInitAttempted) return null
+        powerManagerWakeLockInitAttempted = true
+        return try {
+            val serviceManager = Class.forName("android.os.ServiceManager")
+            val binder = serviceManager.getMethod("getService", String::class.java)
+                .invoke(null, "power") as? IBinder ?: error("power service missing")
+            val stub = Class.forName("android.os.IPowerManager\$Stub")
+            val service = stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
+                ?: error("IPowerManager unavailable")
+            val iface = Class.forName("android.os.IPowerManager")
+            val acquire = iface.methods.singleOrNull { it.name == "acquireWakeLock" }
+                ?: error("IPowerManager.acquireWakeLock missing")
+            val release = iface.methods.singleOrNull { it.name == "releaseWakeLock" }
+                ?: error("IPowerManager.releaseWakeLock missing")
+            val types = acquire.parameterTypes
+            require(types.size >= 6 &&
+                IBinder::class.java.isAssignableFrom(types[0]) &&
+                types[1] == Int::class.javaPrimitiveType &&
+                types[2] == String::class.java && types[3] == String::class.java
+            ) { "unsupported acquireWakeLock signature (${types.joinToString { it.simpleName }})" }
+            require(release.parameterTypes.contentEquals(arrayOf(IBinder::class.java, Int::class.javaPrimitiveType))) {
+                "unsupported releaseWakeLock signature (${release.parameterTypes.joinToString { it.simpleName }})"
+            }
+            PowerManagerWakeLock(service, acquire, release).also {
+                powerManagerWakeLock = it
+                log(
+                    "wakelock IPowerManager ready: android=${Build.VERSION.RELEASE} " +
+                        "sdk=${Build.VERSION.SDK_INT} acquire_args=${types.size}; " +
+                        "will verify on charger/live mode",
+                )
+            }
+        } catch (e: Exception) {
+            logPowerManagerWakeLockFailure("initialization", e)
+            null
+        }
+    }
+
+    /** Called once at startup so remote DiLink 5 logs expose the exact binder capability. */
+    private fun logPowerManagerWakeLockCapability() {
+        powerManagerWakeLock()
+    }
+
+    /** Acquire/release the Context-free service wakelock, falling back to legacy sysfs if needed. */
     private fun setWakeLock(hold: Boolean) {
         if (hold == wakeLockHeld) return
+        if (hold) {
+            val backend = powerManagerWakeLock()
+            if (backend != null) {
+                try {
+                    backend.acquire(wakeLockToken)
+                    wakeLockHeld = true
+                    activeWakeLockBackend = WakeLockBackend.POWER_MANAGER
+                    log("wakelock acquired via IPowerManager ($WAKE_LOCK_TAG)")
+                    return
+                } catch (e: Exception) {
+                    logPowerManagerWakeLockFailure("acquire", e)
+                }
+            }
+            setSysfsWakeLock(hold = true)
+            return
+        }
+
+        when (activeWakeLockBackend) {
+            WakeLockBackend.POWER_MANAGER -> {
+                try {
+                    powerManagerWakeLock()?.release(wakeLockToken)
+                    wakeLockHeld = false
+                    activeWakeLockBackend = null
+                    log("wakelock released via IPowerManager ($WAKE_LOCK_TAG)")
+                } catch (e: Exception) {
+                    logPowerManagerWakeLockFailure("release", e)
+                }
+            }
+            WakeLockBackend.SYSFS -> setSysfsWakeLock(hold = false)
+            null -> Unit
+        }
+    }
+
+    private fun setSysfsWakeLock(hold: Boolean) {
         val node = if (hold) WAKE_LOCK_NODE else WAKE_UNLOCK_NODE
         try {
             File(node).writeText(WAKE_LOCK_TAG)
             wakeLockHeld = hold
-            log("wakelock ${if (hold) "acquired" else "released"} ($WAKE_LOCK_TAG)")
+            activeWakeLockBackend = if (hold) WakeLockBackend.SYSFS else null
+            log("wakelock ${if (hold) "acquired" else "released"} via sysfs ($WAKE_LOCK_TAG)")
         } catch (e: Exception) {
-            // Log once, not once per 6 s wake, or an unwritable node floods the field log.
-            if (!wakeLockFailureLogged) {
-                wakeLockFailureLogged = true
-                log("wakelock unavailable ($node): ${e.message} — platform suspend stays in charge")
+            if (!sysfsWakeLockFailureLogged) {
+                sysfsWakeLockFailureLogged = true
+                log("wakelock sysfs unavailable ($node): ${e.message} — platform suspend stays in charge")
             }
         }
+    }
+
+    private fun logPowerManagerWakeLockFailure(operation: String, error: Exception) {
+        if (powerManagerWakeLockFailureLogged) return
+        powerManagerWakeLockFailureLogged = true
+        val cause = (error as? InvocationTargetException)?.targetException ?: error
+        log(
+            "wakelock IPowerManager unavailable during $operation: " +
+                "${cause.javaClass.simpleName}: ${cause.message}; falling back to sysfs",
+        )
     }
 
     /**
@@ -426,6 +569,9 @@ object CommandDaemon {
     fun main(args: Array<String>) {
         val confPath = args.getOrNull(0) ?: DEFAULT_CONF
         log("CommandDaemon starting (conf=$confPath)")
+        // This is diagnostic as well as initialization: a remote DiLink 5 owner can return one
+        // startup log line with Android/API and binder-signature evidence, without remote ADB.
+        logPowerManagerWakeLockCapability()
 
         val ok = OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)

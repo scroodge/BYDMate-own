@@ -37,7 +37,7 @@ side (`bydmate_apply_client_trip`, the `client_trip` branch in `bydmate_ingest_t
 `bydmate_trips.client_trip` marker, and the `ingest-payload.ts`/`route.ts` wiring) was applied to
 prod on 2026-07-20 — verified via a rolled-back dry-run transaction covering all eight cases,
 then confirmed live ingest was unaffected across the fleet including two cars on old APKs. The
-new path has **not yet carried a real drive**; see "Still to confirm" under Phase 4.
+new path then carried and closed a real drive on `way`; see the Phase 4 confirmation below.
 
 ## Measured baseline (prod, 2026-07-17, 14 cars, trailing 7 days)
 

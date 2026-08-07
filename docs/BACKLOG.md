@@ -4,7 +4,7 @@ Actionable, prioritized task list. Milestone-level view lives in
 [`ROADMAP.md`](ROADMAP.md); shipped detail in [`CHANGELOG.md`](../CHANGELOG.md);
 engineering notes in [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-07-27 · база: `main` @ `0.5.1` (`versionCode 337`) + 2 коммита сверху (watchdog auto-relaunch, gunState-фолбэк).
+- **Обновлено:** 2026-08-07 · база: `main` @ `v0.5.1.1` (`versionCode 338`).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `done`.
 - Оценка: S (<½ дня) · M (1–2 дня) · L (>2 дня / кросс-репо).
@@ -18,8 +18,7 @@ engineering notes in [`project-notes.md`](project-notes.md).
 
 | ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
 |----|--------|------|-----|--------|---------------------|
-| B-03 | Непрерывность истории телеметрии при переименовании авто | cloud / **VoltFlow** | L | `blocked` | Слить историю до/после rename на стороне Supabase (`vehicle_id` — часть ключа). Блок: логика в VoltFlow/EvAcChargeTimer, нужна координация репо. Потеря данных уже устранена (`7b37366`). |
-| B-06 | Cloud-side Phase 4: client-owned trip rollups | cloud / **VoltFlow** | L | `todo` | Добавить `bydmate_apply_client_trip` и route/schema wiring; затем подтвердить, что `client_trip`/`trips` применяются идемпотентно, а старые APK и daemon продолжают работать по прежнему пути. |
+| B-03 | Непрерывность истории телеметрии при переименовании авто | cloud / **VoltFlow** | L | `blocked` | Слить историю до/после rename на стороне Supabase (`vehicle_id` — часть ключа). Блок: логика в VoltFlow/EvAcChargeTimer и решение владельца о политике слияния/коллизий. Потеря новых батчей уже устранена (`7b37366`). |
 
 ---
 
@@ -46,10 +45,9 @@ engineering notes in [`project-notes.md`](project-notes.md).
 
 | ID | Задача | Обл. | Оц. | Статус | Критерий готовности |
 |----|--------|------|-----|--------|---------------------|
-| B-07 | Прямой доступ к `autoservice` вместо di+ HTTP | app / daemon | L | `in-progress` | ✅ 2026-07-21: `CommandDaemon` логирует SOC + engine power через `autoservice` рядом со значениями di+ (`"autoservice check: ..."`). ✅ 2026-07-22: декомпилирован `/system/framework/framework.jar` с реальной машины → найден полный вендорский SDK `android.hardware.bydauto.*` (`BYDAutoFeatureIds`); 16 новых fid (двери FL/FR/RL/RR, багажник, капот, стёкла FL/FR/RL/RR, люк, шторка, давление в шинах FL/FR/RL/RR) добавлены в `FidRegistry` и **живьём сверены с di+ 16/16 = 100% match** (включая нетривиальные значения: давление 245-250 кПа, шторка=100%) на этой машине (Leopard 3, DiLink 3.0, `sys.car.protocol=CANFD`). Двери и шины уже логируются вторым чеком (`"autoservice check2: ..."`) в `voltflow_cmd_daemon.log`. **Важно:** 12 из 16 значений архитектурно-зависимы (`isCanFD`/`isToyota`/default-ветки в `BYDAutoFeatureIds`) — валидны только для CANFD-платформы, см. предупреждение в `FidRegistry.kt`. Осталось: собрать сэмплы за более долгий период (drive/charge, не только парковка), затем заменить `diplus.*` поля в пейлоаде на autoservice-источник. ✅ 2026-07-22 (позже): **парковка/зарядка без di+ реализована** — `CommandDaemon.buildAutoserviceFallbackPayload` шлёт телеметрию (SOC, мощность, gun state, 12V, двери/багажник/капот, шины, SoH, kWh) целиком через `autoservice`, когда di+ не отвечает (`DIPLUS_STALE_MS` — правильно отличает «di+ завис» от «di+ никогда не запускался», поскольку `latestData` раньше не обнулялся при неудачном fetch) **и** последнее известное состояние — парковка/зарядка (`shouldUseAutoserviceFallback`; тесты зелёные, 516). За рулём поведение не меняется — di+ остаётся источником, пока не собран полный каталог сигналов (скорость/климат/передача и т.д., см. `atomic-humming-hoare.md` «Stage A»). **Не проверено живьём** — машина была недоступна в конце сессии; нужен реальный тест `am force-stop com.van.diplus` на парковке/зарядке. |
-| B-08 | Разделить `CommandDaemon` на I/O-демон + watchdog | daemon | M | `in-progress` | **Уточнение 2026-07-22:** этот разрез уже существовал структурно — `start_voltflow_cmd.sh` (shell-процесс) отдельно от `CommandDaemon` (`app_process`), демон никогда не содержал логику респауна. Реальный разрыв с PEC — watchdog следил только за демоном, не за самим приложением. ✅ Сделано: watchdog теперь проверяет `pidof dev.scroodge.cloudevmate` в своём 30-секундном цикле и перезапускает через `am start`/`am start-foreground-service` при отсутствии (cooldown 60 с, `voltflow_app_relaunch_ts`) — закрывает случай hard crash/OOM, не покрытый `onTaskRemoved`/boot receiver. `tools/` и `assets/` синхронны (`cmp` зелёный), 515 тестов зелёные (изменение только в shell, Kotlin не тронут). Осталось (сознательно отложено): перенос WiFi keep-alive тика из `CommandDaemon` в watchdog (сейчас зависит от живости демона) и binder-канал для мгновенной проверки (аналог `byd_evpro_pec_control`) — оба без явной необходимости сейчас. |
-| B-09 | FID-таблица как server-pushed JSON, не хардкод в APK | app / cloud | M | `todo` [verify] | Новый сигнал/модель авто добавляется конфигом на сервере, без релиза APK; старые установки без конфига продолжают работать на текущих хардкод-значениях (fallback). |
-| B-10 | Автоматический keep-alive WiFi на стоянке | daemon | S | `in-progress` | ✅ 2026-07-21: тумблер **Настройки → Cloud Sync → «Keep Wi-Fi awake while parked»** → `keep_wifi_awake=1` в `voltflow_cmd.conf` → демон каждые ~60 с шлёт `svc wifi enable` (`CommandDaemon.shouldRefreshWifiKeepalive`, тесты зелёные). Выключено по умолчанию. Осталось: включить и проверить на реальной машине, что стоянка >9 мин не теряет телеметрию без ручного тумблера DiLink «Keep network on while parked». |
+| B-09 | FID-таблица как server-pushed JSON, не хардкод в APK | app / cloud | M | `todo` [verify] | Рассматривать только после живого доказательства, что поддержка второй платформы/модели упирается именно в хардкод FID. Тогда новый сигнал добавляется серверным конфигом без APK-релиза, а установки без конфига сохраняют текущий fallback. |
+| B-10 | Автоматический keep-alive WiFi на стоянке | daemon | S | `in-progress` | Функция выпущена в `v0.5.1`, выключена по умолчанию. Осталось: включить на машине, оставить её на стоянке >9 мин и подтвердить в daemon log и `bydmate_live_snapshots`, что сеть и телеметрия не прерываются без ручного тумблера DiLink. |
+| B-11 | Context-free wakelock для shell-демона | daemon | M | `in-progress` | Текущая незакоммиченная работа: использовать `IPowerManager` binder с sysfs fallback. До слияния нужны focused unit tests для выбора/ошибок backend и живые строки старта + acquire/release на машине; после parked suspend должны появляться свежие `bydmate_live_snapshots`. |
 
 ---
 
@@ -71,3 +69,6 @@ engineering notes in [`project-notes.md`](project-notes.md).
 - ✅ **B-00** Потеря батча при смене `cloud_sync_vehicle_id` — `7b37366`, с регресс-тестом.
 - ✅ Чистка мёртвого кода (~280 строк) — `7b37366`.
 - ✅ Переезд спаренных авто на `voltflow.life` — `e2cd59b`.
+- ✅ **B-06** Cloud-side Phase 4: client-owned trip rollups — APK и cloud wiring (`bydmate_apply_client_trip`) применены 2026-07-20; идемпотентность и совместимость старых APK проверены, новый путь подтверждён на реальной поездке. См. [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md#phase-4--apk-owned-trips-).
+- ✅ **B-07** Прямой `autoservice` / nativestack — полный upstream-порт отклонён: новых нужных данных он не даёт, а di+ остаётся необходимым каналом actuation. Имеющиеся BMS-поля, включая `kwh_charged`, диагностические; их нельзя использовать для grid-side стоимости зарядки. Новые FID добавлять только по доказательствам с конкретной машины.
+- ✅ **B-08** Watchdog приложения — launcher уже отделён от I/O-демона и перезапускает основное приложение после crash/OOM. Проверка через `am force-stop` — операционная/release-приёмка, не отдельная реализация; перенос Wi‑Fi тика в watchdog и binder-канал статуса намеренно не запланированы.

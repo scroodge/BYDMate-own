@@ -118,6 +118,24 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
 
+### Suspend-blocker capability report
+
+The shell daemon has no Android `Context`, so it acquires its partial wakelock through the platform
+`IPowerManager` binder rather than `PowerManager.newWakeLock`. On startup it logs the Android
+release/API level and the runtime `acquireWakeLock` argument count; the first charger-connected or
+live-view iteration then logs either `wakelock acquired via IPowerManager` or a precise binder
+failure followed by the legacy sysfs fallback. This lets a DiLink 5 owner return compatibility
+evidence without remote ADB access:
+
+```sh
+grep -E 'wakelock (IPowerManager|acquired|released|sysfs)' \
+  /data/local/tmp/voltflow_cmd_daemon.log
+```
+
+The sysfs fallback is expected to report `EACCES` on the verified DiLink 3 Android 10 unit. Do not
+infer DiLink 5 compatibility from that unit: retain the corresponding startup and first-use lines
+with the car's Android/API values.
+
 ### Launcher source of truth
 
 There are two copies of the watchdog launcher in the repository:

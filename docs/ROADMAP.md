@@ -5,23 +5,20 @@
 [`docs/project-notes.md`](project-notes.md) (инженерные заметки и инциденты).
 Этот файл даёт единый взгляд: что сделано, что в работе, что рассматривается.
 
-- **Текущая версия кода в `main`:** `0.5.0` (`versionCode 336`). Последний
-  опубликованный git tag — `v0.4.8` (2026-07-16). `v0.5.0` подготовлен к публикации;
-  в этой подготовке APK намеренно не устанавливался через ADB, поэтому телеметрия после
-  установки на автомобиль ещё не подтверждена.
-- **Обновлено:** 2026-07-20.
+- **Текущая версия кода в `main`:** `0.5.1.1` (`versionCode 338`), tag `v0.5.1.1`
+  (2026-08-04).
+- **Обновлено:** 2026-08-07.
 - Легенда: ✅ сделано · 🔧 в работе / `[Unreleased]` · 🧭 кандидат (не запланирован) · ⚠️ риск / долг.
 
 ---
 
 ## 🔧 В работе
 
-- 🔧 **Cloud-side Phase 4: client-owned trip rollups.** APK уже ведёт cumulative `trips`
-  в Room и помечает driving samples `client_trip`; серверная RPC и route wiring ещё не
-  реализованы, поэтому сервер пока продолжает обычную trip-логику. Подробности — в
-  [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md).
-- 🔧 **Расход топлива** в данных поездки и telemetry payload (`e9fd89a`) остаётся в
-  разделе `[Unreleased]` changelog до отдельного выпуска.
+- 🔧 **B-10: keep-alive Wi-Fi на стоянке.** Функция выпущена выключенной по умолчанию;
+  нужна проверка на машине >9 минут с daemon log и свежими cloud snapshots.
+- 🔧 **B-11: context-free wakelock shell-демона.** Незакоммиченная работа переводит
+  suspend blocker на `IPowerManager` с sysfs fallback; до слияния нужны focused tests и
+  живое подтверждение startup/acquire/release.
 
 ---
 
@@ -37,6 +34,9 @@
 - ✅ Облачная синхронизация поездок из `energydata` без ADB (`TripSummaryCloudSync`, v0.4.7).
 - ✅ `live_only` для неизменившейся стоянки, клиентские hourly rollups и GPS corridor thinning;
   server-side hourly path проверен в production.
+- ✅ **Client-owned trip rollups (Phase 4).** APK и cloud-side
+  `bydmate_apply_client_trip` применены и совместимы со старыми APK; новый путь подтверждён
+  на реальной поездке. Детали и доказательства — в [`CLOUD_OFFLOAD_PLAN.md`](CLOUD_OFFLOAD_PLAN.md#phase-4--apk-owned-trips-).
 - ✅ Переходы park/charge сразу обновляют live status, а открытый live-экран получает
   `live_only`-статус каждые 3 секунды (v0.4.9–0.4.10).
 
@@ -73,7 +73,8 @@
   отдельная задача на стороне VoltFlow/Supabase. `blocked` (кросс-репо).
 
 Закрыто после ревизии 2026-07-16: обновление APK уже работает через GitHub Releases
-(оставили как есть); экран аналитики в APK — **не делаем** (см. принцип выше).
+(оставили как есть); экран аналитики в APK — **не делаем** (см. принцип выше); полный
+autoservice/nativestack port — **не делаем** без нового доказательства с конкретной машины.
 
 ---
 
