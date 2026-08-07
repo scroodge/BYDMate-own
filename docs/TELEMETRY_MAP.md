@@ -177,6 +177,19 @@ payloads.
 
 ### 5.4 Known discrepancies
 
+> **Both fixes below buy wire bytes and nothing else — do not expect a storage win.**
+> `bydmate_telemetry_samples` is `(id, vehicle_id, user_id, device_time, received_at,
+> telemetry jsonb)` plus flattened `diplus_*` columns. There is **no per-sample raw payload
+> blob**. So the `diplus` block never reaches storage as JSON at all — a key sent as `null`
+> and a key omitted both land as a NULL column — and `telemetry-sanitizer.ts` already rounds
+> before writing, so the rounding changes nothing that is persisted. The difference exists
+> only in transit. (Recorded because the opposite was assumed once, from the `p_raw_payload`
+> argument at `telemetry/route.ts:257` — that is an RPC parameter, not a column of this
+> table.)
+>
+> The transit saving is still worth having on a car with a marginal uplink: this head unit
+> was logging `poll error: timeout` and `telemetry push failed: timeout` on 2026-08-04.
+
 1. ~~**Phase 1 float rounding never reached the daemon.**~~ **Fixed 2026-08-06.** Both
    daemon builders now round through `CommandDaemon.roundForWire`: cell voltages
    (`max/min_cell_voltage_v`, `cell_voltage_min/max_v`, `cell_delta_v`) to 4 dp and
