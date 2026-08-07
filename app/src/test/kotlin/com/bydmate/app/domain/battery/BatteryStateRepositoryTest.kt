@@ -55,6 +55,10 @@ class BatteryStateRepositoryTest {
             override suspend fun set(entity: com.bydmate.app.data.local.entity.SettingEntity) {
                 map[entity.key] = entity.value ?: ""
             }
+            override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+                map[SettingsRepository.KEY_LAST_KNOWN_SOC] = soc
+                map[SettingsRepository.KEY_LAST_SOC_TIMESTAMP] = timestamp
+            }
             override fun getAll(): Flow<List<com.bydmate.app.data.local.entity.SettingEntity>> = flowOf(emptyList())
         }
         return SettingsRepository(dao)

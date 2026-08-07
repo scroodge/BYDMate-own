@@ -305,6 +305,10 @@ class TripSummaryCloudSyncTest {
         override suspend fun set(setting: SettingEntity) {
             map[setting.key] = setting.value ?: ""
         }
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            map[SettingsRepository.KEY_LAST_KNOWN_SOC] = soc
+            map[SettingsRepository.KEY_LAST_SOC_TIMESTAMP] = timestamp
+        }
         override fun getAll(): Flow<List<SettingEntity>> =
             flowOf(map.map { SettingEntity(it.key, it.value) })
     }

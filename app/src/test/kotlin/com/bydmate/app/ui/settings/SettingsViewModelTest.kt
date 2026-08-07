@@ -83,6 +83,10 @@ class SettingsViewModelTest {
         override suspend fun get(key: String): String? = map[key]
         override fun observe(key: String): Flow<String?> = flowOf(map[key])
         override suspend fun set(entity: SettingEntity) { map[entity.key] = entity.value ?: "" }
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            map[SettingsRepository.KEY_LAST_KNOWN_SOC] = soc
+            map[SettingsRepository.KEY_LAST_SOC_TIMESTAMP] = timestamp
+        }
         override fun getAll(): Flow<List<SettingEntity>> = flowOf(emptyList())
     }
 

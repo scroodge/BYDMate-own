@@ -95,6 +95,10 @@ class AutoserviceChargingDetectorTest {
         override suspend fun set(entity: com.bydmate.app.data.local.entity.SettingEntity) {
             map[entity.key] = entity.value ?: ""
         }
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            map["last_known_soc"] = soc
+            map["last_soc_timestamp"] = timestamp
+        }
         override fun getAll(): Flow<List<com.bydmate.app.data.local.entity.SettingEntity>> =
             flowOf(emptyList())
     }

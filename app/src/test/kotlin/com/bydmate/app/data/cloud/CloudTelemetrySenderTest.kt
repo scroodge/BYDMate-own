@@ -55,6 +55,27 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
+    fun `queued telemetry does not persist cloud status on every poll`() = runTest {
+        val setup = setup()
+
+        for (second in 1..30) {
+            setup.now = BASE_TIME_MS + second * 1_000L
+            setup.sender.enqueue(snapshot(charging = true, soc = 60))
+        }
+
+        assertTrue(setup.settings.setCalls.isEmpty())
+    }
+
+    @Test
+    fun `manual cloud test records the real network attempt time`() = runTest {
+        val setup = setup()
+
+        setup.sender.sendTest(snapshot())
+
+        assertTrue(setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_LAST_TS] != null)
+    }
+
+    @Test
     fun `charging tail at or above ninety eight percent samples every second`() = runTest {
         val setup = setup()
 
@@ -520,7 +541,7 @@ class CloudTelemetrySenderTest {
         ).apply {
             nowProvider = { now }
         }
-        return TestSetup(sender, queue, trips, client, getNow = { now }, setNow = { now = it })
+        return TestSetup(sender, queue, trips, client, settingsDao, getNow = { now }, setNow = { now = it })
     }
 
     private fun snapshot(
@@ -619,6 +640,7 @@ class CloudTelemetrySenderTest {
         val queue: FakeCloudSyncQueueDao,
         val trips: FakeTripRollupDao,
         val client: FakeCloudTelemetryClient,
+        val settings: FakeSettingsDao,
         val getNow: () -> Long,
         val setNow: (Long) -> Unit,
     ) {
@@ -737,14 +759,21 @@ class CloudTelemetrySenderTest {
     }
 
     private class FakeSettingsDao(initial: Map<String, String>) : SettingsDao {
-        private val values = initial.mapValues { it.value as String? }.toMutableMap()
+        val values = initial.mapValues { it.value as String? }.toMutableMap()
+        val setCalls = mutableListOf<SettingEntity>()
 
         override suspend fun get(key: String): String? = values[key]
 
         override fun observe(key: String): Flow<String?> = flowOf(values[key])
 
         override suspend fun set(setting: SettingEntity) {
+            setCalls += setting
             values[setting.key] = setting.value
+        }
+
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            values[SettingsRepository.KEY_LAST_KNOWN_SOC] = soc
+            values[SettingsRepository.KEY_LAST_SOC_TIMESTAMP] = timestamp
         }
 
         override fun getAll(): Flow<List<SettingEntity>> =

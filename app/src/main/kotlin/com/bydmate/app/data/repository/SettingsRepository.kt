@@ -182,10 +182,9 @@ open class SettingsRepository @Inject constructor(
         },
     ) { good, bad -> good to bad }
 
-    suspend fun saveLastKnownSoc(soc: Int) {
-        setString(KEY_LAST_KNOWN_SOC, soc.toString())
-        setString(KEY_LAST_SOC_TIMESTAMP, System.currentTimeMillis().toString())
-    }
+    /** Writes the SOC baseline and its capture time atomically. */
+    suspend fun saveLastKnownSoc(soc: Int, capturedAtMs: Long = System.currentTimeMillis()) =
+        settingsDao.setLastKnownSoc(soc.toString(), capturedAtMs.toString())
 
     suspend fun getLastKnownSoc(): Int? =
         getString(KEY_LAST_KNOWN_SOC, "").toIntOrNull()

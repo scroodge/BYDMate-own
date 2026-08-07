@@ -85,6 +85,7 @@ class CloudTelemetrySender @Inject constructor(
     /** Energy-integration continuity pair for the open trip, analogous to [lastRollupPowerKw]/[lastRollupDeviceTimeMs] but scoped to the trip so it never carries energy across a trip boundary. */
     @Volatile private var lastTripPowerKw: Double? = null
     @Volatile private var lastTripDeviceTimeMs: Long? = null
+    @Volatile private var lastPersistedStatus: PersistedStatus? = null
     private val cadence = CloudTelemetryCadence()
     private val gpsCorridorFilter = GpsCorridorFilter()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
@@ -165,8 +166,6 @@ class CloudTelemetrySender @Inject constructor(
             }
         }
 
-        val unsentCount = queueDao.countUnsent()
-        saveStatus(ok = true, message = "queued $unsentCount")
         return Result.success(Unit)
     }
 
@@ -189,7 +188,11 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         if (config.wifiOnly && !isWifiConnected()) {
-            saveStatus(ok = false, message = "queued $unsentCount; waiting for Wi-Fi")
+            saveStatus(
+                ok = false,
+                message = "queued $unsentCount; waiting for Wi-Fi",
+                isNetworkAttempt = false,
+            )
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             return Result.success(Unit)
         }
@@ -221,7 +224,6 @@ class CloudTelemetrySender @Inject constructor(
             (unsentCount > 0 && intervalElapsed)
 
         if (!shouldFlush) {
-            saveStatus(ok = true, message = "queued $unsentCount")
             return Result.success(Unit)
         }
 
@@ -240,7 +242,7 @@ class CloudTelemetrySender @Inject constructor(
                 if (!ack.isNullOrBlank()) append("; $ack")
                 append("; queued $remaining")
             }
-            saveStatus(ok = true, message = message, ack = ack)
+            saveStatus(ok = true, message = message, ack = ack, isNetworkAttempt = true)
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             hourlyDao.pruneCleanBefore(HourlyRollupAccumulator.hourStartOf(now - HOURLY_RETENTION_MS))
             tripDao.pruneCleanBefore(now - TRIP_RETENTION_MS)
@@ -254,7 +256,7 @@ class CloudTelemetrySender @Inject constructor(
                 flushResult.retryReason?.let { append(" ($it)") }
                 if (!ack.isNullOrBlank()) append("; $ack")
             }
-            saveStatus(ok = false, message = message, ack = ack)
+            saveStatus(ok = false, message = message, ack = ack, isNetworkAttempt = true)
             queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
             Result.failure(IllegalStateException(message))
         }
@@ -323,18 +325,27 @@ class CloudTelemetrySender @Inject constructor(
                 settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, ackText)
                 if (!ack.isFullyAcknowledged()) {
                     val reason = ack.parseError ?: ack.error ?: "incomplete ack"
-                    saveStatus(ok = false, message = "Test HTTP OK; $ackText ($reason)")
+                    saveStatus(
+                        ok = false,
+                        message = "Test HTTP OK; $ackText ($reason)",
+                        isNetworkAttempt = true,
+                    )
                     return Result.failure(IllegalStateException(reason))
                 }
-                saveStatus(ok = true, message = "Test OK; $ackText", ack = ackText)
+                saveStatus(
+                    ok = true,
+                    message = "Test OK; $ackText",
+                    ack = ackText,
+                    isNetworkAttempt = true,
+                )
                 Result.success(result.responseBody)
             }
             is CloudSendResult.NonRetryableFailure -> {
-                saveStatus(ok = false, message = result.message)
+                saveStatus(ok = false, message = result.message, isNetworkAttempt = true)
                 Result.failure(IllegalStateException(result.message))
             }
             is CloudSendResult.RetryableFailure -> {
-                saveStatus(ok = false, message = result.message)
+                saveStatus(ok = false, message = result.message, isNetworkAttempt = true)
                 Result.failure(IllegalStateException(result.message))
             }
         }
@@ -715,13 +726,28 @@ class CloudTelemetrySender @Inject constructor(
         )
     }
 
-    private suspend fun saveStatus(ok: Boolean, message: String, ack: String? = null) {
+    /**
+     * `last sync` describes a real HTTP attempt, not an in-memory telemetry tick. Persisting the
+     * same waiting/configuration status once is enough for the UI and avoids three settings writes
+     * per poll while Wi-Fi is unavailable.
+     */
+    private suspend fun saveStatus(
+        ok: Boolean,
+        message: String,
+        ack: String? = null,
+        isNetworkAttempt: Boolean = false,
+    ) {
+        val status = PersistedStatus(ok, message, ack)
+        if (!isNetworkAttempt && status == lastPersistedStatus) return
         settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_OK, ok.toString())
         settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ERROR, message)
-        settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS, System.currentTimeMillis().toString())
+        if (isNetworkAttempt) {
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_TS, System.currentTimeMillis().toString())
+        }
         if (ack != null) {
             settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, ack)
         }
+        lastPersistedStatus = status
     }
 
     private fun isWifiConnected(): Boolean {
@@ -742,6 +768,12 @@ class CloudTelemetrySender @Inject constructor(
         val vehicleId: String,
         val wifiOnly: Boolean,
         val flushIntervalSec: Long,
+    )
+
+    private data class PersistedStatus(
+        val ok: Boolean,
+        val message: String,
+        val ack: String?,
     )
 
     private data class QueueDecision(

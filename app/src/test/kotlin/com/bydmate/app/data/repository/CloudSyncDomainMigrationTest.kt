@@ -95,6 +95,10 @@ class CloudSyncDomainMigrationTest {
         override suspend fun set(setting: SettingEntity) {
             store[setting.key] = setting.value ?: ""
         }
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            store[SettingsRepository.KEY_LAST_KNOWN_SOC] = soc
+            store[SettingsRepository.KEY_LAST_SOC_TIMESTAMP] = timestamp
+        }
         override fun getAll(): Flow<List<SettingEntity>> =
             flowOf(store.map { SettingEntity(it.key, it.value) })
     }

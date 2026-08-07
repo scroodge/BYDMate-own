@@ -17,6 +17,10 @@ class ChargingStateStoreTest {
         override suspend fun get(key: String): String? = map[key]
         override fun observe(key: String): Flow<String?> = flowOf(map[key])
         override suspend fun set(entity: SettingEntity) { map[entity.key] = entity.value ?: "" }
+        override suspend fun setLastKnownSoc(soc: String, timestamp: String) {
+            map["last_known_soc"] = soc
+            map["last_soc_timestamp"] = timestamp
+        }
         override fun getAll(): Flow<List<SettingEntity>> = flowOf(emptyList())
     }
 

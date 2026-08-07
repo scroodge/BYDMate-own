@@ -152,6 +152,11 @@ class TrackingService : Service(), LocationListener {
     private val flushInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pendingCloudFlush = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var lastSohBatteryReadMs: Long = 0L
+    // Persisted independently from the per-tick in-memory telemetry state. See
+    // LastKnownSocPersistencePolicy: an offline-charge baseline must survive an abrupt stop,
+    // but does not need two SQLite writes every second while SOC is unchanged.
+    @Volatile private var lastPersistedSoc: Int? = null
+    @Volatile private var lastPersistedSocAtMs: Long = 0L
 
     companion object {
         private const val TAG = "TrackingService"
@@ -763,6 +768,7 @@ class TrackingService : Service(), LocationListener {
                 try {
                     val data = diParsClient.fetch()
                     if (data != null) {
+                        val nowMs = System.currentTimeMillis()
                         consecutiveNullCount = 0
                         lastDiPlusRelaunchTs = 0L
                         currentPollIntervalMs = POLL_INTERVAL_MS
@@ -776,7 +782,17 @@ class TrackingService : Service(), LocationListener {
 
                         // Save SOC for retrospective charge detection
                         data.soc?.let { soc ->
-                            settingsRepository.saveLastKnownSoc(soc)
+                            if (LastKnownSocPersistencePolicy.shouldPersist(
+                                    currentSoc = soc,
+                                    previousSoc = lastPersistedSoc,
+                                    previousCapturedAtMs = lastPersistedSocAtMs,
+                                    nowMs = nowMs,
+                                )
+                            ) {
+                                settingsRepository.saveLastKnownSoc(soc, nowMs)
+                                lastPersistedSoc = soc
+                                lastPersistedSocAtMs = nowMs
+                            }
                         }
 
                         // Power accumulator for AC/DC classification. DiPars `power` is
@@ -816,7 +832,6 @@ class TrackingService : Service(), LocationListener {
                         val loc = _lastLocation.value
                         tripTracker.onData(data, loc)
 
-                        val nowMs = System.currentTimeMillis()
                         val sessionId = updateSessionState(nowMs, data)
 
                         odometerBuffer.onSample(
