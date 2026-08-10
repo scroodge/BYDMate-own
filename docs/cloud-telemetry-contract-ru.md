@@ -413,7 +413,8 @@ APK не отправляет каждый poll напрямую. Сначала
 ## Payload tiers
 
 - **Idle-only:** slim JSON — SOC, charging/SoH и compact `diplus` status (`gear`, gun,
-  power-state, 12V) при наличии; без traction `power_kw`.
+  power-state, 12V, давление во всех четырёх шинах) при наличии; без traction
+  `power_kw`.
 - **Moving/charging:** включает `power_kw`, температуры, odometer/trip fields и расширенный
   `diplus` при наличии Di+.
 - Null-поля **не сериализуются** (omit nulls).

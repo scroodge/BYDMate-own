@@ -136,6 +136,17 @@ The sysfs fallback is expected to report `EACCES` on the verified DiLink 3 Andro
 infer DiLink 5 compatibility from that unit: retain the corresponding startup and first-use lines
 with the car's Android/API values.
 
+### Bounded post-park wake window
+
+On an observed DiPars transition from power-on (`powerState >= 1`) to power-off, the daemon keeps
+its partial wakelock for **30 minutes**, even when the charge gun is unplugged. This preserves a
+responsive status/command handoff after parking without making the 12 V battery power the head unit
+indefinitely. The budget is intentionally non-renewing and process-local: a daemon restart while
+the car is already off, periodic platform wakes, or incomplete DiPars data cannot create a new
+window. A later power-on clears it immediately. Logs show `parked wake window started` and the
+normal wakelock acquire/release evidence; verify a parked 30-minute run on-car before relying on it
+for remote control latency.
+
 ### Launcher source of truth
 
 There are two copies of the watchdog launcher in the repository:

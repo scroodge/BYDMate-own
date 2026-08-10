@@ -272,6 +272,15 @@ object CommandDaemon {
     internal const val SUSPEND_REPORT_THRESHOLD_MS = 30_000L
 
     /**
+     * A single, deliberately non-renewing wake budget after an observed ignition-off transition.
+     *
+     * This restores responsive telemetry immediately after parking without treating an unplugged
+     * head unit as an indefinitely powered server. It is intentionally in-memory: a daemon
+     * restart while the car is already off must not create a fresh budget.
+     */
+    internal const val PARKED_UNPLUGGED_WAKE_WINDOW_MS = 30L * 60_000L
+
+    /**
      * Total time the SoC has spent suspended since boot: `elapsedRealtime` counts deep sleep,
      * `uptimeMillis` does not, so their difference is exactly that. Both are Context-free static
      * reads, which is what makes suspend measurable from a daemon that has no Context.
@@ -296,15 +305,44 @@ object CommandDaemon {
      *  - **gun connected** (`chargeGunState in 2..5`, matching [shouldUseAutoserviceFallback]) — the
      *    car is on shore power, so there is no 12 V cost, and this is the state whose SOC curve and
      *    cell-delta tail need every row.
+     *  - **the first 30 minutes after an observed ignition-off transition** — the highest-value
+     *    handoff window for the driver, bounded by [PARKED_UNPLUGGED_WAKE_WINDOW_MS] and never
+     *    recreated by daemon restarts or later parked wakes.
      *  - **fast mode active** — someone has the live view open. Bounded by `liveFastUntilMs`, which
      *    is extend-only with an expiry, so a crashed tab cannot strand the car awake.
      *
-     * Parked and unplugged, the daemon lets the platform suspend it. Reporting then stays on the
-     * platform's own wake rhythm; the PWA is what must say "asleep" rather than "offline" for that
-     * window. Freshness there is bounded by the platform, not by anything this file can set.
+     * After that bounded window, parked and unplugged, the daemon lets the platform suspend it.
+     * Reporting then stays on the platform's own wake rhythm; the PWA is what must say "asleep"
+     * rather than "offline" for that window. Freshness there is bounded by the platform, not by
+     * anything this file can set.
      */
-    internal fun shouldHoldWakeLock(now: Long, liveFastUntilMs: Long, gunState: Int?): Boolean =
-        now < liveFastUntilMs || (gunState != null && gunState in 2..5)
+    internal fun shouldHoldWakeLock(
+        now: Long,
+        liveFastUntilMs: Long,
+        gunState: Int?,
+        parkedWakeUntilMs: Long = 0L,
+    ): Boolean =
+        now < liveFastUntilMs ||
+            now < parkedWakeUntilMs ||
+            (gunState != null && gunState in 2..5)
+
+    /**
+     * Starts the bounded parked wake window only when this daemon actually sees the car turn off.
+     * A missing value is not treated as power-off: DiPars can be incomplete, and guessing here
+     * would accidentally create a 12 V drain window. A later power-on clears the old budget.
+     */
+    internal fun nextParkedWakeUntilMs(
+        now: Long,
+        previousPowerState: Int?,
+        currentPowerState: Int?,
+        existingWakeUntilMs: Long,
+    ): Long {
+        if (currentPowerState != null && currentPowerState >= 1) return 0L
+        val observedPowerOff =
+            previousPowerState != null && previousPowerState >= 1 &&
+                currentPowerState != null && currentPowerState < 1
+        return if (observedPowerOff) now + PARKED_UNPLUGGED_WAKE_WINDOW_MS else existingWakeUntilMs
+    }
 
     private enum class WakeLockBackend { POWER_MANAGER, SYSFS }
 
@@ -618,6 +656,10 @@ object CommandDaemon {
         // call site, not by these two.
         var lastKnownGear: Int? = null
         var lastKnownGunState: Int? = null
+        // A post-park budget is only started by a witnessed power-on -> power-off transition.
+        // Keeping both values process-local is intentional: a restarted daemon must stay safe.
+        var lastSeenPowerState: Int? = null
+        var parkedWakeUntilMs = 0L
         // Suspend accounting. Deep sleep is cumulative since boot, so the *difference* between
         // two wakes is how long the platform froze this loop. Without this the daemon cannot tell
         // "nothing happened for 15 minutes" from "I was not running for 15 minutes" — which is
@@ -674,10 +716,36 @@ object CommandDaemon {
                     val gunNow = latestData?.chargeGunState
                     val gunChanged = lastSeenGun != null && gunNow != null && gunNow != lastSeenGun
                     if (gunNow != null) lastSeenGun = gunNow
+                    val powerNow = latestData?.powerState
+                    if (powerNow != null) {
+                        val nextWakeUntilMs = nextParkedWakeUntilMs(
+                            now = now,
+                            previousPowerState = lastSeenPowerState,
+                            currentPowerState = powerNow,
+                            existingWakeUntilMs = parkedWakeUntilMs,
+                        )
+                        if (nextWakeUntilMs > parkedWakeUntilMs) {
+                            log(
+                                "parked wake window started for " +
+                                    "${PARKED_UNPLUGGED_WAKE_WINDOW_MS / 60_000}min after power-off",
+                            )
+                        } else if (parkedWakeUntilMs != 0L && nextWakeUntilMs == 0L) {
+                            log("parked wake window ended: power restored")
+                        }
+                        parkedWakeUntilMs = nextWakeUntilMs
+                        lastSeenPowerState = powerNow
+                    }
                     // Hold the suspend blocker only where it is useful and safe — see
                     // [shouldHoldWakeLock]. Re-evaluated on every wake, not only when pushing, so
-                    // an unplug releases it immediately instead of at the next cadence tick.
-                    setWakeLock(shouldHoldWakeLock(now, liveFastUntilMs, gunNow))
+                    // a restored power state and the bounded parked window take effect promptly.
+                    setWakeLock(
+                        shouldHoldWakeLock(
+                            now = now,
+                            liveFastUntilMs = liveFastUntilMs,
+                            gunState = gunNow,
+                            parkedWakeUntilMs = parkedWakeUntilMs,
+                        ),
+                    )
                     val plan = planPush(
                         now = now,
                         lastTelemetryPushAt = lastTelemetryPushAt,

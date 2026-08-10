@@ -123,14 +123,14 @@ lat/lon are missing (see §4).
 
 **`diplus {}` — two different shapes.**
 
-- **Parked** (8): `soc`, `gear`, `charge_gun_state`, `speed_kmh`, `power_state`,
-  `voltage_12v`, `sentry_state`, `stall_sentry_mode`
-- **Not parked** (23): `soc`, `gear`, `max/avg/min_battery_temp_c`,
+- **Parked** (12): `soc`, `gear`, `charge_gun_state`, `speed_kmh`, `power_state`,
+  `voltage_12v`, `tire_press_fl/fr/rl/rr_kpa`, `sentry_state`, `stall_sentry_mode`
+- **Not parked** (27): `soc`, `gear`, `max/avg/min_battery_temp_c`,
   `battery_capacity_kwh`, `total_elec_consumption_kwh`, `voltage_12v`,
   `max_cell_voltage_v`, `min_cell_voltage_v`, `cell_delta_v` (all 4 dp),
   `sunshade_percent`, `sentry_state`, `remote_lock_state`,
-  `window_fl/fr/rl/rr_percent`, `sunroof_percent`, `lock_fl`, `ac_status`, `ac_temp_c`,
-  `inside_temp_c`
+  `window_fl/fr/rl/rr_percent`, `sunroof_percent`, `lock_fl`,
+  `tire_press_fl/fr/rl/rr_kpa`, `ac_status`, `ac_temp_c`, `inside_temp_c`
 - **Driving or charging adds 5 more**: `speed_kmh`, `mileage_km`, `power_kw`,
   `charge_gun_state`, `charging_status`
 

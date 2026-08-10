@@ -385,6 +385,70 @@ class CommandDaemonTest {
     }
 
     @Test
+    fun `an observed power-off starts one bounded parked wake window`() {
+        val until = CommandDaemon.nextParkedWakeUntilMs(
+            now = t0,
+            previousPowerState = 1,
+            currentPowerState = 0,
+            existingWakeUntilMs = 0L,
+        )
+
+        assertEquals(t0 + CommandDaemon.PARKED_UNPLUGGED_WAKE_WINDOW_MS, until)
+        assertTrue(
+            CommandDaemon.shouldHoldWakeLock(
+                now = until - 1,
+                liveFastUntilMs = 0L,
+                gunState = 1,
+                parkedWakeUntilMs = until,
+            ),
+        )
+        assertFalse(
+            CommandDaemon.shouldHoldWakeLock(
+                now = until,
+                liveFastUntilMs = 0L,
+                gunState = 1,
+                parkedWakeUntilMs = until,
+            ),
+        )
+    }
+
+    @Test
+    fun `parked wake budget never starts or renews without a real power-off transition`() {
+        val existing = t0 + 10_000L
+        assertEquals(
+            0L,
+            CommandDaemon.nextParkedWakeUntilMs(
+                now = t0,
+                previousPowerState = null,
+                currentPowerState = 0,
+                existingWakeUntilMs = 0L,
+            ),
+        )
+        assertEquals(
+            existing,
+            CommandDaemon.nextParkedWakeUntilMs(
+                now = t0,
+                previousPowerState = 0,
+                currentPowerState = 0,
+                existingWakeUntilMs = existing,
+            ),
+        )
+    }
+
+    @Test
+    fun `powering back on clears the parked wake budget`() {
+        assertEquals(
+            0L,
+            CommandDaemon.nextParkedWakeUntilMs(
+                now = t0,
+                previousPowerState = 0,
+                currentPowerState = 1,
+                existingWakeUntilMs = t0 + CommandDaemon.PARKED_UNPLUGGED_WAKE_WINDOW_MS,
+            ),
+        )
+    }
+
+    @Test
     fun `a plugged in car stays awake because shore power pays for it`() {
         // 2..5 mirrors shouldUseAutoserviceFallback's connected range.
         assertTrue(CommandDaemon.shouldHoldWakeLock(now = t0, liveFastUntilMs = 0L, gunState = 2))

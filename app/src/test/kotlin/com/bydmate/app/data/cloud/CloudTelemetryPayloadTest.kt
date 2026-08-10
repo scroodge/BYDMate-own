@@ -108,6 +108,10 @@ class CloudTelemetryPayloadTest {
 
         assertEquals(1, diPlus.getInt("gear"))
         assertEquals(1, diPlus.getInt("charge_gun_state"))
+        assertEquals(240, diPlus.getInt("tire_press_fl_kpa"))
+        assertEquals(241, diPlus.getInt("tire_press_fr_kpa"))
+        assertEquals(239, diPlus.getInt("tire_press_rl_kpa"))
+        assertEquals(242, diPlus.getInt("tire_press_rr_kpa"))
     }
 
     @Test
@@ -158,6 +162,40 @@ class CloudTelemetryPayloadTest {
         assertEquals(3456.0, diPlus.getDouble("total_elec_consumption_kwh"), 0.0001)
         assertEquals(0.01, diPlus.getDouble("cell_delta_v"), 0.0001)
         assertEquals(4, diPlus.getInt("gear"))
+        assertEquals(240, diPlus.getInt("tire_press_fl_kpa"))
+        assertEquals(241, diPlus.getInt("tire_press_fr_kpa"))
+        assertEquals(239, diPlus.getInt("tire_press_rl_kpa"))
+        assertEquals(242, diPlus.getInt("tire_press_rr_kpa"))
+    }
+
+    @Test
+    fun `payload omits unknown tyre pressures`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(
+                maxCellVoltage = null,
+                minCellVoltage = null,
+                tirePressFL = null,
+                tirePressFR = null,
+                tirePressRL = null,
+                tirePressRR = null,
+            ),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val diPlus = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+            .getJSONObject("diplus")
+
+        assertEquals(false, diPlus.has("tire_press_fl_kpa"))
+        assertEquals(false, diPlus.has("tire_press_fr_kpa"))
+        assertEquals(false, diPlus.has("tire_press_rl_kpa"))
+        assertEquals(false, diPlus.has("tire_press_rr_kpa"))
     }
 
     @Test
@@ -311,6 +349,10 @@ class CloudTelemetryPayloadTest {
         minCellVoltage: Double?,
         speed: Int = 0,
         gear: Int = 1,
+        tirePressFL: Int? = 240,
+        tirePressFR: Int? = 241,
+        tirePressRL: Int? = 239,
+        tirePressRR: Int? = 242,
     ) = DiParsData(
         soc = 73,
         speed = speed,
@@ -347,10 +389,10 @@ class CloudTelemetryPayloadTest {
         hood = 0,
         seatbeltFL = 1,
         lockFL = 2,
-        tirePressFL = 240,
-        tirePressFR = 241,
-        tirePressRL = 239,
-        tirePressRR = 242,
+        tirePressFL = tirePressFL,
+        tirePressFR = tirePressFR,
+        tirePressRL = tirePressRL,
+        tirePressRR = tirePressRR,
         driveMode = 1,
         workMode = 1,
         autoPark = 0,
