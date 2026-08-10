@@ -520,7 +520,8 @@ object CommandDaemon {
      *
      * The beacon is written at **1 Hz**: `TrackingService`'s poll loop calls
      * `maybeSendCloudTelemetry` on every successful DiPars read (`POLL_INTERVAL_MS = 1000`),
-     * and the write happens unconditionally after `enqueue`. Its age is therefore a
+     * and the write happens unconditionally before `enqueue` — deliberately ahead of it, so
+     * a failure in the queue or settings layer cannot mute the beacon. Its age is therefore a
      * fine-grained "is the app's loop still turning" signal, not a coarse per-flush one —
      * which is what lets the thresholds below be seconds rather than minutes.
      */

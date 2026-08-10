@@ -505,14 +505,20 @@ class TrackingService : Service(), LocationListener {
                 ) {
                     return@launch
                 }
-                cloudTelemetrySender.enqueue(snapshot).onFailure { e ->
-                    Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
-                }
                 // Liveness beacon for the survival daemon: while this app is sending,
                 // CommandDaemon must NOT push its own 60s telemetry heartbeat (it would
                 // duplicate samples and risk phantom trips). The daemon reads this file
                 // and skips its push when the timestamp is fresh.
+                //
+                // Written *before* enqueue, not after. The beacon asserts "this app's poll
+                // loop is still turning", which is true whether or not this particular
+                // enqueue succeeds. Writing it afterwards coupled the two: one throw out of
+                // the queue/settings layer stopped the beacon as well, and the daemon —
+                // seeing a stale beacon — silently took over the telemetry stream.
                 writeAppAliveHeartbeat()
+                cloudTelemetrySender.enqueue(snapshot).onFailure { e ->
+                    Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
+                }
                 flushCloudTelemetryQueue()
             } catch (e: Exception) {
                 Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
@@ -780,7 +786,15 @@ class TrackingService : Service(), LocationListener {
                         alicePollingManager.latestData = data
                         vehicleCommandPoller.latestData = data
 
-                        // Save SOC for retrospective charge detection
+                        // Save SOC for retrospective charge detection.
+                        //
+                        // Isolated from the rest of the tick on purpose. This is a
+                        // best-effort baseline for offline-charge recovery, but it sits
+                        // upstream of maybeSendCloudTelemetry — so before this guard, a
+                        // single throw here (Room, disk, SQL) aborted the whole iteration
+                        // into the "Polling error" catch below, taking cloud telemetry AND
+                        // the daemon liveness beacon down with it. Losing one SOC row is
+                        // cheap; losing the 1 Hz cloud stream is not.
                         data.soc?.let { soc ->
                             if (LastKnownSocPersistencePolicy.shouldPersist(
                                     currentSoc = soc,
@@ -789,9 +803,14 @@ class TrackingService : Service(), LocationListener {
                                     nowMs = nowMs,
                                 )
                             ) {
-                                settingsRepository.saveLastKnownSoc(soc, nowMs)
-                                lastPersistedSoc = soc
-                                lastPersistedSocAtMs = nowMs
+                                try {
+                                    settingsRepository.saveLastKnownSoc(soc, nowMs)
+                                    lastPersistedSoc = soc
+                                    lastPersistedSocAtMs = nowMs
+                                } catch (e: Exception) {
+                                    // Leave lastPersistedSoc untouched so the next tick retries.
+                                    Log.w(TAG, "saveLastKnownSoc failed: ${e.message}", e)
+                                }
                             }
                         }
 
