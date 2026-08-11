@@ -609,7 +609,16 @@ vehicle id are present — the same hard gate applies to telemetry and trip summ
 ## 10. Release rules worth knowing
 
 - **Debug APK only.** The installed app is debug-signed; a release-signed APK fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, and uninstalling to swap signatures wipes the in-app cloud config. Build with `./gradlew testDebugUnitTest assembleDebug`.
-- **A release is not done when the build passes.** It is done when fresh rows appear in `bydmate_telemetry_samples` / `bydmate_live_snapshots` **after** the install. An APK that builds and installs but stops sending telemetry is a failed release — that shipped once, in v0.4.1.
+- **A release is not done when the build passes.** It is done when fresh rows appear in `bydmate_telemetry_samples` / `bydmate_live_snapshots` **after** the install. An APK that builds and installs but stops sending telemetry is a failed release — that shipped in v0.4.1, and again in the 0.5.2 cycle (a Room `@Query` the car's SQLite could not compile; green build, green tests, four days of silence).
+- **Post-install smoke check — run it every time, it takes one minute.** A green build proves nothing about the head unit. With the car on ADB:
+
+  ```sh
+  adb logcat -c && sleep 60
+  adb logcat -d -s TrackingService:* | grep -cE "Polling error|saveLastKnownSoc failed"   # must be 0
+  adb shell 'echo $(( $(date +%s%3N) - $(cat /storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_mate_heartbeat) ))'
+  ```
+
+  The beacon age must be **seconds, not minutes**. A stale beacon means the app's 1 Hz poll loop is dying before it reaches the cloud push, and the daemon has silently taken over — from the cloud side that looks like working telemetry at a much coarser cadence, which is exactly why the 0.5.2 regression went unnoticed for four days. Distinguish the two senders by timestamp precision: **the app emits sub-second `device_time`, the daemon emits whole seconds.**
 - **Verify the launcher copies match** before any release touching the watchdog:
   `cmp -s tools/start_voltflow_cmd.sh app/src/main/assets/start_voltflow_cmd.sh`.
 - Auto-update reads `api.github.com/repos/scroodge/BYDMate-own/releases/latest` and picks the first `.apk` asset of the newest release.
@@ -623,3 +632,4 @@ vehicle id are present — the same hard gate applies to telemetry and trip summ
 - **A full `nativestack` port was evaluated and rejected** — ~40 per-vehicle-validated fids, more on-device ADB load, and no new data, while D+ still cannot be removed (its stall-sentry keeps the head unit awake while parked and it is the only actuation channel).
 - **D+ still cannot be dropped.** B-07 (replacing D+ reads with direct autoservice reads) has *partly* shipped: the daemon now sends an autoservice-only payload while parked/charging when D+ is stale (§7). But driving still relies on D+ for reads, the app's own loop has no fallback, and D+ remains the only actuation channel and stall-sentry — so the dependency stands.
 - **Termux and Shizuku do not bypass the platform lock.** They need the same one-time ADB/root bootstrap. The unlock is done on the tablet, without a computer, but it cannot be skipped.
+- **The head unit's SQLite is older than its Android version implies — no UPSERT.** DiLink reports `ro.build.version.release=10` / `sdk=29`, but it does *not* ship stock Android 10's SQLite 3.28. `INSERT ... ON CONFLICT(...) DO UPDATE` (SQLite 3.24+) fails at statement-prepare time with `near "ON": syntax error (code 1 SQLITE_ERROR)`. Write raw Room SQL against roughly **3.22-era syntax**: use `INSERT OR REPLACE`, or Room's `@Upsert`, which generates INSERT-then-UPDATE. **This is invisible locally** — Room validates `@Query` against its own bundled SQLite grammar at build time, so `compileDebugKotlin` and the full unit-test suite pass a statement the car cannot parse. It only fails on the head unit, at runtime. See the v0.5.2 entry in `CHANGELOG.md` for the four-day outage this caused.
