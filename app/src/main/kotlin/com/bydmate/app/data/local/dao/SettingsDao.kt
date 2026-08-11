@@ -18,14 +18,20 @@ interface SettingsDao {
     suspend fun set(setting: SettingEntity)
 
     /**
-     * Keep the offline-charge baseline coherent if the process dies between writes.
-     * Android 10's SQLite supports this single-statement UPSERT form.
+     * Keep the offline-charge baseline coherent if the process dies between writes: both rows
+     * land in a single statement, so a kill can never leave the SOC without its capture time.
+     *
+     * `INSERT OR REPLACE`, deliberately not `ON CONFLICT ... DO UPDATE`. The UPSERT form needs
+     * SQLite 3.24+, and while the DiLink head unit reports Android 10 it ships an older SQLite
+     * than stock: it fails to compile the UPSERT with `near "ON": syntax error`, which threw on
+     * every 1 Hz poll tick and silently took the whole cloud telemetry stream down with it.
+     * REPLACE is equivalent here because `settings` is a bare (key, value) table — no sibling
+     * columns to preserve on row replacement, and nothing references it.
      */
     @Query(
         """
-        INSERT INTO settings (`key`, value)
+        INSERT OR REPLACE INTO settings (`key`, value)
         VALUES ('last_known_soc', :soc), ('last_soc_timestamp', :timestamp)
-        ON CONFLICT(`key`) DO UPDATE SET value = excluded.value
         """
     )
     suspend fun setLastKnownSoc(soc: String, timestamp: String)
