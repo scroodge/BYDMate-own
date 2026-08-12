@@ -1,9 +1,16 @@
 ---
-status: accepted
+status: superseded by ADR-0003
 date: 2026-08-12
 ---
 
 # 0001 — Target a single vehicle; carry no backward compatibility for older APKs
+
+> **Superseded on 2026-08-12, the same day it was written, by
+> [ADR-0003](0003-support-oldest-apk-in-field.md).** Its central premise is false:
+> production carried 10 distinct vehicles on three APK versions
+> (`0.5.2` / `0.5.1.1` / `0.5.0`) at the time of writing. Nothing below should be
+> acted on. Retained because the "trap for anyone reversing this" section turned out
+> to describe precisely what had *already happened*.
 
 ## Context
 

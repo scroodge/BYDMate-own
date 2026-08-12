@@ -83,8 +83,20 @@ awake; outside the parked wake window there is nothing running to re-assert anyt
 
 ## Delivery
 
-**Vehicle** — one car, identified by a **vehicle id**. This project targets exactly
-one; see [ADR-0001](docs/adr/0001-single-vehicle-deployment.md).
+**Vehicle** — one car, identified by a **vehicle id**. The vehicle id *is* the
+owner-chosen display name, and it is the identity every table keys on, so renaming a
+car mints a new one and orphans everything filed under the old. Name and identity are
+the same string; they are not the same idea, and treating them as one is a known
+defect (B-03), not a design.
+
+**Fleet** — every car sending telemetry, not only the car changes are tested on.
+Larger than one, running several APK versions at once; which versions are in use is a
+fact to be measured rather than assumed. See
+[ADR-0003](docs/adr/0003-support-oldest-apk-in-field.md).
+
+**Support floor** — the oldest APK version still sending data, and therefore the
+oldest payload shape the cloud must keep accepting. A measurement with an expiry,
+never a promise.
 
 **Pairing** — binding a car to a cloud account via a short-lived code, after which
 the APK holds a key and pushes under that identity.
