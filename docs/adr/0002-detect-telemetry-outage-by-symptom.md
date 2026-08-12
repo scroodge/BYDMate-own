@@ -44,6 +44,42 @@ This is not shipped until it has been **backtested against the 7–10 August win
 which is still inside the 90-day premium retention. An alarm that cannot be shown to
 fire on the outage that motivated it has not been verified.
 
+## Backtest result (2026-08-12) — the threshold above is wrong; use inter-sample gap
+
+The backtest this ADR made a precondition was run against `way`, 6–12 August. It
+**rejected the count-based threshold specified above.** The decision — detect the
+symptom, cloud-side — stands unchanged; only the discriminator is corrected.
+
+Counting samples per fixed 10-minute window fires on the outage (8/08, 8/10) but
+*also* fires 2–3 times a day on healthy days: 8/06 → 2, 8/07 → 2, 8/11 → 3,
+8/12 → 1. Eight false alarms against two true ones. The cause is boundary windows —
+a drive beginning at 10:37 leaves a bucket holding 16 samples, and a count rule
+cannot distinguish that from a collapse. An alarm firing twice a day gets muted,
+which reproduces precisely the failure this ADR exists to prevent.
+
+The **gap between consecutive samples taken while moving** separates cleanly:
+
+| | median gap | p90 gap |
+|---|---|---|
+| Healthy (8/06, 8/07, 8/11, 8/12) | 1.22–1.25 s | 1.34–1.40 s |
+| Outage (8/08, 8/10) | 98,216 s / 192,592 s | — |
+
+Five orders of magnitude, with healthy p90 never above 1.40 s. It is scale-free, so
+partial windows cannot trip it. **Alert when a sample arrives with
+`diplus_speed_kmh > 0` and a gap from the previous moving sample exceeding ~5 s**
+(≈3.5× the healthy p90; anything from 3 s to 90,000 s is defensible).
+
+Measure the gap between *moving* samples only. Gaps spanning a parked period are
+routinely 5–14 hours on perfectly healthy days and mean nothing.
+
+**Known blind spot.** The gap rule is triggered by an arriving moving sample, so a
+day with no moving samples at all cannot fire it — 8/09 had zero and would have been
+missed. Detection would still have landed on 8/08, cutting time-to-detection from
+four days to about one. Close the gap with a second, independent floor: **total
+samples over 24 h below ~500.** Outage days ran 70 / 178 / 101, while the parked
+daemon heartbeat alone should yield ~2880/day — a 3–16× margin, and an absolute
+floor rather than the trailing baseline rejected below.
+
 ## Consequences
 
 **Catches the next one too.** The rule keys on a contradiction the system cannot fake,
