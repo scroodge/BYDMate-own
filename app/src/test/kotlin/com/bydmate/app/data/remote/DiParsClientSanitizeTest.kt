@@ -11,6 +11,66 @@ import org.junit.Test
  */
 class DiParsClientSanitizeTest {
 
+    // ---- di+ 1.x / 2.x wire-format tolerance ----
+    //
+    // Captured live from car `way` on 2026-08-14 running di+ 2.0.0b1 (versionCode 158):
+    //   SOC:76.1|Speed:0|...|InsideTemp:-2000|...|Rain:-2147482648|...|Sentry:{哨兵状态}
+    // di+ 1.3.8b16 sent the same fields as whole integers. Both must parse.
+
+    @Test
+    fun fractionalSocFromDiPlus2Parsed() {
+        // The regression: toIntOrNull("76.1") == null, so SOC vanished entirely.
+        assertEquals(76.1, DiParsClient.parseNum("76.1"))
+        assertEquals(76, DiParsClient.parseIntNum("76.1"))
+    }
+
+    @Test
+    fun wholeSocFromDiPlus1Parsed() {
+        assertEquals(37.0, DiParsClient.parseNum("37"))
+        assertEquals(37, DiParsClient.parseIntNum("37"))
+    }
+
+    @Test
+    fun commaDecimalLocaleParsed() {
+        // di+ formats via NumberFormat.getInstance(), which is locale-sensitive; a head unit
+        // with a comma-decimal locale emits "76,1".
+        assertEquals(76.1, DiParsClient.parseNum("76,1"))
+        assertEquals(76, DiParsClient.parseIntNum("76,1"))
+    }
+
+    @Test
+    fun unsubstitutedPlaceholderIsNull() {
+        // di+ 2.0 leaves the placeholder in place when a parameter is gated off, rather
+        // than substituting a value. Must read as absent, never as a number.
+        assertNull(DiParsClient.parseNum("{哨兵状态}"))
+        assertNull(DiParsClient.parseIntNum("{哨兵状态}"))
+        assertNull(DiParsClient.parseNum("[电源状态]"))
+    }
+
+    @Test
+    fun sentinelsStillReachTheirSanitizers() {
+        // Confirmed unchanged in di+ 2.0.0b1 — parseIntNum must pass them through so the
+        // existing sanitizers, not the parser, remain the thing that drops them.
+        assertEquals(-2000, DiParsClient.parseIntNum("-2000"))
+        assertNull(DiParsClient.sanitizeTempC(DiParsClient.parseIntNum("-2000")))
+        assertEquals(-2147482648, DiParsClient.parseIntNum("-2147482648"))
+        assertNull(DiParsClient.sanitizeSentinelInt(DiParsClient.parseIntNum("-2147482648")))
+    }
+
+    @Test
+    fun blankAndGarbageAreNull() {
+        assertNull(DiParsClient.parseNum(null))
+        assertNull(DiParsClient.parseNum(""))
+        assertNull(DiParsClient.parseNum("   "))
+        assertNull(DiParsClient.parseNum("开启缩时哨兵"))
+    }
+
+    @Test
+    fun negativeChargePowerStillParses() {
+        assertEquals(-4.0, DiParsClient.parseNum("-4"))
+        assertEquals(-102.5, DiParsClient.parseNum("-102.5"))
+    }
+
     // ---- power ----
 
     @Test

@@ -11,6 +11,10 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 data class DiParsData(
+    /**
+     * Traction-battery SOC, whole %. Rounded from [socPrecise] so every existing
+     * consumer (trip tracking, charging detection, UI, widget) keeps integer semantics.
+     */
     val soc: Int?,
     val speed: Int?,
     val mileage: Double?,
@@ -64,6 +68,12 @@ data class DiParsData(
     val stallSentryMode: String? = null,
     /** D+ `电源状态` text, e.g. 关 / 行车 */
     val powerStateLabel: String? = null,
+    /**
+     * Unrounded SOC. di+ 2.0 reports 0.1 % resolution (`SOC:76.1`); di+ 1.x reports whole
+     * percents through the same field, so this equals [soc] there. Sent to the cloud under
+     * the existing `soc` JSON key — `diplus_soc` is `numeric`, so the decimal is preserved.
+     */
+    val socPrecise: Double? = null,
 )
 
 @Singleton
@@ -123,6 +133,38 @@ open class DiParsClient @Inject constructor(
         /** Cabin/ambient/battery temps: di+ uses -2000 (and similar) as "no data". */
         internal fun sanitizeTempC(raw: Int?): Int? =
             raw?.takeIf { it in MIN_PLAUSIBLE_TEMP_C..MAX_PLAUSIBLE_TEMP_C }
+
+        /**
+         * Single numeric gate for every di+ field, covering both di+ generations.
+         *
+         * di+ renders each numeric parameter with `NumberFormat.getInstance()` on a
+         * `double` (verified in 1.3.8b16 `s$c.b` and 2.0.0b1 `u$c.c`), so a value may be
+         * fractional and — since NumberFormat is locale-sensitive — may use a comma as
+         * the decimal separator on a non-en/zh head unit. di+ 2.0 added an availability
+         * gate: when a parameter is unavailable the lookup returns null and the
+         * placeholder is left **unsubstituted**, so the wire carries a literal
+         * `{哨兵状态}` rather than a number. Confirmed on car `way` 2026-08-14 against
+         * di+ 2.0.0b1: `SOC:76.1|...|Sentry:{哨兵状态}`.
+         *
+         * Returns null for anything that is not a number, so callers keep getting a
+         * clean absent value instead of a garbage one.
+         */
+        internal fun parseNum(raw: String?): Double? {
+            val v = raw?.trim().orEmpty()
+            if (v.isEmpty()) return null
+            // Unsubstituted placeholder: di+ 2.0 signalling "parameter unavailable".
+            if ((v.startsWith("{") && v.endsWith("}")) ||
+                (v.startsWith("[") && v.endsWith("]"))
+            ) return null
+            // Locale decimal comma -> point. di+ emits at most one separator.
+            return v.replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+        }
+
+        /** Integer-valued di+ field, tolerant of the fractional/placeholder cases above. */
+        internal fun parseIntNum(raw: String?): Int? =
+            parseNum(raw)
+                ?.takeIf { kotlin.math.abs(it) <= Int.MAX_VALUE.toDouble() }
+                ?.let { kotlin.math.round(it).toInt() }
     }
 
     // Cached getVal results (see VAL_REFRESH_INTERVAL_MS). @Volatile because fetch()
@@ -200,13 +242,13 @@ open class DiParsClient @Inject constructor(
 
         // Cell voltages: DiPlus already divides raw millivolts by 1000 → value is in volts
         // Treat <= 0 as unavailable (DiPlus returns 0.0 when BMS hasn't reported)
-        val maxCellRaw = map["MaxCellV"]?.toDoubleOrNull()
-        val minCellRaw = map["MinCellV"]?.toDoubleOrNull()
+        val maxCellRaw = parseNum(map["MaxCellV"])
+        val minCellRaw = parseNum(map["MinCellV"])
         val maxCell = maxCellRaw?.takeIf { it > 0.5 }
         val minCell = minCellRaw?.takeIf { it > 0.5 }
 
         // 12V: may come as millivolts (>100) or volts (<100); 0 = unavailable
-        val v12Raw = map["Voltage12V"]?.toDoubleOrNull()
+        val v12Raw = parseNum(map["Voltage12V"])
         val v12 = when {
             v12Raw == null || v12Raw <= 0.0 -> null
             v12Raw > 100.0 -> v12Raw / 1000.0  // millivolts → volts
@@ -219,54 +261,55 @@ open class DiParsClient @Inject constructor(
         Log.d(TAG, "Parsed: maxCell=$maxCell, minCell=$minCell, v12=$v12")
 
         return DiParsData(
-            soc = map["SOC"]?.toIntOrNull(),
-            speed = map["Speed"]?.toIntOrNull(),
-            mileage = map["Mileage"]?.toDoubleOrNull()?.let { it / 10.0 },
-            power = sanitizePowerKw(map["Power"]?.toDoubleOrNull()),
-            chargeGunState = map["ChargeGun"]?.toIntOrNull(),
-            maxBatTemp = sanitizeTempC(map["MaxBatTemp"]?.toIntOrNull()),
-            avgBatTemp = sanitizeTempC(map["AvgBatTemp"]?.toIntOrNull()),
-            minBatTemp = sanitizeTempC(map["MinBatTemp"]?.toIntOrNull()),
-            chargingStatus = map["ChargingStatus"]?.toIntOrNull(),
-            batteryCapacityKwh = map["BatCapacity"]?.toDoubleOrNull(),
-            totalElecConsumption = map["TotalElecCon"]?.toDoubleOrNull(),
+            soc = parseIntNum(map["SOC"]),
+            socPrecise = parseNum(map["SOC"]),
+            speed = parseIntNum(map["Speed"]),
+            mileage = parseNum(map["Mileage"])?.let { it / 10.0 },
+            power = sanitizePowerKw(parseNum(map["Power"])),
+            chargeGunState = parseIntNum(map["ChargeGun"]),
+            maxBatTemp = sanitizeTempC(parseIntNum(map["MaxBatTemp"])),
+            avgBatTemp = sanitizeTempC(parseIntNum(map["AvgBatTemp"])),
+            minBatTemp = sanitizeTempC(parseIntNum(map["MinBatTemp"])),
+            chargingStatus = parseIntNum(map["ChargingStatus"]),
+            batteryCapacityKwh = parseNum(map["BatCapacity"]),
+            totalElecConsumption = parseNum(map["TotalElecCon"]),
             voltage12v = v12,
             maxCellVoltage = maxCell,
             minCellVoltage = minCell,
-            exteriorTemp = sanitizeTempC(map["ExtTemp"]?.toIntOrNull()),
-            gear = map["Gear"]?.toIntOrNull(),
-            powerState = map["PowerState"]?.toIntOrNull(),
-            insideTemp = sanitizeTempC(map["InsideTemp"]?.toIntOrNull()),
-            acStatus = map["ACStatus"]?.toIntOrNull(),
-            acTemp = map["ACTemp"]?.toIntOrNull(),
-            fanLevel = map["FanLevel"]?.toIntOrNull(),
-            acCirc = map["ACCirc"]?.toIntOrNull(),
-            doorFL = map["DoorFL"]?.toIntOrNull(),
-            doorFR = map["DoorFR"]?.toIntOrNull(),
-            doorRL = map["DoorRL"]?.toIntOrNull(),
-            doorRR = map["DoorRR"]?.toIntOrNull(),
-            windowFL = map["WindowFL"]?.toIntOrNull(),
-            windowFR = map["WindowFR"]?.toIntOrNull(),
-            windowRL = map["WindowRL"]?.toIntOrNull(),
-            windowRR = map["WindowRR"]?.toIntOrNull(),
-            sunroof = map["Sunroof"]?.toIntOrNull(),
-            trunk = map["Trunk"]?.toIntOrNull(),
-            hood = map["Hood"]?.toIntOrNull(),
-            seatbeltFL = map["SeatbeltFL"]?.toIntOrNull(),
-            lockFL = map["LockFL"]?.toIntOrNull(),
-            tirePressFL = map["TirePressFL"]?.toIntOrNull(),
-            tirePressFR = map["TirePressFR"]?.toIntOrNull(),
-            tirePressRL = map["TirePressRL"]?.toIntOrNull(),
-            tirePressRR = map["TirePressRR"]?.toIntOrNull(),
-            driveMode = map["DriveMode"]?.toIntOrNull(),
-            workMode = map["WorkMode"]?.toIntOrNull(),
-            autoPark = map["AutoPark"]?.toIntOrNull(),
-            rain = sanitizeSentinelInt(map["Rain"]?.toIntOrNull()),
-            lightLow = map["LightLow"]?.toIntOrNull(),
-            drl = map["DRL"]?.toIntOrNull(),
-            sunshade = map["Sunshade"]?.toIntOrNull(),
-            sentryState = map["Sentry"]?.toIntOrNull(),
-            remoteLockState = map["RemoteLock"]?.toIntOrNull(),
+            exteriorTemp = sanitizeTempC(parseIntNum(map["ExtTemp"])),
+            gear = parseIntNum(map["Gear"]),
+            powerState = parseIntNum(map["PowerState"]),
+            insideTemp = sanitizeTempC(parseIntNum(map["InsideTemp"])),
+            acStatus = parseIntNum(map["ACStatus"]),
+            acTemp = parseIntNum(map["ACTemp"]),
+            fanLevel = parseIntNum(map["FanLevel"]),
+            acCirc = parseIntNum(map["ACCirc"]),
+            doorFL = parseIntNum(map["DoorFL"]),
+            doorFR = parseIntNum(map["DoorFR"]),
+            doorRL = parseIntNum(map["DoorRL"]),
+            doorRR = parseIntNum(map["DoorRR"]),
+            windowFL = parseIntNum(map["WindowFL"]),
+            windowFR = parseIntNum(map["WindowFR"]),
+            windowRL = parseIntNum(map["WindowRL"]),
+            windowRR = parseIntNum(map["WindowRR"]),
+            sunroof = parseIntNum(map["Sunroof"]),
+            trunk = parseIntNum(map["Trunk"]),
+            hood = parseIntNum(map["Hood"]),
+            seatbeltFL = parseIntNum(map["SeatbeltFL"]),
+            lockFL = parseIntNum(map["LockFL"]),
+            tirePressFL = parseIntNum(map["TirePressFL"]),
+            tirePressFR = parseIntNum(map["TirePressFR"]),
+            tirePressRL = parseIntNum(map["TirePressRL"]),
+            tirePressRR = parseIntNum(map["TirePressRR"]),
+            driveMode = parseIntNum(map["DriveMode"]),
+            workMode = parseIntNum(map["WorkMode"]),
+            autoPark = parseIntNum(map["AutoPark"]),
+            rain = sanitizeSentinelInt(parseIntNum(map["Rain"])),
+            lightLow = parseIntNum(map["LightLow"]),
+            drl = parseIntNum(map["DRL"]),
+            sunshade = parseIntNum(map["Sunshade"]),
+            sentryState = parseIntNum(map["Sentry"]),
+            remoteLockState = parseIntNum(map["RemoteLock"]),
             stallSentryMode = null,
             powerStateLabel = null,
         )

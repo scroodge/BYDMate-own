@@ -25,7 +25,10 @@ object CloudTelemetryPayload {
         val idleOnly = telemetryState == IternioIntervalPolicy.TelemetryState.PARKED
 
         val telemetry = JSONObject().apply {
-            putIfPresent("soc", snapshot.soc)
+            // Prefer di+ 2.0's 0.1 %-resolution SOC; `diplus_soc` is numeric cloud-side so
+            // the decimal survives. Falls back to the rounded value for di+ 1.x and for
+            // the autoservice-sourced SOC, keeping the key's type stable either way.
+            putIfPresent("soc", snapshot.diPlusData?.socPrecise ?: snapshot.soc)
             if (!idleOnly || snapshot.soc != null) {
                 putIfPresent("is_charging", snapshot.isCharging)
             }
