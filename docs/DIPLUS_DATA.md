@@ -332,6 +332,12 @@ Grouped from the dex route strings; no first-party documentation checked against
 | Video / camera | `/api/videoPreview`, `/api/videoDelete`, `/api/liveCameras`, `/api/screenRecord` |
 | Config / diagnostics | `/api/getConf`, `/api/setConf`, `/api/getExpiry`, `/api/alarms`, `/api/runStorageTest`, `/api/storageTestResult`, `/api/dumpP2000Thread` |
 
+All six probed on car `way` 2026-08-14 and answering with real data. The one with a
+concrete use is `/api/currentTrip`, which returns **fractional** `electricNetKwh` from
+di+'s own accounting — a direct answer to the integer-kW power ceiling described below.
+Tracked as **B-14** in [`BACKLOG.md`](BACKLOG.md); nothing here is consumed yet, and all
+of it is 2.0-only, so any use needs a `versionCode >= 158` check.
+
 `/api/trips` and `/api/chargings` appear in the dex here for the **first time** — the
 Apifox catalog documented them, but beta16 shipped no such route. If they work,
 `/api/chargingSessionDetail` and `/api/batteryCapacityEstimate` are the first di+-native

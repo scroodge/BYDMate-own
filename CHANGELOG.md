@@ -6,8 +6,9 @@
 
 Полные релизы с APK: <https://github.com/scroodge/BYDMate-own/releases>.
 
-> Статус checkout на 2026-08-14: готовится локальная wireless-ADB-сборка `0.5.3`
-> (`versionCode 340`); установка и проверка телеметрии на машине ещё не выполнены.
+> `v0.5.3` опубликован, wireless-ADB установлен на `way` и проверен 2026-08-14:
+> `versionCode 340`, 9a/9b/9c зелёные. Первый post-install app-сэмпл получен в
+> 16:18:08 +03 с субсекундным `device_time`; live-снимок показывает `mate_version 0.5.3`.
 
 ## [0.5.3] - 2026-08-14
 
