@@ -1,5 +1,6 @@
 package com.bydmate.app.data.cloud
 
+import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import org.json.JSONObject
@@ -7,6 +8,33 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CloudTelemetryPayloadTest {
+    @Test
+    fun `payload uses validated autoservice SOC when DiPlus omits it`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, soc = null),
+            battery = BatteryReading(
+                sohPercent = null,
+                socPercent = 61.6f,
+                lifetimeKwh = null,
+                lifetimeMileageKm = null,
+                voltage12v = null,
+                readAtMs = 1_700_000_000_000L,
+            ),
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+            .getJSONObject("telemetry")
+
+        assertEquals(62, telemetry.getInt("soc"))
+    }
+
     @Test
     fun `payload includes DiPlus cell voltages and delta`() {
         val snapshot = VehicleTelemetrySnapshot.from(
@@ -347,6 +375,7 @@ class CloudTelemetryPayloadTest {
     private fun diPlusData(
         maxCellVoltage: Double?,
         minCellVoltage: Double?,
+        soc: Int? = 73,
         speed: Int = 0,
         gear: Int = 1,
         tirePressFL: Int? = 240,
@@ -354,7 +383,7 @@ class CloudTelemetryPayloadTest {
         tirePressRL: Int? = 239,
         tirePressRR: Int? = 242,
     ) = DiParsData(
-        soc = 73,
+        soc = soc,
         speed = speed,
         mileage = 12345.0,
         power = 0.0,

@@ -10,6 +10,7 @@ import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
+import com.bydmate.app.data.remote.resolveTelemetrySoc
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -1149,7 +1150,8 @@ object CommandDaemon {
         try {
             val kwhCharged = readKwhCharged()
             val sohPercent = readSohPercent()
-            // Parity check only — logged, never sent to the cloud. See readSocPercentAutoservice.
+            // Keep the parity log and use the same validated fallback as the app sender
+            // when a Di+ update omits SOC but the independent autoservice FID is available.
             val autoserviceSoc = readSocPercentAutoservice()
             val autoservicePowerKw = readEnginePowerKwAutoservice()
             if (autoserviceSoc != null || autoservicePowerKw != null) {
@@ -1188,7 +1190,14 @@ object CommandDaemon {
                     "tires_kpa(fl/fr/rl/rr)=$tirePressures " +
                     "(diplus=${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
             )
-            val payload = buildTelemetryPayload(conf.vehicleId, data, kwhCharged, sohPercent, liveOnly).toString()
+            val payload = buildTelemetryPayload(
+                conf.vehicleId,
+                data,
+                kwhCharged,
+                sohPercent,
+                liveOnly,
+                autoserviceSoc,
+            ).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -1305,7 +1314,9 @@ object CommandDaemon {
         kwhCharged: Float? = null,
         sohPercent: Int? = null,
         liveOnly: Boolean = false,
+        autoserviceSocPercent: Float? = null,
     ): JSONObject {
+        val telemetrySoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
         val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
             d.maxCellVoltage!! - d.minCellVoltage!!
         } else {
@@ -1344,7 +1355,7 @@ object CommandDaemon {
         }
 
         val telemetry = JSONObject().apply {
-            putIfPresent("soc", d.soc); putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
+            putIfPresent("soc", telemetrySoc); putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
             putIfPresent("battery_temp_c", d.avgBatTemp?.toDouble()); putIfPresent("cabin_temp_c", d.insideTemp?.toDouble())
             putIfPresent("outside_temp_c", d.exteriorTemp?.toDouble()); putIfPresent("aux_voltage_v", d.voltage12v)
             putRounded("cell_voltage_min_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)

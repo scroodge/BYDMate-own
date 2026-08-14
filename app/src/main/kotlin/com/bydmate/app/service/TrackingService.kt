@@ -929,7 +929,10 @@ class TrackingService : Service(), LocationListener {
                             val charging = isChargingFromDiPars(data)
                             val autoserviceReady = autoserviceOn &&
                                 runCatching { autoserviceClient.isAvailable() }.getOrDefault(false)
-                            val readSnapshots = autoserviceReady && charging
+                            // Di+ 0.5.2 can return the rest of the status payload while
+                            // omitting SOC. Refresh the existing autoservice battery source in
+                            // that case so a valid live SOC keeps reaching the cloud.
+                            val readSnapshots = autoserviceReady && (charging || data.soc == null)
                             val telemetryBattery = when {
                                 readSnapshots -> runCatching {
                                     autoserviceClient.readBatterySnapshot()

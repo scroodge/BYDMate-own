@@ -4,6 +4,20 @@ import android.location.Location
 import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.autoservice.ChargingReading
 import java.time.Instant
+import kotlin.math.roundToInt
+
+/**
+ * The cloud contract carries whole-percent SOC. Prefer Di+ while it provides a valid
+ * value, then use the independently validated autoservice read when Di+ omits SOC.
+ */
+internal fun resolveTelemetrySoc(
+    diPlusSoc: Int?,
+    autoserviceSocPercent: Float?,
+): Int? =
+    diPlusSoc?.takeIf { it in 0..100 }
+        ?: autoserviceSocPercent
+            ?.takeIf { it.isFinite() && it in 0f..100f }
+            ?.roundToInt()
 
 data class VehicleTelemetrySnapshot(
     val capturedAtMs: Long,
@@ -75,7 +89,7 @@ data class VehicleTelemetrySnapshot(
                 capturedAtMs = capturedAtMs,
                 deviceTimeIso = Instant.ofEpochMilli(capturedAtMs).toString(),
                 diPlusData = data,
-                soc = data?.soc,
+                soc = resolveTelemetrySoc(data?.soc, battery?.socPercent),
                 speedKmh = data?.speed?.toDouble(),
                 powerKw = powerKw,
                 batteryTempC = data?.avgBatTemp?.toDouble(),

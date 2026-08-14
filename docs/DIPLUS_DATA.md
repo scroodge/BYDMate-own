@@ -4,6 +4,12 @@ How VoltFlow Mate reads vehicle data from **di+** on the BYD DiLink head unit, t
 documented readable-parameter catalog, the known "no data" sentinels, and a captured live
 snapshot.
 
+- **Baseline:** di+ `1.3.8b16` (`versionCode 143`) — the version installed on car `way`.
+  Everything below describes that build unless a row says otherwise.
+- **Newer build on disk, not installed:** `2.0.0b1` — see
+  [di+ 2.0.0-beta1 — delta vs 1.3.8-beta16](#di-200-beta1--delta-vs-138-beta16).
+- **Last confirmed:** 2026-08-14 (static analysis); live probes still date from 2026-06-30.
+
 ## Source
 
 di+ is **not a database for live data** — it's a **local HTTP API** served on the head unit:
@@ -42,7 +48,8 @@ PY
 ## Readable parameter catalog
 
 The current official catalog has **141 parameters**. The supplied beta16 APK registers
-the first 140; `1105` (`里程值`) is newer and therefore marked **official only**.
+the first 140; `1105` (`里程值`) is newer and therefore marked **official only** — it is
+registered in `2.0.0b1`, closing the gap at 141/141.
 `DiParsClient` currently requests 48 entries, marked **Yes** below. Presence in this
 catalog does not prove that every BYD model supplies a useful value.
 
@@ -207,6 +214,94 @@ These are separate from the 141 `getVal` / `getDiPars` parameters:
 | Alarm records | Time, alarm type, alarm payload and read state | [`/api/alarms`](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391/494494635e0) |
 | Video and cameras | Video directories/files/streams and live-camera access | [API index](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391) |
 | Configuration and automation | di+ configuration and automation-rule reads | [API index](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391) |
+
+The Apifox catalog documents these, but the **beta16 dex contains no route string for any
+of them** (see the delta section below) — treat their availability on the installed build
+as unproven.
+
+## di+ 2.0.0-beta1 — delta vs 1.3.8-beta16
+
+**Status: not installed on any car. Everything in this section is static analysis of the
+APK plus the vendor's own changelog — unverified on-car.** No claim here should be treated
+as a working contract until probed on the head unit.
+
+### Provenance
+
+Found via di+'s own updater, not a mirror: the beta manifest
+`http://jt.x2x.fun:852/Update/dibeta.txt` (URL extracted from the beta16 dex) advertises
+`versionCode 158` at `http://61.164.77.66/vdip/diplus.2.0.0-beta1.apk`, changelog at
+`http://jt.x2x.fun:852/Update/v200b1.txt`. Downloaded 2026-08-14 to
+`research/diplus.2.0.0-beta1.apk`.
+
+| Property | 1.3.8b16 | 2.0.0b1 |
+|---|---|---|
+| `versionCode` | 143 | 158 |
+| Size | 19 138 182 B | 20 068 258 B |
+| `sha256` | — | `bfa6d76adc787f43e7edfdf339b17192cd6027280ee7fe6a5b5e25956837cddf` |
+| `package` / `minSdk` / `targetSdk` | `com.van.diplus` / 25 / 28 | unchanged |
+
+Distribution is plain HTTP from a bare IP, and this is a **beta**. Identity rests on the
+package name and the vendor's own update channel — there is no publisher signature check
+beyond that.
+
+### What changed that VoltFlow Mate touches
+
+| Area | Change | Consequence for us |
+|---|---|---|
+| Parameter catalog | `1105 里程值` now registered (141/141) | Display odometer in km becomes readable without the `里程 / 10` conversion |
+| `getDiPars` / `getVal` / `sendCmd` | Present and unchanged | The read path and the daemon's only actuation channel survive the upgrade |
+| HTTP API surface | 10 route strings → 38 | 28 new endpoints; **nothing removed** |
+| SOC | Vendor changelog: "SOC 数据升级为最高 0.1% 精度" | **Upgrade hazard** — see below |
+| Large responses | Vendor changelog: chunked JSON transfer | Unknown whether `getDiPars` responses are affected |
+| Head-unit support | Vendor changelog: limited Android 6.0 / 7.0 support; 7.0 may lack lock commands | Widens the fleet's installable range |
+
+### The SOC hazard
+
+[`DiParsClient`](../app/src/main/kotlin/com/bydmate/app/data/remote/DiParsClient.kt) parses
+`SOC` with `toIntOrNull()` into an `Int?` (line 222). Kotlin's `toIntOrNull()` returns
+**`null`** for `"64.5"` — it does not truncate. If 2.0.0b1 emits fractional SOC over
+`getDiPars`, SOC silently becomes null on every sample rather than losing precision, and
+the cloud stops receiving it. 40 further `toIntOrNull()` sites in the same `return` block
+carry the same shape of risk if any other field gains decimals.
+
+Not yet established whether the 0.1 % precision reaches the `getDiPars` wire format or
+stays inside di+'s own UI and trip records. The autoservice layer below di+ already
+returns SOC as a genuine float (`getFloat(1014, 1246777400)` → `42.0`, probed 2026-06-30),
+so a fractional wire value is plausible rather than speculative.
+
+**To settle it, probe before installing fleet-wide** — install on car `way`, then:
+
+```bash
+adb shell curl -s 'http://127.0.0.1:8988/api/getVal?name=%E7%94%B5%E9%87%8F%E7%99%BE%E5%88%86%E6%AF%94&status=true'
+```
+
+A response containing `.` means `DiParsClient` must move to `toDoubleOrNull()` first.
+
+### New endpoints (2.0.0b1 only)
+
+Grouped from the dex route strings; no first-party documentation checked against them yet.
+
+| Group | Routes |
+|---|---|
+| Trips / history | `/api/trips`, `/api/currentTrip`, `/api/tripStatistics`, `/api/tripStatisticsDetail`, `/api/vehicleSegments`, `/api/historyStatus`, `/api/historyRebuild`, `/api/historyRebuildStatus` |
+| Charging | `/api/chargings`, `/api/chargingSessions`, `/api/chargingSessionDetail`, `/api/batteryCapacityEstimate` |
+| GPS tracks | `/api/gpsTracks`, `/api/gpsPoints`, `/api/gpsCleanup`, `/api/gpsCleanupPreview`, `/api/gpsCleanupStatus` |
+| Video / camera | `/api/videoPreview`, `/api/videoDelete`, `/api/liveCameras`, `/api/screenRecord` |
+| Config / diagnostics | `/api/getConf`, `/api/setConf`, `/api/getExpiry`, `/api/alarms`, `/api/runStorageTest`, `/api/storageTestResult`, `/api/dumpP2000Thread` |
+
+`/api/trips` and `/api/chargings` appear in the dex here for the **first time** — the
+Apifox catalog documented them, but beta16 shipped no such route. If they work,
+`/api/chargingSessionDetail` and `/api/batteryCapacityEstimate` are the first di+-native
+route to charge-session energy that does not require the on-device ADB `autoservice` path.
+
+### Before installing
+
+- The vendor's changelog opens with: **autostart must be re-checked and re-configured after
+  every update.** di+ dying silently is indistinguishable from a car that is simply off.
+- The sentinel values in the next section are established against beta16 only. Whether `3095` / `−2000` / `−2147482648` still mean "no data" in 2.0.0b1 is
+  **unverified** — re-check before trusting `sanitizePowerKw` / `sanitizeTempC` /
+  `sanitizeSentinelInt` on the new build.
+- Keep `research/diplus.1.3.8-beta16.apk` for rollback.
 
 ## ⚠️ Sentinel ("no data") magic numbers
 

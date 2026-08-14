@@ -1,6 +1,7 @@
 package com.bydmate.app.daemon
 
 import com.bydmate.app.data.remote.DiParsData
+import com.bydmate.app.data.remote.resolveTelemetrySoc
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -25,6 +26,13 @@ class CommandDaemonTest {
         fastUntil: Long = 0L,
         gunChanged: Boolean = false,
     ) = CommandDaemon.planPush(now, lastPush, lastInterval, fastUntil, gunChanged)
+
+    @Test
+    fun `daemon SOC source keeps DiPlus first and falls back to valid autoservice`() {
+        assertEquals(58, resolveTelemetrySoc(diPlusSoc = 58, autoserviceSocPercent = 61.6f))
+        assertEquals(62, resolveTelemetrySoc(diPlusSoc = null, autoserviceSocPercent = 61.6f))
+        assertNull(resolveTelemetrySoc(diPlusSoc = -1, autoserviceSocPercent = -1f))
+    }
 
     @Test
     fun `idle car pushes only on the sixty second history cadence`() {
