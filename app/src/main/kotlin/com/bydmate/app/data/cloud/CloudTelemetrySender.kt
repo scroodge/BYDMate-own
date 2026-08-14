@@ -420,6 +420,15 @@ class CloudTelemetrySender @Inject constructor(
                     }
                 }
                 is CloudSendResult.NonRetryableFailure -> {
+                    // Quarantine, not delivery. This is now only reached when the server rejects
+                    // this *body* (400/413/415/422) — the operator-fixable and transient 4xx codes
+                    // are retryable, see CloudTelemetryClient.RETRYABLE_CLIENT_CODES. Setting
+                    // sentAt takes the row out of the FIFO send stream so one undeliverable row
+                    // cannot block every later sample; lastError != null is what distinguishes a
+                    // quarantined row from an acknowledged one, and the payload stays readable in
+                    // cloud_sync_queue until pruned. Follow-up for the never-lose goal: prune
+                    // acknowledged rows ahead of quarantined ones, since for a rejected body the
+                    // queue row is the only copy.
                     items.forEach { queueDao.markFinished(it.id, result.message, now) }
                     if (!drainAll) {
                         return FlushQueueResult(success = true, lastAck = lastAck, retryReason = result.message)

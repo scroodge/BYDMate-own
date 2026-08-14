@@ -53,11 +53,7 @@ class CloudTelemetryClient @Inject constructor(
 
             httpClient.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string()
-                when (response.code) {
-                    in 200..299 -> CloudSendResult.Success(responseBody)
-                    in 400..499 -> CloudSendResult.NonRetryableFailure(response.messageWithBody(responseBody))
-                    else -> CloudSendResult.RetryableFailure(response.messageWithBody(responseBody))
-                }
+                classify(response.code, response.messageWithBody(responseBody), responseBody)
             }
         } catch (e: Exception) {
             CloudSendResult.RetryableFailure(e.javaClass.simpleName + ": " + (e.message ?: "network error"))
@@ -73,7 +69,39 @@ class CloudTelemetryClient @Inject constructor(
         }
     }
 
-    private companion object {
+    internal companion object {
         val JSON = "application/json; charset=utf-8".toMediaType()
+
+        /**
+         * 4xx codes that describe the *conditions* of the request rather than the content of the
+         * payload: a missing or expired API key (401), a key without access to this vehicle (403),
+         * a wrong endpoint left in Settings (404), a server-side request timeout (408), a rate
+         * limit (429).
+         *
+         * These must be retryable. The local DB is the source of truth for telemetry, and samples
+         * rejected for any of these reasons are still valid and still deliverable once the operator
+         * fixes Settings or the limit clears — so the rows stay queued. Classifying them as
+         * non-retryable meant a car driving on a stale key destroyed every sample as fast as it
+         * produced them: `flushQueue` marks a non-retryable batch finished, so the history was gone
+         * with only a status line to show for it.
+         *
+         * Everything else in 400..499 is the server rejecting *this body* (400/413/415/422), which
+         * no amount of retrying changes. Those rows still leave the send stream so a single
+         * undeliverable row cannot block every later sample behind it — see the quarantine note in
+         * [CloudTelemetrySender.flushQueue].
+         */
+        val RETRYABLE_CLIENT_CODES = setOf(401, 403, 404, 408, 429)
+
+        /**
+         * Status → result. Split out of [send] so the classification is unit-testable without a
+         * live socket, and without adding MockWebServer to the test dependencies.
+         */
+        internal fun classify(code: Int, message: String, responseBody: String?): CloudSendResult =
+            when (code) {
+                in 200..299 -> CloudSendResult.Success(responseBody)
+                in RETRYABLE_CLIENT_CODES -> CloudSendResult.RetryableFailure(message)
+                in 400..499 -> CloudSendResult.NonRetryableFailure(message)
+                else -> CloudSendResult.RetryableFailure(message)
+            }
     }
 }
