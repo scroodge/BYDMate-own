@@ -4,11 +4,14 @@ How VoltFlow Mate reads vehicle data from **di+** on the BYD DiLink head unit, t
 documented readable-parameter catalog, the known "no data" sentinels, and a captured live
 snapshot.
 
-- **Baseline:** di+ `1.3.8b16` (`versionCode 143`) — the version installed on car `way`.
-  Everything below describes that build unless a row says otherwise.
-- **Newer build on disk, not installed:** `2.0.0b1` — see
+- **Installed on car `way`:** di+ **`2.0.0b1`** (`versionCode 158`) as of 2026-08-14.
+  The parameter catalog below is unchanged between generations and applies to both.
+- **Previous baseline:** `1.3.8b16` (`versionCode 143`), kept at
+  `research/diplus.1.3.8-beta16.apk` for rollback.
+- **What differs between the two:**
   [di+ 2.0.0-beta1 — delta vs 1.3.8-beta16](#di-200-beta1--delta-vs-138-beta16).
-- **Last confirmed:** 2026-08-14 (static analysis); live probes still date from 2026-06-30.
+- **Last confirmed:** 2026-08-14 on car `way` (DiLink3.0, `persist.sys.locale=en-US`),
+  live `getDiPars` capture. The 2026-06-30 snapshot further down is retained as history.
 
 ## Source
 
@@ -216,14 +219,32 @@ These are separate from the 141 `getVal` / `getDiPars` parameters:
 | Configuration and automation | di+ configuration and automation-rule reads | [API index](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391) |
 
 The Apifox catalog documents these, but the **beta16 dex contains no route string for any
-of them** (see the delta section below) — treat their availability on the installed build
-as unproven.
+of them** — they first appear in `2.0.0b1`, which car `way` now runs. Reachability has not
+been exercised; see the delta section below for the full route list.
 
 ## di+ 2.0.0-beta1 — delta vs 1.3.8-beta16
 
-**Status: not installed on any car. Everything in this section is static analysis of the
-APK plus the vendor's own changelog — unverified on-car.** No claim here should be treated
-as a working contract until probed on the head unit.
+**Status: installed and verified on car `way`, 2026-08-14.** Static APK analysis first,
+then confirmed against the running head unit with the app's own 48-field template. The
+captured response is quoted below; anything still unproven says so explicitly.
+
+### The captured response (car `way`, 2026-08-14, di+ 2.0.0b1, PWR=2, AC on)
+
+```
+{"success":true,"val":"SOC:76.1|Speed:0|Mileage:454735|Power:0|ChargeGun:1|MaxBatTemp:24
+|AvgBatTemp:24|MinBatTemp:24|ChargingStatus:1|BatCapacity:2.4|TotalElecCon:7836
+|Voltage12V:13.6|MaxCellV:3.322|MinCellV:3.316|ExtTemp:23|Gear:1|PowerState:2
+|InsideTemp:-2000|ACStatus:1|...|Rain:-2147482648|...|Sentry:{哨兵状态}|RemoteLock:0"}
+```
+
+Three things this settles, all of which had been open:
+
+1. **The envelope is unchanged.** `{"success":…,"val":"Key:value|…"}`, same `|` and `:`
+   framing. No chunking appeared at 48 fields.
+2. **SOC is fractional** — `76.1`. See below.
+3. **The sentinels are unchanged.** `InsideTemp:-2000` and `Rain:-2147482648` came back
+   exactly as documented for beta16, so `sanitizeTempC` / `sanitizeSentinelInt` remain
+   correct and necessary. This supersedes the earlier "unverified against 2.0.0b1" note.
 
 ### Provenance
 
@@ -251,31 +272,53 @@ beyond that.
 | Parameter catalog | `1105 里程值` now registered (141/141) | Display odometer in km becomes readable without the `里程 / 10` conversion |
 | `getDiPars` / `getVal` / `sendCmd` | Present and unchanged | The read path and the daemon's only actuation channel survive the upgrade |
 | HTTP API surface | 10 route strings → 38 | 28 new endpoints; **nothing removed** |
-| SOC | Vendor changelog: "SOC 数据升级为最高 0.1% 精度" | **Upgrade hazard** — see below |
-| Large responses | Vendor changelog: chunked JSON transfer | Unknown whether `getDiPars` responses are affected |
+| SOC | **Confirmed on car:** `SOC:76.1` | Broke the old `toIntOrNull()` parser — fixed in `versionCode 340`, see below |
+| Parameter availability | **New:** gate that leaves placeholders unsubstituted | `Sentry:{哨兵状态}` observed live, see below |
+| Large responses | Vendor changelog: chunked JSON transfer | **Not triggered** at 48 fields — the capture came back as one plain JSON body |
 | Head-unit support | Vendor changelog: limited Android 6.0 / 7.0 support; 7.0 may lack lock commands | Widens the fleet's installable range |
 
-### The SOC hazard
+### The SOC break — confirmed, then fixed
 
-[`DiParsClient`](../app/src/main/kotlin/com/bydmate/app/data/remote/DiParsClient.kt) parses
-`SOC` with `toIntOrNull()` into an `Int?` (line 222). Kotlin's `toIntOrNull()` returns
-**`null`** for `"64.5"` — it does not truncate. If 2.0.0b1 emits fractional SOC over
-`getDiPars`, SOC silently becomes null on every sample rather than losing precision, and
-the cloud stops receiving it. 40 further `toIntOrNull()` sites in the same `return` block
-carry the same shape of risk if any other field gains decimals.
+`SOC:76.1` on the wire. `toIntOrNull("76.1")` returns **`null`** — it does not truncate —
+so `DiParsClient` dropped SOC entirely on every sample. This was live data loss, not a
+future risk: any car already on di+ 2.0 was pushing null SOC to the cloud.
 
-Not yet established whether the 0.1 % precision reaches the `getDiPars` wire format or
-stays inside di+'s own UI and trip records. The autoservice layer below di+ already
-returns SOC as a genuine float (`getFloat(1014, 1246777400)` → `42.0`, probed 2026-06-30),
-so a fractional wire value is plausible rather than speculative.
+The cause is older than 2.0. SOC has **always** been a double-typed parameter in di+ —
+descriptor type 2 in both `1.3.8b16` (`s$c.b`) and `2.0.0b1` (`u$c.c`), rendered through
+`NumberFormat.getInstance()` exactly like `电池容量` / `总电耗` / `蓄电池电压`, which this
+project already read as `Double`. 1.x merely never had sub-1 % resolution to show. 2.0's
+0.1 % SOC flows through unchanged di+ code.
 
-**To settle it, probe before installing fleet-wide** — install on car `way`, then:
+Two consequences worth keeping in mind:
+
+- **`NumberFormat.getInstance()` is locale-sensitive.** A head unit whose locale uses a
+  comma decimal separator emits `76,1`. Car `way` is `en-US` so this is latent there, but
+  it is unverified across the rest of the fleet — and it would equally affect the cell
+  voltages and `总电耗` that 1.x already returns fractionally.
+- **Fixed in `versionCode 340`** by `DiParsClient.parseNum` / `parseIntNum`, which accept
+  both decimal separators and reject unsubstituted placeholders. `soc` stays a rounded
+  `Int?` for existing consumers; `socPrecise: Double?` carries the decimal to the cloud
+  under the same `soc` JSON key (`diplus_soc` is `numeric` — see the cloud repo's
+  `supabase/migrations/20260521120000_bydmate_diplus_extended_payload.sql`).
+
+To re-check the wire value on any car:
 
 ```bash
 adb shell curl -s 'http://127.0.0.1:8988/api/getVal?name=%E7%94%B5%E9%87%8F%E7%99%BE%E5%88%86%E6%AF%94&status=true'
 ```
 
-A response containing `.` means `DiParsClient` must move to `toDoubleOrNull()` first.
+### The availability gate — new in 2.0, and it does fire
+
+`2.0.0b1` added a `BooleanSupplier` to each parameter descriptor. When it returns false,
+the lookup yields null and the template placeholder is **left unsubstituted** — the wire
+carries a literal `Sentry:{哨兵状态}` instead of a number. Confirmed on car `way`:
+`getVal` on `哨兵状态` returns `{"success":false}`.
+
+It is attached to the ~22 di+-internal IDs (1001–1018, 1103, 1104, 2001–2008), not to car
+CAN signals. Two of them are consumed here: `哨兵状态` (`Sentry` in the template) and
+`熄火录像配置开关` (`stallSentryMode` via `getVal` — still working, returned
+`开启缩时哨兵`). `parseNum` treats any `{…}` / `[…]` value as absent, so a gated parameter
+now reads as null rather than as garbage.
 
 ### New endpoints (2.0.0b1 only)
 
@@ -294,14 +337,31 @@ Apifox catalog documented them, but beta16 shipped no such route. If they work,
 `/api/chargingSessionDetail` and `/api/batteryCapacityEstimate` are the first di+-native
 route to charge-session energy that does not require the on-device ADB `autoservice` path.
 
-### Before installing
+### Before installing di+ 2.0 on another car
 
 - The vendor's changelog opens with: **autostart must be re-checked and re-configured after
   every update.** di+ dying silently is indistinguishable from a car that is simply off.
-- The sentinel values in the next section are established against beta16 only. Whether `3095` / `−2000` / `−2147482648` still mean "no data" in 2.0.0b1 is
-  **unverified** — re-check before trusting `sanitizePowerKw` / `sanitizeTempC` /
-  `sanitizeSentinelInt` on the new build.
+- The car needs VoltFlow Mate **`versionCode 340` or newer**. Older builds parse SOC with
+  `toIntOrNull()` and will silently drop it — see above.
+- `−2000` and `−2147482648` are confirmed unchanged in 2.0.0b1. `3095` (power) was not
+  reproduced in this capture — it only appears with the car OFF while AC charging, so it
+  stays **unverified** on 2.0, and `sanitizePowerKw` is kept on that basis.
+- Check the head unit's locale (`adb shell getprop persist.sys.locale`). A comma decimal
+  separator is handled from 340 onward, but it is worth recording which cars have one.
 - Keep `research/diplus.1.3.8-beta16.apk` for rollback.
+
+### Verified on car, 2026-08-14 (VoltFlow Mate `0.5.3` / `versionCode 340`)
+
+| Check | Result |
+|---|---|
+| `SOC` on the gateway screen | `76%` — populated (absent under the old parser) |
+| `Салон` (cabin temp) | `--` — the `-2000` sentinel still correctly dropped |
+| `Polling error` lines | **0** across 2500 log lines |
+| Beacon age / data age | 40 s / 0 s; DiPlus `Падключаны` |
+
+**Still unproven:** that `diplus_soc` lands in the cloud as `76.1`. No push occurred inside
+the observation window (parked cadence), so the chain is confirmed only as far as the
+device. Check `bydmate_telemetry_samples` after the next drive.
 
 ## ⚠️ Sentinel ("no data") magic numbers
 
