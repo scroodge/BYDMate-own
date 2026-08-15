@@ -298,8 +298,14 @@ Two consequences worth keeping in mind:
 - **Fixed in `versionCode 340`** by `DiParsClient.parseNum` / `parseIntNum`, which accept
   both decimal separators and reject unsubstituted placeholders. `soc` stays a rounded
   `Int?` for existing consumers; `socPrecise: Double?` carries the decimal to the cloud
-  under the same `soc` JSON key (`diplus_soc` is `numeric` — see the cloud repo's
-  `supabase/migrations/20260521120000_bydmate_diplus_extended_payload.sql`).
+  in **`telemetry.soc`** (`CloudTelemetryPayload.kt:31`). The **`diplus` object in the
+  same payload still carries the rounded `Int`** — `DiParsData.toJson` / `toStatusJson`
+  read `DiParsData.soc` — and the cloud flattens `diplus_soc` from that object, which is
+  why the column stayed integer on `340`: measured on prod 2026-08-14,
+  `telemetry->>'soc' = 66.2` next to `diplus->>'soc' = 66`. Resolved cloud-side rather
+  than in the app, so cars already on `340` needed no new release — the ingest RPC now
+  takes the `telemetry` value when it is within 0.5 of the di+ one (cloud repo's
+  `supabase/migrations/20260814180000_diplus_soc_precise.sql`).
 
 To re-check the wire value on any car:
 
@@ -365,9 +371,11 @@ route to charge-session energy that does not require the on-device ADB `autoserv
 | `Polling error` lines | **0** across 2500 log lines |
 | Beacon age / data age | 40 s / 0 s; DiPlus `Падключаны` |
 
-**Still unproven:** that `diplus_soc` lands in the cloud as `76.1`. No push occurred inside
-the observation window (parked cadence), so the chain is confirmed only as far as the
-device. Check `bydmate_telemetry_samples` after the next drive.
+**Chain closed on 2026-08-14 17:24 UTC**, but it needed a cloud fix as well as `340`: car
+`way` now writes `diplus_soc = 66.2` in `bydmate_telemetry_samples`, matching
+`telemetry->>'soc'`. Until the ingest RPC was changed the same row read `66` — the app's
+`diplus` object carries the rounded `Int`, see [The SOC break](#the-soc-break--confirmed-then-fixed)
+above.
 
 ## ⚠️ Sentinel ("no data") magic numbers
 
