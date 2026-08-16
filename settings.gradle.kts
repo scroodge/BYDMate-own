@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CloudEV Mate"
+rootProject.name = "VoltFlow Mate"
 include(":app")
