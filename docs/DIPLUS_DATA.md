@@ -10,8 +10,11 @@ snapshot.
   `research/diplus.1.3.8-beta16.apk` for rollback.
 - **What differs between the two:**
   [di+ 2.0.0-beta1 — delta vs 1.3.8-beta16](#di-200-beta1--delta-vs-138-beta16).
-- **Last confirmed:** 2026-08-14 on car `way` (DiLink3.0, `persist.sys.locale=en-US`),
-  live `getDiPars` capture. The 2026-06-30 snapshot further down is retained as history.
+- **Last confirmed:** 2026-08-18 on car `way` (DiLink3.0, `persist.sys.locale=en-US`),
+  during **DC fast-charging** — a full audit of the 48-field `getDiPars` template, all 141
+  catalog parameters via `getVal`, the 21 read-only 2.0 endpoints, and the dex route
+  surface. See [Full endpoint audit — 2026-08-18](#full-endpoint-audit--2026-08-18).
+  The 2026-08-14 and 2026-06-30 snapshots further down are retained as history.
 
 ## Source
 
@@ -133,10 +136,10 @@ raw `里程` is in 0.1 km, and the live-probed cell voltages are already volts.
 | 70 | 日 | Device day | — | — |
 | 71 | 时 | Device hour | — | — |
 | 72 | 分 | Device minute | — | — |
-| 73 | 副驾安全带警告 | Passenger-seatbelt warning | 1 alarm; 2 normal | — |
-| 74 | 二排左安全带 | Second-row left seatbelt | 0 unbuckled; 1 buckled; 2 invalid | — |
+| 73 | 副驾安全带警告 | Passenger-seatbelt warning | 1 alarm; 2 normal — but **`0` observed live** (2026-08-18), outside the enum and rendered raw | — |
+| 74 | 二排左安全带 | Second-row left seatbelt; **emits sentinel `-10011` when absent** (car `way`, 2026-08-18) | 0 unbuckled; 1 buckled; 2 invalid | — |
 | 75 | 二排右安全带 | Second-row right seatbelt | 0 unbuckled; 1 buckled; 2 invalid | — |
-| 76 | 二排中安全带 | Second-row centre seatbelt | 0 unbuckled; 1 buckled; 2 invalid | — |
+| 76 | 二排中安全带 | Second-row centre seatbelt; **emits sentinel `-10011` when absent** (car `way`, 2026-08-18) | 0 unbuckled; 1 buckled; 2 invalid | — |
 | 77 | 空调状态 | Climate-control state | 0 off; 1 on | Yes |
 | 78 | 风量档位 | Climate fan level | — | Yes |
 | 79 | 空调循环方式 | Climate recirculation | 0 fresh air; 1 recirculation | Yes |
@@ -172,13 +175,13 @@ raw `里程` is in 0.1 km, and the live-probed cell voltages are already volts.
 | 111 | 雨量 | Rain-sensor value, unit unknown | — | Yes |
 | 112 | 副驾安全带 | Passenger seatbelt | 0 unbuckled; 1 buckled; 2 invalid | — |
 | 113 | 秒 | Device second | — | — |
-| 114 | SOC | Duplicate/alternate SOC parameter, unit unknown | — | — |
+| 114 | SOC | **Not a usable SOC duplicate** — returned `0` on car `way` 2026-08-18 while real SOC was 34–36 %. Read `33 电量百分比` instead. | — | — |
 | 115 | 转向信号 | Combined turn-signal state | 1 off; 2 left; 3 left 2; 4 right; 5 right 2; 6 hazards; 7 emergency; 8 rear flash; 9 flash | — |
 | 1001 | 全景状态 | Panoramic-camera display state | 0 hidden; 1 displayed | — |
 | 1002 | 配置UI版本 | Configured UI generation | 0 UI3; 1 UI4 | — |
 | 1003 | 哨兵状态 | Sentry state | 0 off; 1 on | Yes |
 | 1004 | 熄火录像配置开关 | Ignition-off recording configuration | 0 off; 1 recording; 2 sentry; 3 time-lapse sentry | — |
-| 1005 | 位置 | Device location; format/units not established here | — | — |
+| 1005 | 位置 | Device location, `lon,lat,…` — e.g. `27.666086,53.95133,0,254` (2026-08-18); 3rd/4th fields unidentified | — | — |
 | 1006 | 熄火哨兵报警 | Ignition-off sentry alarm | 0 no alarm; 1 alarming | — |
 | 1007 | WIFI状态 | Wi-Fi connection state | 0 disconnected; 1 connected | — |
 | 1008 | 蓝牙状态 | Bluetooth connection state | 0 disconnected; 1 connected | — |
@@ -326,6 +329,14 @@ CAN signals. Two of them are consumed here: `哨兵状态` (`Sentry` in the temp
 `开启缩时哨兵`). `parseNum` treats any `{…}` / `[…]` value as absent, so a gated parameter
 now reads as null rather than as garbage.
 
+**The gate tracks di+ configuration, not the ID range.** Probing all 28 of those internal
+IDs on 2026-08-18 fired the gate on **exactly one** — `1003 哨兵状态` — while the other 27
+returned real values. `/api/getConf` on the same car reports `"EnableSentry":"false"`,
+which is what closes it: the parameter is unavailable because the sentry feature is
+switched off, not because it sits in the internal-ID block. Expect the gate to open and
+close as the driver toggles di+ features, and do not assume any other ID is permanently
+safe.
+
 ### New endpoints (2.0.0b1 only)
 
 Grouped from the dex route strings; no first-party documentation checked against them yet.
@@ -338,11 +349,23 @@ Grouped from the dex route strings; no first-party documentation checked against
 | Video / camera | `/api/videoPreview`, `/api/videoDelete`, `/api/liveCameras`, `/api/screenRecord` |
 | Config / diagnostics | `/api/getConf`, `/api/setConf`, `/api/getExpiry`, `/api/alarms`, `/api/runStorageTest`, `/api/storageTestResult`, `/api/dumpP2000Thread` |
 
-All six probed on car `way` 2026-08-14 and answering with real data. The one with a
-concrete use is `/api/currentTrip`, which returns **fractional** `electricNetKwh` from
-di+'s own accounting — a direct answer to the integer-kW power ceiling described below.
+**All 21 read-only routes above were probed on car `way` 2026-08-18** — every one exists
+and answers (the 7 mutating routes — `setConf`, `gpsCleanup`, `videoDelete`,
+`historyRebuild`, `screenRecord`, `runStorageTest`, `dumpP2000Thread` — were deliberately
+not called on a live car). Routes needing an id (`tripStatisticsDetail`,
+`chargingSessionDetail`, `gpsPoints`, `videoPreview`) answer `400 Missing param [...]`,
+which still confirms they are registered.
+
+`/api/currentTrip` returns **`null` unless a trip is actually in progress** — it was null
+throughout the charging session. The fractional `electricNetKwh` attributed to it is
+available from `/api/tripStatistics` at any time (`4.1999…` kWh on the last trip). Prefer
+`tripStatistics` / `vehicleSegments` over `currentTrip` for anything that must work while
+the car is parked or charging.
+
 Tracked as **B-14** in [`BACKLOG.md`](BACKLOG.md); nothing here is consumed yet, and all
-of it is 2.0-only, so any use needs a `versionCode >= 158` check.
+of it is 2.0-only, so any use needs a `versionCode >= 158` check. **Read
+[the new-endpoint sentinels](#the-new-endpoints-carry-their-own-sentinel-family) before
+consuming any of it** — the existing filters do not cover them.
 
 `/api/trips` and `/api/chargings` appear in the dex here for the **first time** — the
 Apifox catalog documented them, but beta16 shipped no such route. If they work,
@@ -363,6 +386,13 @@ route to charge-session energy that does not require the on-device ADB `autoserv
 - Keep `research/diplus.1.3.8-beta16.apk` for rollback.
 
 ### Verified on car, 2026-08-14 (VoltFlow Mate `0.5.3` / `versionCode 340`)
+
+> **Check the right package.** Our `applicationId` is **`dev.scroodge.cloudevmate`**, while
+> the Kotlin `namespace` is `com.bydmate.app`. Car `way` *also* has upstream
+> AndyShaman/BYDMate installed as **`com.bydmate.app`** (versionCode 414 / 3.11.6) plus
+> `com.voltflow.dashboard` — and upstream polls di+ too, emitting its own `DiParsClient`
+> logcat lines. `dumpsys package com.bydmate.app` therefore returns a plausible, wrong
+> version, and its clean log reads as ours. Always target `dev.scroodge.cloudevmate`.
 
 | Check | Result |
 |---|---|
@@ -389,17 +419,42 @@ live and **must be filtered** before forwarding to the cloud (they poisoned 25k+
 | Power | `3095` | engine-power PID unreadable (car OFF while AC charging) | drop if `\|kW\| > 350` |
 | InsideTemp | `-2000` | cabin sensor not reporting | drop if outside −90…90 °C |
 | Rain | `-2147482648` (≈ Int.MIN_VALUE) | rain sensor not reporting | drop if `\|v\| ≥ 1_000_000` |
+| 二排左/中安全带 (74/76) | `-10011` | rear-seatbelt signal absent on this model | **none** — `\|−10011\| < 1_000_000`, so `sanitizeSentinelInt` passes it through. Not consumed today; add a filter before consuming. |
+
+### The new endpoints carry their own sentinel family
+
+The 2.0 JSON endpoints do **not** reuse the three magic numbers above. Observed in
+**100/100** `/api/trips` records on car `way`, 2026-08-18:
+
+| Field | Sentinel | Meaning |
+|---|---|---|
+| `fuelPer_start` / `fuelPer_end` | `255` | `0xFF` — no fuel-level reading (BEV) |
+| `fuelCon_*`, `power_start`, `power_end` | `104857.5` | `1048575 / 10` = `0xFFFFF` at 0.1 scale |
+| `evMileage_start` / `evMileage_end` | `10485750` | `0xFFFFF × 10` |
+| `unplugSoc` (chargingSessions, open session) | `-1.0` | session not yet unplugged |
+
+**`sanitizeSentinelInt` catches none of the first three usefully:** `255` and `104857.5`
+are both well under the `1_000_000` threshold and would be forwarded as real data. Only
+`10485750` trips it. Any B-14 work that consumes `/api/trips`, `/api/chargings` or
+`/api/vehicleSegments` needs its own filter — these are exactly the shape of value that
+poisoned 25k+ power rows before.
+
+Units are also mixed **within a single `/api/trips` record**: `mileage` is already km
+(`23.7`) while `mileage_start` / `mileage_end` are raw 0.1 km (`458837` / `459074`).
 
 Plausible extremes that must survive: Power `-102` kW (DC fast charge), `~133` kW (drive).
 
-## Power resolution — why it's integer-only (no float)
+## Power resolution — integer in the parameter catalog, fractional via 2.0 endpoints
 
 Verified by decompiling di+ (`com.van.diplus` base.apk, dex string table, 2026-06-30):
 
 - `发动机功率` is the **only** power signal di+ exposes, and it's emitted as **whole kW**
   (e.g. `-4`). There is no fractional variant — the rounding happens inside di+.
-- di+ exposes **no current signal** (`电流`/`充电电流` = 0 hits) and **no pack voltage**
-  (only `蓄电池电压` 12V aux + min/max **cell** voltage), so `P = V × I` cannot be computed.
+- **In the parameter catalog**, di+ exposes no current signal (`电流`/`充电电流` = 0 hits)
+  and no pack voltage (only `蓄电池电压` 12V aux + min/max **cell** voltage). Within
+  `getVal` / `getDiPars` this is still true in 2.0.0b1 — but it is **no longer true of di+
+  as a whole**; see [what 2.0 changed](#what-20-changed-pack-voltage-current-and-soh-do-exist)
+  below.
 - `充电功率`/`电池功率`/`电机功率` do not exist either.
 
 ### Confirmed below di+, at the raw BYD `autoservice` layer (2026-06-30)
@@ -422,17 +477,72 @@ Live probes on car `way` proved the integer limit is in the **vehicle data itsel
 | **per-session energy `getFloat(1009, 666894360)`** | **`2.559 kWh`** | high-precision float ✅ |
 | charge HV volt `getInt(1009, -1442840491)` | `0xffffd8e5` | dead/sentinel fid |
 
-No battery-**current** fid exists in the autoservice catalog reverse-engineered by upstream
-[AndyShaman/BYDMate](https://github.com/AndyShaman/BYDMate) (`FidRegistry`, `NativeParsReader`),
-so `P = V × I` is also impossible. **Instantaneous power is integer-kW at the hardware layer —
-unfixable.** The only precise electrical figure is *energy* (`FID_CHARGING_CAPACITY` float),
+No battery-**current** fid was found in the autoservice catalog reverse-engineered by upstream
+[AndyShaman/BYDMate](https://github.com/AndyShaman/BYDMate) (`FidRegistry`, `NativeParsReader`).
+The only precise electrical figure at that layer is *energy* (`FID_CHARGING_CAPACITY` float),
 which yields accurate **average** charge power over time. Upstream's `nativestack` reads these
-fids directly via `service call autoservice` over on-device ADB — an option to get float
-energy / SoH / lifetime-kWh and drop the di+ dependency (but still no float live power).
+fids directly via `service call autoservice` over on-device ADB.
 
-**Therefore instantaneous live power is permanently 1 kW integer resolution.** The only way
-to a decimal figure is *average* power over a charging session: `Δ(电池容量 / 总电耗) / Δt`
-(both are fractional kWh). That's session-average, not live.
+**`发动机功率` remains integer-kW and always will be** — that ceiling is real and applies to
+every live read through `getVal` / `getDiPars`.
+
+### What 2.0 changed: pack voltage, current and SoH *do* exist
+
+The earlier conclusion that this was "unfixable" was drawn from the 1.3.8b16 dex on
+2026-06-30 and is **superseded**. `/api/vehicleSegments` and `/api/chargingSessions` in
+2.0.0b1 expose, per segment/session (car `way`, DC fast-charging, 2026-08-18):
+
+| Field | Value | Note |
+|---|---|---|
+| `batteryVoltageMin` / `batteryVoltageMax` | `306.0` / `332.0` | **pack** voltage, V |
+| `batteryCurrentMin` / `batteryCurrentMax` | `-198.5` / `0.0` | **pack** current, A |
+| `batteryPowerMax` | `65.902` | fractional kW |
+| `batteryEnergyKwh` | `11.272…` | fractional kWh, monotonically climbing |
+| `batterySoh` | `99` | state of health, % |
+| `estimatedUsableCapacityKwh` | `49.11` | via `/api/batteryCapacityEstimate` |
+
+`332.0 V × 198.5 A = 65.902 kW`, exactly `batteryPowerMax` — di+ is already computing
+`P = V × I` internally.
+
+**These are per-segment aggregates, not an instantaneous reading**, so there is still no
+single live float-power parameter. But the open segment (`closed: false`) updates roughly
+every 3 s, which makes fractional power derivable at that cadence rather than only as a
+session average. Measured directly: `batteryEnergyKwh` went `10.928 → 11.272` over 19.0 s,
+i.e. **65.4 kW**, against `发动机功率` reporting `-65` at the same moment.
+
+So the practical ceiling is now **~20 s resolution fractional power**, not "session-average
+only". Consuming it is 2.0-only (`versionCode >= 158`) and is part of **B-14**.
+
+## Full endpoint audit — 2026-08-18
+
+Car `way`, di+ `2.0.0b1` (`versionCode 158`), `en-US`, **mid DC fast-charge**
+(`ChargeGun:3`, `-65` kW, SOC 34.4 → 44.3 %). VoltFlow Mate `dev.scroodge.cloudevmate`
+`0.5.3` / `340`, **0 `Polling error` lines**.
+
+| Claim in this doc | Result |
+|---|---|
+| Envelope `{"success":…,"val":"K:v\|…"}`, 48 fields, no chunking | confirmed |
+| Fractional SOC | confirmed — `SOC:34.4` |
+| `InsideTemp:-2000`, `Rain:-2147482648` sentinels | confirmed, both live |
+| Availability gate leaves `Sentry:{哨兵状态}` unsubstituted | confirmed; `getVal` → `{"success":false}` |
+| Catalog is 141/141 in 2.0 | confirmed — 140 answered, only `1003` gated |
+| `1105 里程值` registered, km | confirmed — `45907.4` |
+| `里程` raw is 0.1 km | **proven** — `459074 / 10 = 45907.4 = 里程值` |
+| Cell voltages already volts | confirmed — `3.533` |
+| Route surface 10 → 38, 28 new, nothing removed | confirmed against both dex files; the 28 are **set-equal** to the table above |
+| All 59 documented state-description enums | confirmed, every one matched |
+| Power negative while charging, integer kW | confirmed — `-65` |
+
+Corrected in this revision as a result: the [integer-power
+ceiling](#what-20-changed-pack-voltage-current-and-soh-do-exist), the
+[new-endpoint sentinels](#the-new-endpoints-carry-their-own-sentinel-family),
+[`/api/currentTrip` being null off-trip](#new-endpoints-200b1-only), the
+[gate's real cause](#the-availability-gate--new-in-20-and-it-does-fire), and catalog rows
+`73`, `74`, `76`, `114`, `1005`.
+
+Not probed by choice: the 7 mutating routes (`setConf`, `gpsCleanup`, `videoDelete`,
+`historyRebuild`, `screenRecord`, `runStorageTest`, `dumpP2000Thread`) — not to be fired at
+a car mid-charge.
 
 ## Live di+ snapshot — car `way`, AC charging (captured 2026-06-30)
 

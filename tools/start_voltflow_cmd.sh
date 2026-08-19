@@ -12,6 +12,10 @@
 # crash/OOM kill that TrackingService's own onTaskRemoved restart and the boot
 # receiver don't reach (those cover "swiped from recents" and "full reboot" only).
 #
+# Also brings up the VoltFlow Dashboard cluster projection (com.voltflow.dashboard) once
+# per power cycle — see dashboard_autostart_tick below for why that app cannot do it
+# itself on this head unit. Opt out with /data/local/tmp/voltflow_dash_autostart.disabled.
+#
 # Deploy once via wireless ADB or Termux (shell uid):
 #   1. Put cloud config at /data/local/tmp/voltflow_cmd.conf  (see voltflow_cmd.conf.example)
 #   2. adb push tools/start_voltflow_cmd.sh /data/local/tmp/ && chmod 755 /data/local/tmp/start_voltflow_cmd.sh
@@ -31,6 +35,31 @@ LOCKFILE="/data/local/tmp/voltflow_cmd_watchdog.pid"
 # App-liveness relaunch cooldown state — last successful relaunch attempt (epoch seconds).
 APP_RELAUNCH_TS_FILE="/data/local/tmp/voltflow_app_relaunch_ts"
 APP_RELAUNCH_COOLDOWN_SEC=60
+
+# --- VoltFlow Dashboard (cluster projection) auto-start ----------------------------
+# Separate APK. It projects the gauge cluster onto the 1280x480 virtual display, and it
+# sends the Di+ projection command from exactly one place — LauncherActivity
+# .startLaunchFlow(). Nothing re-sends it, so if nobody launches that Activity after a
+# power cycle the cluster silently stays on the factory dashboard.
+#
+# Its own BootReceiver cannot cover this. Verified on car way 2026-08-18: the head unit
+# never reboots when the car starts (uptime 7.9 days across 17 car starts) — BYD instead
+# quickboots, force-stopping ~132 packages and replaying a boot sequence. Across that
+# whole log buffer com.voltflow.dashboard/.BootReceiver was invoked 0 times while 16
+# other packages were started by the same boot-broadcast wave. Android 10 would also
+# block its startActivity from a boot receiver. Shell uid has neither problem.
+DASH_PKG="com.voltflow.dashboard"
+DASH_ACT="$DASH_PKG/.LauncherActivity"
+# Power-cycle marker. The unit does not reboot, so uptime and boot props are useless.
+# Track instead the PID of a package quickboot always kills and always restarts:
+# launcher3 was force-stopped and re-started on every observed cycle, so a changed PID
+# means a new cycle.
+DASH_CYCLE_PKG="com.android.launcher3"
+DASH_CYCLE_FILE="/data/local/tmp/voltflow_dash_cycle"
+DASH_DISABLED="/data/local/tmp/voltflow_dash_autostart.disabled"
+DASH_DIPLUS_WAIT_MAX=60
+DASH_ATTEMPTS=3
+DASH_VERIFY_SEC=15
 
 # Single-instance guard. Without this, every relaunch (app USER_PRESENT / boot / the
 # APK-update kill-respawn gap in TrackingService.ensureCommandDaemonRunning) starts a
@@ -64,6 +93,60 @@ while [ "$(getprop sys.boot_completed)" != "1" ] && [ $BOOT_WAIT -lt 120 ]; do
 done
 echo "[$(date)] boot ready (waited ${BOOT_WAIT}s)" >> "$LOG_FILE"
 sleep 3
+
+# Bring the cluster dashboard up once per power cycle.
+#
+# Deliberately NOT a liveness watchdog like the $PKG relaunch below. The dashboard's
+# layout editor has EXIT and FACTORY DASHBOARD buttons, so a driver can choose the stock
+# cluster on purpose; relaunching on every absence would fight that choice every 30s.
+# One shot per power cycle restores the projection after a car start and then leaves it
+# alone until the next one.
+#
+# Health is judged by the resumed Activity, not by pidof: observed on car way with the
+# process alive (pid 20046) but holding no activities at all and Display #1 empty, i.e.
+# a process check would have reported "fine" while the cluster showed nothing.
+dashboard_autostart_tick() {
+  [ -f "$DASH_DISABLED" ] && return 0
+  pm path "$DASH_PKG" >/dev/null 2>&1 || return 0
+
+  CUR_CYCLE=$(pidof "$DASH_CYCLE_PKG" 2>/dev/null)
+  [ -z "$CUR_CYCLE" ] && return 0
+  LAST_CYCLE=$(cat "$DASH_CYCLE_FILE" 2>/dev/null || echo "")
+  [ "$CUR_CYCLE" = "$LAST_CYCLE" ] && return 0
+
+  # Claim the cycle up front. A failure below must not re-trigger on the next 30s tick —
+  # the retries inside this call are the whole budget for this power cycle.
+  echo "$CUR_CYCLE" > "$DASH_CYCLE_FILE"
+
+  if dumpsys activity activities 2>/dev/null | grep -q "$DASH_PKG/.MainActivity"; then
+    echo "[$(date)] power cycle ($LAST_CYCLE -> $CUR_CYCLE), cluster already up" >> "$LOG_FILE"
+    return 0
+  fi
+
+  # LauncherActivity sends the projection command to Di+ at 127.0.0.1:8988 before it
+  # waits for the display. Launching before Di+ is up gets the command refused and the
+  # cluster stays factory, so wait for it first.
+  DIPLUS_WAIT=0
+  while [ -z "$(pidof com.van.diplus:remote 2>/dev/null)" ] && \
+        [ $DIPLUS_WAIT -lt $DASH_DIPLUS_WAIT_MAX ]; do
+    sleep 5
+    DIPLUS_WAIT=$((DIPLUS_WAIT + 5))
+  done
+
+  echo "[$(date)] power cycle ($LAST_CYCLE -> $CUR_CYCLE), starting $DASH_PKG (di+ wait ${DIPLUS_WAIT}s)" >> "$LOG_FILE"
+  DASH_TRY=1
+  while [ $DASH_TRY -le $DASH_ATTEMPTS ]; do
+    am start -n "$DASH_ACT" >/dev/null 2>&1
+    sleep $DASH_VERIFY_SEC
+    if dumpsys activity activities 2>/dev/null | grep -q "$DASH_PKG/.MainActivity"; then
+      echo "[$(date)] cluster up on attempt $DASH_TRY" >> "$LOG_FILE"
+      return 0
+    fi
+    echo "[$(date)] cluster not up after attempt $DASH_TRY" >> "$LOG_FILE"
+    DASH_TRY=$((DASH_TRY + 1))
+  done
+  echo "[$(date)] gave up starting $DASH_PKG this cycle" >> "$LOG_FILE"
+}
 
 while true; do
   [ -f "$SENTINEL" ] && { echo "[$(date)] disabled (sentinel), exit" >> "$LOG_FILE"; exit 0; }
@@ -116,6 +199,9 @@ while true; do
           echo "$NOW_TS" > "$APP_RELAUNCH_TS_FILE"
         fi
       fi
+
+      # Cluster projection: one-shot per power cycle, see dashboard_autostart_tick.
+      dashboard_autostart_tick
     done
   ) &
   WATCHER_PID=$!
