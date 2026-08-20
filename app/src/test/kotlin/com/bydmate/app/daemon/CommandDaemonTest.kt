@@ -482,7 +482,12 @@ class CommandDaemonTest {
 
     @Test
     fun `the server can idle the command poll while remote commands are suspended`() {
-        assertEquals(60_000L, CommandDaemon.commandPollIntervalMs(60))
+        assertEquals(300_000L, CommandDaemon.commandPollIntervalMs(60, commandsEnabled = false))
+    }
+
+    @Test
+    fun `the command poll resumes normal cadence when remote commands are enabled again`() {
+        assertEquals(6_000L, CommandDaemon.commandPollIntervalMs(0, commandsEnabled = true))
     }
 
     @Test

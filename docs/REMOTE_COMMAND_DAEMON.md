@@ -88,7 +88,10 @@ within a few seconds; confirm a fresh P/off `bydmate_live_snapshots` row within 
 window, and then confirm daemon telemetry still arrives after the app is force-stopped.
 
 **Command polling stays always-on** regardless of app liveness — commands are idempotent and
-server-acked, so a brief double-poll is harmless and maximizes control reliability.
+server-acked, so a brief double-poll is harmless and maximizes control reliability. When the
+server returns `commands_enabled: false`, both command pollers reduce their cadence to one request
+every 5 minutes. They keep that floor poll so a later `commands_enabled: true` response restores
+the normal server-requested cadence without an APK update (with up to 5 minutes of resume latency).
 
 Every payload (app and daemon) carries a root `mate_version` field (`BuildConfig.VERSION_NAME`);
 the server stores it in `bydmate_live_snapshots.mate_version` so the APK version running on each
