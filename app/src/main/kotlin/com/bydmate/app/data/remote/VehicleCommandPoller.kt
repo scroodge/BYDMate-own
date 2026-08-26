@@ -36,28 +36,23 @@ class VehicleCommandPoller @Inject constructor(
 
     companion object {
         private const val TAG = "VehicleCmdPoll"
-        private const val BASE_POLL_MS = 6000L
+        private const val BASE_POLL_MS = CommandPollingCadence.BASE_POLL_MS
         private const val MAX_BACKOFF_MS = 30_000L
 
         /**
-         * Ceiling on the server-requested poll interval. The server currently asks for 60s
-         * while remote commands are suspended; the cap exists so a bad value can never park
-         * the car on a cadence it would take an APK release to undo.
-         */
-        private const val MAX_SERVER_POLL_MS = 300_000L
-
-        /**
          * Next poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
-         * field is absent (older server) or nonsensical.
+         * field is absent (older server) or nonsensical. A suspended server uses the shared
+         * 5-minute floor so this client can discover when commands are enabled again.
          *
          * Polling every 6s around the clock was the single largest source of cloud function
          * invocations, and while commands are suspended every one of those returns an empty
          * list. Letting the server set the cadence means it can be tuned — or restored to 6s
          * the moment commands come back — without shipping an APK.
          */
-        internal fun pollIntervalMs(serverSeconds: Int): Long =
-            if (serverSeconds <= 0) BASE_POLL_MS
-            else (serverSeconds * 1000L).coerceIn(BASE_POLL_MS, MAX_SERVER_POLL_MS)
+        internal fun pollIntervalMs(
+            serverSeconds: Int,
+            commandsEnabled: Boolean = true,
+        ): Long = CommandPollingCadence.intervalMs(serverSeconds, commandsEnabled)
     }
 
     private var scope: CoroutineScope? = null
@@ -128,7 +123,10 @@ class VehicleCommandPoller @Inject constructor(
             // Read before the empty-queue return — an idle command queue is the normal case
             // and must not skip the grant. Absent on older servers, which reads as 0 = off.
             cloudTelemetrySender.onLiveFastGranted(json.optInt("live_fast_seconds", 0))
-            val nextPollMs = pollIntervalMs(json.optInt("poll_after_seconds", 0))
+            val nextPollMs = pollIntervalMs(
+                serverSeconds = json.optInt("poll_after_seconds", 0),
+                commandsEnabled = json.optBoolean("commands_enabled", true),
+            )
             val commands = json.optJSONArray("commands") ?: JSONArray()
             if (commands.length() == 0) return nextPollMs
 

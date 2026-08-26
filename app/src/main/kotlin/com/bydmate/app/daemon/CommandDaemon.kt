@@ -6,6 +6,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.CommandAllowlist
+import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
@@ -51,18 +52,13 @@ import kotlin.math.min
 object CommandDaemon {
 
     private const val DEFAULT_CONF = "/data/local/tmp/voltflow_cmd.conf"
-    private const val BASE_POLL_MS = 6000L
+    private const val BASE_POLL_MS = CommandPollingCadence.BASE_POLL_MS
     private const val MAX_BACKOFF_MS = 30_000L
 
     /**
-     * Ceiling on the server-requested command-poll interval, so a bad value can never park the
-     * car on a cadence it would take an APK release to undo.
-     */
-    private const val MAX_SERVER_POLL_MS = 300_000L
-
-    /**
      * Next command-poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
-     * field is absent (older server) or nonsensical.
+     * field is absent (older server) or nonsensical. A suspended server uses the shared 5-minute
+     * floor so this client can discover when commands are enabled again.
      *
      * This loop is the daemon's most expensive habit by a wide margin: it is not gated on the
      * app being alive and runs whenever the head unit is powered, so at 6s it is ~14.4k cloud
@@ -70,9 +66,10 @@ object CommandDaemon {
      * returns an empty list. Server-driven so the cadence can be restored to 6s without an APK
      * release when commands come back. Mirrors `VehicleCommandPoller.pollIntervalMs`.
      */
-    internal fun commandPollIntervalMs(serverSeconds: Int): Long =
-        if (serverSeconds <= 0) BASE_POLL_MS
-        else (serverSeconds * 1000L).coerceIn(BASE_POLL_MS, MAX_SERVER_POLL_MS)
+    internal fun commandPollIntervalMs(
+        serverSeconds: Int,
+        commandsEnabled: Boolean = true,
+    ): Long = CommandPollingCadence.intervalMs(serverSeconds, commandsEnabled)
 
     /** How often to refresh telemetry used for movement/voltage guards. */
     private const val TELEMETRY_TTL_MS = 5_000L
@@ -945,7 +942,10 @@ object CommandDaemon {
             // command queue is the normal case and must not skip the grant. Absent on older
             // servers, which reads as 0 and leaves the current window to lapse.
             applyLiveFastGrant(json)
-            val nextPollMs = commandPollIntervalMs(json.optInt("poll_after_seconds", 0))
+            val nextPollMs = commandPollIntervalMs(
+                serverSeconds = json.optInt("poll_after_seconds", 0),
+                commandsEnabled = json.optBoolean("commands_enabled", true),
+            )
             val commands = json.optJSONArray("commands") ?: JSONArray()
             if (commands.length() == 0) return nextPollMs
 
