@@ -5,7 +5,8 @@ Actionable, prioritized task list. Milestone-level view lives in
 термины — в [`CONTEXT.md`](../CONTEXT.md); решения — в [`adr/`](adr/);
 инженерные заметки в [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-08-26 · база: `main` @ `0.5.4` (`versionCode 341`).
+- **Обновлено:** 2026-08-26 · база: `main` @ `0.5.4` (`versionCode 341`, wireless-ADB
+  установлен на `way`: 9a/9b/9c зелёные; первый app-сэмпл 10:48:38.703 +03).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `done`.
 - Оценка: S (<½ дня) · M (1–2 дня) · L (>2 дня / кросс-репо).
