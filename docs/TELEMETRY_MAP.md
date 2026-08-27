@@ -100,11 +100,18 @@ item 2 for why that changed and why it was safe.
 
 The flush envelope wraps these as `samples[]` plus optional `hourly[]` / `trips[]`.
 
-**`telemetry {}` — 20 fields, state-gated.** P = parked, D = driving, C = charging.
+**`telemetry {}` — 21 fields, state-gated.** P = parked, D = driving, C = charging.
+
+`soc_source` names which of the car's **two SOC scales** `soc` is on — `diplus` (raw BMS,
+0.1 % on di+ 2.0) or `autoservice` (the whole-percent dashboard value). They differ by up
+to ~2 pp and the gap changes sign with SOC, so a consumer that mixes them without checking
+this field will see phantom steps. See
+[`DIPLUS_DATA.md` § The two SOC scales](DIPLUS_DATA.md#the-two-soc-scales--di-20-is-raw-autoservice-is-the-dashboard).
 
 | Field | Sent when | Rounded |
 |---|---|---|
 | `soc` | always | — |
+| `soc_source` | whenever `soc` is present | — |
 | `soh_percent` | always, incl. parked (slow-moving, cached BMS value) | — |
 | `is_charging` | not P, or when `soc` is present | — |
 | `speed_kmh`, `power_kw` | D/C, or whenever the value exists at all | — |
@@ -166,8 +173,10 @@ Used **only** when di+ is unreachable *and* `shouldUseAutoserviceFallback` has c
 the car is parked or charging — never during a drive, because this payload has no
 `gear` or `speed` of its own. Has no `live_only` variant.
 
-- **`telemetry {}` (9):** `soc`, `power_kw`, `aux_voltage_v`, `is_charging`, `is_parked`,
-  `soh_percent`, plus charging-only `charge_power_kw`, `kwh_charged`, `charge_type`
+- **`telemetry {}` (10):** `soc`, `soc_source` (always `autoservice` here — this path has
+  no di+ read, so every SOC in it is the dashboard scale), `power_kw`, `aux_voltage_v`,
+  `is_charging`, `is_parked`, `soh_percent`, plus charging-only `charge_power_kw`,
+  `kwh_charged`, `charge_type`
 - **`diplus {}` (14):** `soc`, `power_kw`, `charge_gun_state`, `voltage_12v`,
   `door_fl/fr/rl/rr`, `trunk`, `hood`, `tire_press_fl/fr/rl/rr_kpa`
 

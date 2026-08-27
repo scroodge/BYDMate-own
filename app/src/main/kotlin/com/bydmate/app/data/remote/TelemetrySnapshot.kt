@@ -3,27 +3,42 @@ package com.bydmate.app.data.remote
 import android.location.Location
 import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.autoservice.ChargingReading
+import com.bydmate.app.domain.SocScaleCalibration
+import com.bydmate.app.domain.SocSource
+import com.bydmate.app.domain.autoserviceToRawPercent
 import java.time.Instant
 import kotlin.math.roundToInt
 
+/** A resolved SOC together with the scale it came from. */
+internal data class ResolvedSoc(val percent: Int?, val source: SocSource?)
+
 /**
  * The cloud contract carries whole-percent SOC. Prefer Di+ while it provides a valid
- * value, then use the independently validated autoservice read when Di+ omits SOC.
+ * value, then fall back to the autoservice read when Di+ omits SOC.
+ *
+ * The two are **not the same scale** — autoservice serves the display SOC, Di+ 2.0 the
+ * raw BMS SOC (see [SocScaleCalibration]). The fallback therefore converts before
+ * substituting, and the result records which source won so downstream consumers can tell
+ * a raw-scale sample from a converted one. Under [SocScaleCalibration.IDENTITY] the
+ * conversion is a no-op and the value is unchanged from previous releases.
  */
 internal fun resolveTelemetrySoc(
     diPlusSoc: Int?,
     autoserviceSocPercent: Float?,
-): Int? =
-    diPlusSoc?.takeIf { it in 0..100 }
-        ?: autoserviceSocPercent
-            ?.takeIf { it.isFinite() && it in 0f..100f }
-            ?.roundToInt()
+    calibration: SocScaleCalibration = SocScaleCalibration.IDENTITY,
+): ResolvedSoc {
+    diPlusSoc?.takeIf { it in 0..100 }?.let { return ResolvedSoc(it, SocSource.DIPLUS) }
+    val converted = calibration.autoserviceToRawPercent(autoserviceSocPercent)
+    return ResolvedSoc(converted, converted?.let { SocSource.AUTOSERVICE })
+}
 
 data class VehicleTelemetrySnapshot(
     val capturedAtMs: Long,
     val deviceTimeIso: String,
     val diPlusData: DiParsData?,
     val soc: Int?,
+    /** Which scale [soc] came from; null when no SOC was resolved. */
+    val socSource: SocSource? = null,
     val speedKmh: Double?,
     val powerKw: Double?,
     val batteryTempC: Double?,
@@ -75,7 +90,9 @@ data class VehicleTelemetrySnapshot(
             currentTripDistanceKm: Double?,
             currentTripConsumptionKwh100km: Double?,
             location: Location?,
+            socCalibration: SocScaleCalibration = SocScaleCalibration.IDENTITY,
         ): VehicleTelemetrySnapshot {
+            val resolvedSoc = resolveTelemetrySoc(data?.soc, battery?.socPercent, socCalibration)
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
             val gunState = charging?.gunConnectState ?: data?.chargeGunState
@@ -89,7 +106,8 @@ data class VehicleTelemetrySnapshot(
                 capturedAtMs = capturedAtMs,
                 deviceTimeIso = Instant.ofEpochMilli(capturedAtMs).toString(),
                 diPlusData = data,
-                soc = resolveTelemetrySoc(data?.soc, battery?.socPercent),
+                soc = resolvedSoc.percent,
+                socSource = resolvedSoc.source,
                 speedKmh = data?.speed?.toDouble(),
                 powerKw = powerKw,
                 batteryTempC = data?.avgBatTemp?.toDouble(),

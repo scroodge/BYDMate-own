@@ -407,6 +407,58 @@ route to charge-session energy that does not require the on-device ADB `autoserv
 `diplus` object carries the rounded `Int`, see [The SOC break](#the-soc-break--confirmed-then-fixed)
 above.
 
+## The two SOC scales — di+ 2.0 is raw, autoservice is the dashboard
+
+- **Last confirmed:** 2026-08-26 on car `way`, cross-checked against 4 cars' cloud history.
+
+di+ and `autoservice getFloat(1014, FID_SOC)` report SOC on **two different scales**. They
+are not two readings of one number and must never be differenced against each other.
+
+| | di+ 2.0 `电量百分比` | autoservice `FID_SOC` |
+|---|---|---|
+| Scale | **raw BMS SOC** | **display SOC** — what the cluster shows |
+| Resolution | 0.1 % (`socPermille: 994`) | whole percent, always (0 fractional in 1360 samples) |
+| At the top of a charge | `99.4` while cells still balance | `100.0`, clamped |
+| At the bottom | keeps ~2 % reserve visible | reaches 0 with reserve remaining |
+
+Observed live on `way`, plugged in on AC, mid balance-tail — di+ `/api/historyStatus`
+reported `soc: 99.4`, `socPermille: 994`, `socPrecise: true`, cells `3355`/`3329` mV, while
+`service call autoservice 7 i32 1014 i32 1246777400` returned `0x42c80000` = `100.0`, stable
+across three minutes of polling. The driver confirmed the cluster reads `100` in exactly
+this state, which is what identifies `FID_SOC` as the display value.
+
+Fitted against paired cloud samples (`diplus_soc` vs `autoservice_soc_percent`), the two are
+related by an affine map — **per vehicle**:
+
+| car | display = slope × raw + intercept | usable window (raw) | pairs | max residual |
+|---|---|---|---|---|
+| `way` | `1.0280 × raw − 2.246` | 2.18 – 99.46 % | 414 | 0.86 pp |
+| `yuan up` | `1.0178 × raw − 0.519` | 0.51 – 98.77 % | 958 | 1.49 pp |
+
+So the error changes sign with SOC. On `way`: −1.9 pp at 10 %, ≈0 near 80 %, +0.6 pp at the
+top.
+
+**The split tracks the di+ version, not the model.** Two cars whose di+ still reports whole
+percents (1.x) matched `FID_SOC` **exactly** — `BYE Yuan Up` 1531/1531 samples over 24–95 %,
+`BYD` 1172/1172 over 28–85 %. di+ 1.x served the display value itself; 2.0 moved to the raw
+signal. A car therefore starts diverging the moment it is upgraded, which makes this a
+growing problem rather than a static one.
+
+Consequences already in the code:
+
+- Every telemetry sample now carries **`soc_source`** (`diplus` / `autoservice`) so a
+  converted fallback sample is distinguishable from a raw one — see
+  [`TELEMETRY_MAP.md` §5](TELEMETRY_MAP.md#5-wire-fields--what-each-payload-actually-contains).
+- `battery_capacity_kwh` is defined as kWh per 100 **raw** points. A display-scale delta
+  covers less energy per point and must be divided by the slope first.
+- `SocScaleCalibration` defaults to identity, which is *correct* for di+ 1.x cars and
+  preserves prior behaviour on 2.0 cars. Per-car slopes are **not** hard-coded — fit one
+  from `soc_source`-tagged history before setting it.
+
+**Unverified on-car:** the conversion path itself. Under the identity default it is a
+no-op, so nothing about today's numbers changes; a non-identity calibration has never run
+on a car.
+
 ## ⚠️ Sentinel ("no data") magic numbers
 
 When a signal can't be read, di+ returns a magic value instead of null. These were caught

@@ -43,7 +43,7 @@ class ChargingStateStoreTest {
     @Test
     fun `save then load returns same values`() = runTest {
         val s = store()
-        s.save(socPercent = 85, mileageKm = 10500.5f, capacityKwh = 7.8f, ts = 1700000000000L)
+        s.save(socPercent = 85, socSource = null, mileageKm = 10500.5f, capacityKwh = 7.8f, ts = 1700000000000L)
         val state = s.load()
         assertEquals(85, state.socPercent)
         assertEquals(10500.5f, state.mileageKm!!, 0.01f)
@@ -56,7 +56,7 @@ class ChargingStateStoreTest {
         val initial = mapOf(SettingsRepository.KEY_CHARGING_BASELINE_SOC to "80")
         val s = store(initial)
         // Save with null soc — should not overwrite the pre-existing 80
-        s.save(socPercent = null, mileageKm = 100f, capacityKwh = 5f, ts = 1000L)
+        s.save(socPercent = null, socSource = null, mileageKm = 100f, capacityKwh = 5f, ts = 1000L)
         val state = s.load()
         assertEquals(80, state.socPercent)
     }
@@ -71,7 +71,7 @@ class ChargingStateStoreTest {
         val dao = FakeSettingsDao()
         val settings = SettingsRepository(dao)
         val s = ChargingStateStore(settings)
-        s.save(socPercent = 80, mileageKm = 100f, capacityKwh = 5f, ts = 1000L)
+        s.save(socPercent = 80, socSource = null, mileageKm = 100f, capacityKwh = 5f, ts = 1000L)
         // Simulate live polling overwriting the last-known SOC as SOC climbs.
         listOf(81, 82, 83, 84, 85).forEach { settings.saveLastKnownSoc(it) }
         val state = s.load()
@@ -81,7 +81,7 @@ class ChargingStateStoreTest {
     @Test
     fun `save with null capacityKwh persists as null`() = runTest {
         val s = store()
-        s.save(socPercent = 70, mileageKm = null, capacityKwh = null, ts = 2000L)
+        s.save(socPercent = 70, socSource = null, mileageKm = null, capacityKwh = null, ts = 2000L)
         val state = s.load()
         assertNull(state.mileageKm)
         assertNull(state.capacityKwh)

@@ -12,6 +12,7 @@ import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.resolveTelemetrySoc
+import com.bydmate.app.domain.SocSource
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -1288,7 +1289,11 @@ object CommandDaemon {
             putIfPresent("tire_press_rl_kpa", tireRL); putIfPresent("tire_press_rr_kpa", tireRR)
         }
         val telemetry = JSONObject().apply {
-            putIfPresent("soc", soc); putIfPresent("power_kw", powerKw); putIfPresent("aux_voltage_v", voltage12v)
+            // Every SOC here is the autoservice display scale by construction — there is no
+            // di+ read in this path. Tagged so a consumer can tell these samples apart from
+            // raw-scale di+ ones; see SocScaleCalibration.
+            putIfPresent("soc", soc); putIfPresent("soc_source", SocSource.AUTOSERVICE.wireName)
+            putIfPresent("power_kw", powerKw); putIfPresent("aux_voltage_v", voltage12v)
             put("is_charging", isCharging)
             putIfPresent("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
             putRounded("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null, KWH_CHARGED_DECIMALS)
@@ -1316,7 +1321,8 @@ object CommandDaemon {
         liveOnly: Boolean = false,
         autoserviceSocPercent: Float? = null,
     ): JSONObject {
-        val telemetrySoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
+        val resolvedSoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
+        val telemetrySoc = resolvedSoc.percent
         val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
             d.maxCellVoltage!! - d.minCellVoltage!!
         } else {
@@ -1355,7 +1361,12 @@ object CommandDaemon {
         }
 
         val telemetry = JSONObject().apply {
-            putIfPresent("soc", telemetrySoc); putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
+            // Mirrors CloudTelemetryPayload: prefer di+ 2.0's 0.1 %-resolution value, and
+            // tag which scale it is on (di+ raw BMS vs autoservice display — see
+            // SocScaleCalibration).
+            putIfPresent("soc", d.socPrecise ?: telemetrySoc)
+            putIfPresent("soc_source", resolvedSoc.source?.wireName)
+            putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
             putIfPresent("battery_temp_c", d.avgBatTemp?.toDouble()); putIfPresent("cabin_temp_c", d.insideTemp?.toDouble())
             putIfPresent("outside_temp_c", d.exteriorTemp?.toDouble()); putIfPresent("aux_voltage_v", d.voltage12v)
             putRounded("cell_voltage_min_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)

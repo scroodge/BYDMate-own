@@ -2,6 +2,7 @@ package com.bydmate.app.data.repository
 
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.domain.SocSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -85,6 +86,10 @@ open class SettingsRepository @Inject constructor(
         // cascade detector's pre-charging baseline survives polling and
         // runCatchUp can compute a real SOC delta on cold start.
         const val KEY_CHARGING_BASELINE_SOC = "charging_baseline_soc"
+        // Which SOC scale KEY_CHARGING_BASELINE_SOC was read on ("diplus" / "autoservice",
+        // "" = unknown). A baseline and a current read taken on different scales are up to
+        // ~2 pp apart, which is a whole phantom charge session — see SocScaleCalibration.
+        const val KEY_CHARGING_BASELINE_SOC_SOURCE = "charging_baseline_soc_source"
         const val KEY_MIGRATION_V2_4_17 = "migration_v2_4_17_done"
         const val KEY_MIGRATION_DOMAIN_VOLTFLOW = "migration_domain_voltflow_done"
         /** User explicitly started Gateway from UI; BootReceiver respects this. */
@@ -138,6 +143,14 @@ open class SettingsRepository @Inject constructor(
     suspend fun setString(key: String, value: String) =
         settingsDao.set(SettingEntity(key, value))
 
+    /**
+     * kWh per **100 raw-BMS SOC points** — the scale di+ 2.0 reports.
+     *
+     * The unit matters: 100 raw points and 100 display points are not the same amount of
+     * energy (the display scale spans only the usable window, ~2–99 % raw on car `way`),
+     * so a SOC delta must be converted to the raw scale before being multiplied by this.
+     * See [com.bydmate.app.domain.SocScaleCalibration].
+     */
     suspend fun getBatteryCapacity(): Double =
         getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).toDoubleOrNull() ?: 72.9
 
@@ -259,6 +272,14 @@ open class SettingsRepository @Inject constructor(
 
     suspend fun setChargingBaselineSoc(soc: Int) =
         setString(KEY_CHARGING_BASELINE_SOC, soc.toString())
+
+    suspend fun getChargingBaselineSocSource(): SocSource? =
+        getString(KEY_CHARGING_BASELINE_SOC_SOURCE, "")
+            .takeIf { it.isNotEmpty() }
+            ?.let { stored -> SocSource.entries.firstOrNull { it.wireName == stored } }
+
+    suspend fun setChargingBaselineSocSource(source: SocSource?) =
+        setString(KEY_CHARGING_BASELINE_SOC_SOURCE, source?.wireName ?: "")
 
     suspend fun getLastMileageKm(): Float? =
         getString(KEY_LAST_MILEAGE_KM, "").toFloatOrNull()

@@ -7,6 +7,9 @@ import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.repository.BatteryHealthRepository
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.domain.SocScaleCalibration
+import com.bydmate.app.domain.SocSource
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -56,6 +59,37 @@ class AutoserviceChargingDetector @Inject constructor(
     private val settings: SettingsRepository,
     private val diParsClient: DiParsClient
 ) {
+    /**
+     * How this car's display scale maps onto the raw BMS scale.
+     *
+     * IDENTITY preserves current behaviour and is correct for cars still on di+ 1.x, where
+     * di+ reports the display value itself. On di+ 2.0 cars the real slope is ~1.02 and
+     * differs per vehicle (`way` 1.0280, `yuan up` 1.0178), so there is no single constant
+     * to hard-code — fit one per car from the `soc_source`-tagged cloud samples before
+     * replacing this. See [SocScaleCalibration].
+     */
+    private val socCalibration: SocScaleCalibration = SocScaleCalibration.IDENTITY
+
+    /**
+     * Puts the persisted baseline on [target]'s scale. Returns it unchanged when the scales
+     * already match, or when the stored source is unknown (a baseline written before the
+     * source was tracked) — guessing there would be worse than the status quo.
+     */
+    private fun alignBaselineSoc(prev: ChargingStateStore.State, target: SocSource): Int {
+        val baseline = prev.socPercent ?: return 0
+        val from = prev.socSource ?: return baseline
+        if (from == target || socCalibration.isIdentity) return baseline
+        val aligned = when (target) {
+            SocSource.DIPLUS -> socCalibration.displayToRaw(baseline.toDouble())
+            SocSource.AUTOSERVICE -> socCalibration.rawToDisplay(baseline.toDouble())
+        }.roundToInt().coerceIn(0, 100)
+        android.util.Log.i(
+            TAG,
+            "runCatchUp: baseline scale ${from.wireName} → ${target.wireName}, soc $baseline → $aligned"
+        )
+        return aligned
+    }
+
     companion object {
         const val MIN_DELTA_KWH = 0.5
         // Last-resort heuristic duration when prev.ts is unset (cold start).
@@ -134,7 +168,13 @@ class AutoserviceChargingDetector @Inject constructor(
             // typically holds the last-known SOC across both windows. When
             // it has a valid 0..100 value, we use it as the SOC source so
             // catch-up does not lose a real charging session.
+            // NOTE: the two branches below read DIFFERENT SCALES. autoservice serves the
+            // display SOC, di+ 2.0 the raw BMS SOC, and they diverge by up to ~2 pp (see
+            // SocScaleCalibration). The source is tracked from here on so a baseline saved
+            // on one scale is never differenced against a reading on the other — that gap
+            // alone is large enough to fabricate a charge session.
             val autoSoc = battery?.socPercent?.toInt()
+            val currentSocSource = if (autoSoc != null) SocSource.AUTOSERVICE else SocSource.DIPLUS
             val currentSoc: Int = if (autoSoc != null) {
                 autoSoc
             } else {
@@ -155,6 +195,7 @@ class AutoserviceChargingDetector @Inject constructor(
             if (prev.socPercent == null) {
                 stateStore.save(
                     socPercent = currentSoc,
+                    socSource = currentSocSource,
                     mileageKm = battery?.lifetimeMileageKm,
                     capacityKwh = charging?.chargingCapacityKwh,
                     ts = now
@@ -200,11 +241,17 @@ class AutoserviceChargingDetector @Inject constructor(
 
             // Step 5: SOC delta gate — the regression-fix gate. NEVER create a row when SOC
             // did not increase. Covers phantom rows from the old lifetime_kwh driving counter.
-            val socDelta = currentSoc - prev.socPercent
+            //
+            // The baseline may have been saved on the other scale (autoservice went sentinel
+            // on one run and di+ answered on the next — the 100 %-balancing window does
+            // exactly this). Put both endpoints on the current scale before differencing.
+            val baselineSoc = alignBaselineSoc(prev, currentSocSource)
+            val socDelta = currentSoc - baselineSoc
             if (socDelta <= 0) {
                 android.util.Log.i(TAG, "runCatchUp: socDelta=$socDelta <= 0 → NO_DELTA (no charge)")
                 stateStore.save(
                     socPercent = currentSoc,
+                    socSource = currentSocSource,
                     mileageKm = battery?.lifetimeMileageKm,
                     capacityKwh = charging?.chargingCapacityKwh,
                     ts = now
@@ -217,7 +264,15 @@ class AutoserviceChargingDetector @Inject constructor(
             val currentCap = charging?.chargingCapacityKwh?.toDouble()
             val prevCap = prev.capacityKwh?.toDouble()
             val nominalCapacity = settings.getBatteryCapacity()
-            val socEstimate = (socDelta / 100.0) * nominalCapacity
+            // getBatteryCapacity() is kWh per 100 *raw* points. A display-scale delta covers
+            // less pack energy per point (the display spans only the usable window), so it
+            // has to be converted before being multiplied by the constant. Under
+            // SocScaleCalibration.IDENTITY this is a no-op.
+            val socDeltaRaw = when (currentSocSource) {
+                SocSource.AUTOSERVICE -> socDelta / socCalibration.slope
+                SocSource.DIPLUS -> socDelta.toDouble()
+            }
+            val socEstimate = (socDeltaRaw / 100.0) * nominalCapacity
 
             val delta: Double
             val detectionSource: String
@@ -334,6 +389,7 @@ class AutoserviceChargingDetector @Inject constructor(
             // Step 12: roll state forward
             stateStore.save(
                 socPercent = currentSoc,
+                socSource = currentSocSource,
                 mileageKm = battery?.lifetimeMileageKm,
                 capacityKwh = charging?.chargingCapacityKwh,
                 ts = now

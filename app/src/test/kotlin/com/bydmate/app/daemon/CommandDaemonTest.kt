@@ -2,6 +2,8 @@ package com.bydmate.app.daemon
 
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.resolveTelemetrySoc
+import com.bydmate.app.domain.SocScaleCalibration
+import com.bydmate.app.domain.SocSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -29,9 +31,61 @@ class CommandDaemonTest {
 
     @Test
     fun `daemon SOC source keeps DiPlus first and falls back to valid autoservice`() {
-        assertEquals(58, resolveTelemetrySoc(diPlusSoc = 58, autoserviceSocPercent = 61.6f))
-        assertEquals(62, resolveTelemetrySoc(diPlusSoc = null, autoserviceSocPercent = 61.6f))
-        assertNull(resolveTelemetrySoc(diPlusSoc = -1, autoserviceSocPercent = -1f))
+        assertEquals(58, resolveTelemetrySoc(diPlusSoc = 58, autoserviceSocPercent = 61.6f).percent)
+        assertEquals(62, resolveTelemetrySoc(diPlusSoc = null, autoserviceSocPercent = 61.6f).percent)
+        assertNull(resolveTelemetrySoc(diPlusSoc = -1, autoserviceSocPercent = -1f).percent)
+    }
+
+    @Test
+    fun `resolved SOC records which scale it came from`() {
+        assertEquals(
+            SocSource.DIPLUS,
+            resolveTelemetrySoc(diPlusSoc = 58, autoserviceSocPercent = 61.6f).source
+        )
+        assertEquals(
+            SocSource.AUTOSERVICE,
+            resolveTelemetrySoc(diPlusSoc = null, autoserviceSocPercent = 61.6f).source
+        )
+        // No usable SOC on either scale — nothing to tag.
+        assertNull(resolveTelemetrySoc(diPlusSoc = -1, autoserviceSocPercent = -1f).source)
+    }
+
+    @Test
+    fun `autoservice fallback is converted onto the raw scale before substituting`() {
+        // way's measured calibration: display = 1.0280 x raw - 2.246.
+        val wayCalibration = SocScaleCalibration(slope = 1.0280, intercept = -2.246)
+        // The dashboard reads 100 while the pack is still at raw 99.4 — substituting the
+        // display value unconverted is what put a phantom +0.6 pp into the series.
+        val resolved = resolveTelemetrySoc(
+            diPlusSoc = null,
+            autoserviceSocPercent = 100f,
+            calibration = wayCalibration,
+        )
+        assertEquals(99, resolved.percent)
+        assertEquals(SocSource.AUTOSERVICE, resolved.source)
+
+        // Low SOC is where the two scales are furthest apart: display 8 -> raw ~9.97.
+        assertEquals(
+            10,
+            resolveTelemetrySoc(
+                diPlusSoc = null,
+                autoserviceSocPercent = 8f,
+                calibration = wayCalibration,
+            ).percent
+        )
+    }
+
+    @Test
+    fun `identity calibration leaves the fallback value unchanged`() {
+        // Cars on di+ 1.x report the display value themselves, so the scales coincide.
+        assertEquals(
+            62,
+            resolveTelemetrySoc(
+                diPlusSoc = null,
+                autoserviceSocPercent = 61.6f,
+                calibration = SocScaleCalibration.IDENTITY,
+            ).percent
+        )
     }
 
     @Test

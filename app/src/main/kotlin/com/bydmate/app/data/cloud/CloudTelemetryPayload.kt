@@ -29,6 +29,10 @@ object CloudTelemetryPayload {
             // the decimal survives. Falls back to the rounded value for di+ 1.x and for
             // the autoservice-sourced SOC, keeping the key's type stable either way.
             putIfPresent("soc", snapshot.diPlusData?.socPrecise ?: snapshot.soc)
+            // Which scale `soc` is on. autoservice serves the display SOC, di+ 2.0 the raw
+            // BMS SOC, and the two differ by up to ~2 pp — see SocScaleCalibration. Without
+            // this tag a fallback sample is indistinguishable from a di+ one.
+            putIfPresent("soc_source", snapshot.socSource?.wireName)
             if (!idleOnly || snapshot.soc != null) {
                 putIfPresent("is_charging", snapshot.isCharging)
             }
