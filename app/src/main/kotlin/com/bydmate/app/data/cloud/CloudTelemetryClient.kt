@@ -6,13 +6,18 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
 sealed class CloudSendResult {
     data class Success(val responseBody: String?) : CloudSendResult()
-    data class RetryableFailure(val message: String) : CloudSendResult()
+    data class RetryableFailure(
+        val message: String,
+        val retryAfterMs: Long? = null,
+    ) : CloudSendResult()
     data class NonRetryableFailure(val message: String) : CloudSendResult()
 }
 
@@ -53,7 +58,12 @@ class CloudTelemetryClient @Inject constructor(
 
             httpClient.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string()
-                classify(response.code, response.messageWithBody(responseBody), responseBody)
+                classify(
+                    response.code,
+                    response.messageWithBody(responseBody),
+                    responseBody,
+                    retryAfterDelayMs(response.header("Retry-After"), System.currentTimeMillis()),
+                )
             }
         } catch (e: Exception) {
             CloudSendResult.RetryableFailure(e.javaClass.simpleName + ": " + (e.message ?: "network error"))
@@ -96,12 +106,32 @@ class CloudTelemetryClient @Inject constructor(
          * Status → result. Split out of [send] so the classification is unit-testable without a
          * live socket, and without adding MockWebServer to the test dependencies.
          */
-        internal fun classify(code: Int, message: String, responseBody: String?): CloudSendResult =
+        internal fun classify(
+            code: Int,
+            message: String,
+            responseBody: String?,
+            retryAfterMs: Long? = null,
+        ): CloudSendResult =
             when (code) {
                 in 200..299 -> CloudSendResult.Success(responseBody)
-                in RETRYABLE_CLIENT_CODES -> CloudSendResult.RetryableFailure(message)
+                in RETRYABLE_CLIENT_CODES -> CloudSendResult.RetryableFailure(message, retryAfterMs)
                 in 400..499 -> CloudSendResult.NonRetryableFailure(message)
-                else -> CloudSendResult.RetryableFailure(message)
+                else -> CloudSendResult.RetryableFailure(message, retryAfterMs)
             }
+
+        /** RFC 9110 Retry-After supports either delta-seconds or an HTTP date. */
+        internal fun retryAfterDelayMs(value: String?, nowMs: Long): Long? {
+            val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            raw.toLongOrNull()?.let { seconds ->
+                return seconds.coerceAtLeast(0L)
+                    .coerceAtMost(Long.MAX_VALUE / 1_000L) * 1_000L
+            }
+            return runCatching {
+                val targetMs = ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME)
+                    .toInstant()
+                    .toEpochMilli()
+                (targetMs - nowMs).coerceAtLeast(0L)
+            }.getOrNull()
+        }
     }
 }

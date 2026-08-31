@@ -127,8 +127,12 @@ HTTP `5xx`, другие коды и сетевые исключения — ret
 
 Диагностика в настройках: `cloud_sync_last_ack` (например `15 sent, 12 ins, 3 dup, 0 skip`).
 
-При отставании очереди (>15 unsent) flush дренирует несколько батчей подряд;
-`TrackingService` повторяет flush, если предыдущий ещё выполнялся.
+При отставании очереди (>15 unsent) APK отправляет batch до **300** samples (лимит
+server contract), но не чаще одного batch раз в **2 секунды**. Token bucket и
+retry-state сохраняются в локальной БД, поэтому restart/reboot не сбрасывает лимит.
+Retryable failure включает exponential backoff с full jitter (base 5 s, cap 15 min),
+а `Retry-After` задаёт минимальную задержку. `TrackingService` повторяет flush, если
+предыдущий ещё выполнялся.
 
 ## Payload Modes
 

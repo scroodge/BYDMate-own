@@ -26,6 +26,19 @@ class CloudTelemetryClientClassifyTest {
     }
 
     @Test
+    fun `retry after delta seconds is exposed as milliseconds`() {
+        assertEquals(
+            120_000L,
+            CloudTelemetryClient.retryAfterDelayMs("120", nowMs = 1_000L),
+        )
+    }
+
+    @Test
+    fun `invalid retry after is ignored`() {
+        assertEquals(null, CloudTelemetryClient.retryAfterDelayMs("not-a-delay", nowMs = 1_000L))
+    }
+
+    @Test
     fun `wrong endpoint and request timeout stay queued`() {
         // Both are fixed outside the car — in Settings, or by the server recovering — and the
         // samples remain valid meanwhile.
