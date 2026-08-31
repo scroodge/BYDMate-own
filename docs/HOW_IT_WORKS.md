@@ -315,8 +315,11 @@ Two guards keep this honest:
 | State transition to parked, gear change, D→P→power-off | immediate | — |
 
 Queue caps at **1000 rows**; oldest are trimmed. If "Wi-Fi only" is on and Wi-Fi is
-down, samples simply stay queued. If the queue backlogs past 15 unsent, a flush
-drains multiple batches in a row.
+down, samples simply stay queued. If the queue backlogs past 15 unsent, delivery
+uses batches of at most **300** (the server contract cap) and a persisted one-token
+bucket refilling every **2 seconds**. Retryable failures use persisted exponential
+backoff with full jitter (5 s base, 15 min cap), and `Retry-After` is a mandatory
+floor. Both retry and drain gates survive process death/reboot.
 
 **Fast D→P→power-off handoff:** when an already-parked `gear=P` sample is followed
 by an explicit DiPars `powerState` on→off transition, the final sample is enqueued
@@ -460,9 +463,13 @@ HTTP status alone is not enough. After a `2xx`, the batch is removed from the qu
 - `skipped_stale_count == 0`
 - `inserted_count + duplicate_count >= <samples sent>`
 
-Otherwise the batch stays queued and retries. `4xx` is non-retryable (rows marked
-finished with the error); `5xx`, unknown codes and network exceptions are
-retryable. Diagnostics land in the settings as `cloud_sync_last_ack`, e.g.
+Otherwise the batch stays queued and retries. HTTP `401`, `403`, `404`, `408`, and
+`429` are retryable because they describe credentials, endpoint configuration,
+timeouts, or rate limiting rather than invalid sample content. Other `4xx` content
+failures (`400`, `413`, `415`, `422`) are non-retryable and are quarantined by
+marking the rows finished with an error so they cannot block FIFO. `5xx`, unknown
+codes, network exceptions, and incomplete application ACKs are retryable.
+Diagnostics land in the settings as `cloud_sync_last_ack`, e.g.
 `15 sent, 12 ins, 3 dup, 0 skip`.
 
 ### 5.6 What goes to OpenRouter (if you enable it)

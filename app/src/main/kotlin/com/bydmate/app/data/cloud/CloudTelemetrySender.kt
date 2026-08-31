@@ -16,6 +16,7 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
+import kotlin.random.Random
 
 @Singleton
 class CloudTelemetrySender @Inject constructor(
@@ -89,6 +90,7 @@ class CloudTelemetrySender @Inject constructor(
     private val cadence = CloudTelemetryCadence()
     private val gpsCorridorFilter = GpsCorridorFilter()
     internal var nowProvider: () -> Long = { System.currentTimeMillis() }
+    internal var jitterFractionProvider: () -> Double = { Random.nextDouble() }
 
     /** Fast path: queue a sample without blocking on HTTP flush. */
     suspend fun enqueue(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
@@ -197,6 +199,12 @@ class CloudTelemetrySender @Inject constructor(
             return Result.success(Unit)
         }
 
+        val nextAttemptAt = settingsRepository.getString(
+            SettingsRepository.KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT,
+            "0",
+        ).toLongOrNull() ?: 0L
+        if (now < nextAttemptAt) return Result.success(Unit)
+
         val activeBatchMode = activeBatchStartedMs != 0L
         val flushIntervalMs = if (activeBatchMode) {
             // Charging-bulk (<98% SOC) changes slowly: flush every 60s so the long charge
@@ -218,7 +226,12 @@ class CloudTelemetrySender @Inject constructor(
         } else {
             now - lastFlushAttemptMs >= flushIntervalMs
         }
-        val batchSize = if (activeBatchMode) ACTIVE_BATCH_SIZE else MAX_BATCH_SIZE
+        val backlogMode = unsentCount > BACKLOG_DRAIN_THRESHOLD
+        val batchSize = when {
+            backlogMode -> BACKLOG_BATCH_SIZE
+            activeBatchMode -> ACTIVE_BATCH_SIZE
+            else -> MAX_BATCH_SIZE
+        }
         val shouldFlush = unsentCount >= batchSize ||
             pendingFlushNow ||
             (unsentCount > 0 && intervalElapsed)
@@ -227,10 +240,24 @@ class CloudTelemetrySender @Inject constructor(
             return Result.success(Unit)
         }
 
+        if (backlogMode) {
+            val nextDrainAt = settingsRepository.getString(
+                SettingsRepository.KEY_CLOUD_SYNC_NEXT_DRAIN_AT,
+                "0",
+            ).toLongOrNull() ?: 0L
+            if (now < nextDrainAt) return Result.success(Unit)
+        }
+
         lastFlushAttemptMs = now
-        val drainAll = !activeBatchMode || unsentCount > BACKLOG_DRAIN_THRESHOLD
-        val flushResult = flushQueue(config, now, batchSize, drainAll = drainAll)
+        val flushResult = flushQueue(config, now, batchSize)
         return if (flushResult.success) {
+            clearRetryBackoff()
+            if (backlogMode) {
+                settingsRepository.setString(
+                    SettingsRepository.KEY_CLOUD_SYNC_NEXT_DRAIN_AT,
+                    (now + BACKLOG_TOKEN_REFILL_MS).toString(),
+                )
+            }
             pendingFlushNow = false
             if (activeBatchMode && queueDao.countUnsent() <= BACKLOG_DRAIN_THRESHOLD) {
                 activeBatchStartedMs = 0L
@@ -248,6 +275,7 @@ class CloudTelemetrySender @Inject constructor(
             tripDao.pruneCleanBefore(now - TRIP_RETENTION_MS)
             Result.success(Unit)
         } else {
+            persistRetryBackoff(now, flushResult.retryAfterMs)
             if (activeBatchMode) activeBatchStartedMs = now
             val remaining = queueDao.countUnsent()
             val ack = flushResult.lastAck?.formatDiagnostics()
@@ -355,95 +383,108 @@ class CloudTelemetrySender @Inject constructor(
         config: Config,
         now: Long,
         batchSize: Int,
-        drainAll: Boolean,
     ): FlushQueueResult {
-        var lastAck: CloudTelemetryAck? = null
-        while (true) {
-            val pending = queueDao.getUnsent(batchSize)
-            if (pending.isEmpty()) return FlushQueueResult(success = true, lastAck = lastAck)
+        val pending = queueDao.getUnsent(batchSize)
+        if (pending.isEmpty()) return FlushQueueResult(success = true)
 
-            // The X-Vehicle-Id header must match the vehicle_id inside every sample of the
-            // batch, or the server rejects the batch whole — good rows included. A queued row
-            // carries the id it was recorded with, so rows enqueued before the user edited
-            // their vehicle id in Settings would otherwise go out under the new id. Send one
-            // batch per id instead of stamping the current id onto older bodies.
-            val (batchVehicleId, items) = pending
-                .groupBy { CloudTelemetryPayload.vehicleIdOf(it.payloadJson) ?: config.vehicleId }
-                .entries.first()
-                .let { it.key to it.value }
+        // The X-Vehicle-Id header must match the vehicle_id inside every sample of the
+        // batch, or the server rejects the batch whole — good rows included. A queued row
+        // carries the id it was recorded with, so rows enqueued before the user edited
+        // their vehicle id in Settings would otherwise go out under the new id. Send one
+        // batch per id instead of stamping the current id onto older bodies.
+        val (batchVehicleId, items) = pending
+            .groupBy { CloudTelemetryPayload.vehicleIdOf(it.payloadJson) ?: config.vehicleId }
+            .entries.first()
+            .let { it.key to it.value }
 
-            // Cumulative aggregates for every hour still owed to the server, for this batch's
-            // vehicle. Re-sent in full each flush: the server replaces its row only when the
-            // incoming sample_count is at least what it holds, so a retry is a no-op rather
-            // than a double-count, and a block lost to a failed flush heals on the next one.
-            val hourlyBlocks = hourlyDao.getDirty(MAX_HOURLY_BLOCKS)
-                .filter { it.vehicleId == batchVehicleId }
-            // At most one open trip per vehicle (single writer — the daemon never sets
-            // client_trip), so this is normally the current trip plus maybe one just-closed
-            // trip still settling.
-            val tripBlocks = tripDao.getDirty(MAX_TRIP_BLOCKS)
-                .filter { it.vehicleId == batchVehicleId }
+        // Cumulative aggregates for every hour still owed to the server, for this batch's
+        // vehicle. Re-sent in full each flush: the server replaces its row only when the
+        // incoming sample_count is at least what it holds, so a retry is a no-op rather
+        // than a double-count, and a block lost to a failed flush heals on the next one.
+        val hourlyBlocks = hourlyDao.getDirty(MAX_HOURLY_BLOCKS)
+            .filter { it.vehicleId == batchVehicleId }
+        // At most one open trip per vehicle (single writer — the daemon never sets
+        // client_trip), so this is normally the current trip plus maybe one just-closed
+        // trip still settling.
+        val tripBlocks = tripDao.getDirty(MAX_TRIP_BLOCKS)
+            .filter { it.vehicleId == batchVehicleId }
 
-            val payload = if (items.size == 1 && hourlyBlocks.isEmpty() && tripBlocks.isEmpty()) {
-                items.first().payloadJson
-            } else {
-                CloudTelemetryPayload.buildBatch(
-                    items.map { it.payloadJson },
-                    hourlyBlocks.map { HourlyRollupAccumulator.toJson(it) },
-                    tripBlocks.map { TripRollupAccumulator.toJson(it) },
-                )
-            }
+        val payload = if (items.size == 1 && hourlyBlocks.isEmpty() && tripBlocks.isEmpty()) {
+            items.first().payloadJson
+        } else {
+            CloudTelemetryPayload.buildBatch(
+                items.map { it.payloadJson },
+                hourlyBlocks.map { HourlyRollupAccumulator.toJson(it) },
+                tripBlocks.map { TripRollupAccumulator.toJson(it) },
+            )
+        }
 
-            when (val result = client.send(config.url, config.apiKey, batchVehicleId, payload)) {
-                is CloudSendResult.Success -> {
-                    val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = items.size)
-                    lastAck = ack
-                    // Entry path for fast mode: this is the batch flush (15s driving, 60s
-                    // parked/charging), so it is what bounds how long a car takes to notice
-                    // someone opened the live view now that the command poll idles at 60s.
-                    onLiveFastGranted(ack.liveFastSeconds)
-                    if (ack.isFullyAcknowledged()) {
-                        items.forEach { queueDao.markFinished(it.id, null, now) }
-                        // Guarded by sampleCount: if a sample folded into the hour while this
-                        // flush was in flight, the row stays dirty and goes again next time.
-                        hourlyBlocks.forEach { hourlyDao.markClean(it.vehicleId, it.hourStart, it.sampleCount) }
-                        tripBlocks.forEach { tripDao.markClean(it.tripId, it.sampleCount) }
-                        if (!drainAll) return FlushQueueResult(success = true, lastAck = ack)
-                    } else {
-                        val reason = ack.parseError ?: ack.error ?: "incomplete ack"
-                        items.forEach { queueDao.markAttempt(it.id, reason) }
-                        return FlushQueueResult(
-                            success = false,
-                            lastAck = ack,
-                            retryReason = reason,
-                        )
-                    }
-                }
-                is CloudSendResult.NonRetryableFailure -> {
-                    // Quarantine, not delivery. This is now only reached when the server rejects
-                    // this *body* (400/413/415/422) — the operator-fixable and transient 4xx codes
-                    // are retryable, see CloudTelemetryClient.RETRYABLE_CLIENT_CODES. Setting
-                    // sentAt takes the row out of the FIFO send stream so one undeliverable row
-                    // cannot block every later sample; lastError != null is what distinguishes a
-                    // quarantined row from an acknowledged one, and the payload stays readable in
-                    // cloud_sync_queue until pruned. Follow-up for the never-lose goal: prune
-                    // acknowledged rows ahead of quarantined ones, since for a rejected body the
-                    // queue row is the only copy.
-                    items.forEach { queueDao.markFinished(it.id, result.message, now) }
-                    if (!drainAll) {
-                        return FlushQueueResult(success = true, lastAck = lastAck, retryReason = result.message)
-                    }
-                }
-                is CloudSendResult.RetryableFailure -> {
-                    items.forEach { queueDao.markAttempt(it.id, result.message) }
-                    return FlushQueueResult(
+        return when (val result = client.send(config.url, config.apiKey, batchVehicleId, payload)) {
+            is CloudSendResult.Success -> {
+                val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = items.size)
+                // Entry path for fast mode: this is the batch flush (15s driving, 60s
+                // parked/charging), so it is what bounds how long a car takes to notice
+                // someone opened the live view now that the command poll idles at 60s.
+                onLiveFastGranted(ack.liveFastSeconds)
+                if (ack.isFullyAcknowledged()) {
+                    items.forEach { queueDao.markFinished(it.id, null, now) }
+                    // Guarded by sampleCount: if a sample folded into the hour while this
+                    // flush was in flight, the row stays dirty and goes again next time.
+                    hourlyBlocks.forEach { hourlyDao.markClean(it.vehicleId, it.hourStart, it.sampleCount) }
+                    tripBlocks.forEach { tripDao.markClean(it.tripId, it.sampleCount) }
+                    FlushQueueResult(success = true, lastAck = ack)
+                } else {
+                    val reason = ack.parseError ?: ack.error ?: "incomplete ack"
+                    items.forEach { queueDao.markAttempt(it.id, reason) }
+                    FlushQueueResult(
                         success = false,
-                        lastAck = lastAck,
-                        retryReason = result.message,
+                        lastAck = ack,
+                        retryReason = reason,
                     )
                 }
             }
+            is CloudSendResult.NonRetryableFailure -> {
+                // Quarantine, not delivery. This is now only reached when the server rejects
+                // this *body* (400/413/415/422) — the operator-fixable and transient 4xx codes
+                // are retryable, see CloudTelemetryClient.RETRYABLE_CLIENT_CODES. Setting
+                // sentAt takes the row out of the FIFO send stream so one undeliverable row
+                // cannot block every later sample; lastError != null is what distinguishes a
+                // quarantined row from an acknowledged one, and the payload stays readable in
+                // cloud_sync_queue until pruned. Follow-up for the never-lose goal: prune
+                // acknowledged rows ahead of quarantined ones, since for a rejected body the
+                // queue row is the only copy.
+                items.forEach { queueDao.markFinished(it.id, result.message, now) }
+                FlushQueueResult(success = true, retryReason = result.message)
+            }
+            is CloudSendResult.RetryableFailure -> {
+                items.forEach { queueDao.markAttempt(it.id, result.message) }
+                FlushQueueResult(
+                    success = false,
+                    retryReason = result.message,
+                    retryAfterMs = result.retryAfterMs,
+                )
+            }
         }
+    }
+
+    private suspend fun persistRetryBackoff(now: Long, retryAfterMs: Long?) {
+        val previousFailures = settingsRepository.getString(
+            SettingsRepository.KEY_CLOUD_SYNC_FAILURE_COUNT,
+            "0",
+        ).toIntOrNull() ?: 0
+        val failureCount = (previousFailures + 1).coerceAtMost(MAX_PERSISTED_FAILURE_COUNT)
+        val delayMs = CloudTelemetryRetryPolicy.delayMs(
+            failureCount = failureCount,
+            retryAfterMs = retryAfterMs,
+            randomFraction = jitterFractionProvider(),
+        )
+        settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_FAILURE_COUNT, failureCount.toString())
+        settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT, (now + delayMs).toString())
+    }
+
+    private suspend fun clearRetryBackoff() {
+        settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_FAILURE_COUNT, "0")
+        settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT, "0")
     }
 
     private fun decide(
@@ -799,6 +840,7 @@ class CloudTelemetrySender @Inject constructor(
         val success: Boolean,
         val lastAck: CloudTelemetryAck? = null,
         val retryReason: String? = null,
+        val retryAfterMs: Long? = null,
     )
 
     private data class TripPlan(
@@ -833,6 +875,9 @@ class CloudTelemetrySender @Inject constructor(
         const val MAX_BATCH_SIZE = 120
         const val ACTIVE_BATCH_SIZE = 15
         const val BACKLOG_DRAIN_THRESHOLD = ACTIVE_BATCH_SIZE
+        const val BACKLOG_BATCH_SIZE = 300
+        const val BACKLOG_TOKEN_REFILL_MS = 2_000L
+        const val MAX_PERSISTED_FAILURE_COUNT = 30
         const val MOVING_SAMPLE_INTERVAL_MS = 1_000L
         // Charging changes slowly, so sample at 10s for the bulk of the charge to cut
         // stored telemetry volume ~10x. Above CHARGING_TAIL_SOC_THRESHOLD_PERCENT the

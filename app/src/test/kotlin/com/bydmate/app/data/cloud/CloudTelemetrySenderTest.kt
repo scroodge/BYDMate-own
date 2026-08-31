@@ -238,7 +238,7 @@ class CloudTelemetrySenderTest {
     }
 
     @Test
-    fun `backlog drain sends multiple active batches in one flush`() = runTest {
+    fun `backlog drain coalesces active rows into one bounded batch`() = runTest {
         val setup = setup()
         for (second in 1..30) {
             setup.now = BASE_TIME_MS + second * 1_000L
@@ -249,7 +249,8 @@ class CloudTelemetrySenderTest {
         setup.now = BASE_TIME_MS + 31_000L
         val flush = setup.sender.flushPending()
         assertTrue(flush.isSuccess)
-        assertEquals(2, setup.client.payloads.size)
+        assertEquals(1, setup.client.payloads.size)
+        assertEquals(30, JSONObject(setup.client.payloads.single()).getJSONArray("samples").length())
         assertEquals(0, setup.queue.items.count { it.sentAt == null })
     }
 
@@ -274,7 +275,98 @@ class CloudTelemetrySenderTest {
         assertEquals(2, setup.client.payloads.size)
         val retrySamples = JSONObject(setup.client.payloads.last()).getJSONArray("samples")
         assertEquals(15, retrySamples.length())
+        val firstAttemptSamples = JSONObject(setup.client.payloads.first()).getJSONArray("samples")
+        assertEquals(
+            firstAttemptSamples.getJSONObject(0).getString("device_time"),
+            retrySamples.getJSONObject(0).getString("device_time"),
+        )
         assertEquals(0, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
+    fun `retry backoff survives sender restart`() = runTest {
+        val setup = setup(
+            results = ArrayDeque(listOf(CloudSendResult.RetryableFailure("offline"))),
+            jitterFractions = ArrayDeque(listOf(1.0)),
+        )
+        repeat(15) { index -> setup.queue.insert(queueRow("way", index.toLong())) }
+        setup.now = BASE_TIME_MS
+
+        setup.sender.flushPending()
+
+        val nextAttemptAt = requireNotNull(
+            setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT],
+        ).toLong()
+        assertEquals("1", setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_FAILURE_COUNT])
+
+        val restarted = setup(
+            queue = setup.queue,
+            settings = setup.settings,
+        )
+        restarted.now = nextAttemptAt - 1
+        restarted.sender.flushPending()
+        assertEquals(0, restarted.client.payloads.size)
+
+        restarted.now = nextAttemptAt
+        restarted.sender.flushPending()
+        assertEquals(1, restarted.client.payloads.size)
+    }
+
+    @Test
+    fun `retry after delays the next persisted attempt`() = runTest {
+        val setup = setup(
+            results = ArrayDeque(
+                listOf(CloudSendResult.RetryableFailure("rate limited", retryAfterMs = 120_000L)),
+            ),
+            jitterFractions = ArrayDeque(listOf(0.0)),
+        )
+        repeat(15) { index -> setup.queue.insert(queueRow("way", index.toLong())) }
+        setup.now = BASE_TIME_MS
+
+        setup.sender.flushPending()
+
+        assertEquals(
+            BASE_TIME_MS + 120_000L,
+            requireNotNull(
+                setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT],
+            ).toLong(),
+        )
+    }
+
+    @Test
+    fun `backlog batch never exceeds server cap of three hundred samples`() = runTest {
+        val setup = setup()
+        repeat(600) { index -> setup.queue.insert(queueRow("way", index.toLong())) }
+        setup.now = BASE_TIME_MS
+
+        setup.sender.flushPending()
+
+        assertEquals(1, setup.client.payloads.size)
+        assertEquals(
+            300,
+            JSONObject(setup.client.payloads.single()).getJSONArray("samples").length(),
+        )
+        assertEquals(300, setup.queue.items.count { it.sentAt == null })
+    }
+
+    @Test
+    fun `backlog token bucket permits at most one batch every two seconds`() = runTest {
+        val setup = setup()
+        repeat(900) { index -> setup.queue.insert(queueRow("way", index.toLong())) }
+        setup.now = BASE_TIME_MS
+
+        setup.sender.flushPending()
+        assertEquals(1, setup.client.payloads.size)
+
+        // A process restart must not refill the bucket early.
+        val restarted = setup(queue = setup.queue, settings = setup.settings)
+        restarted.now = BASE_TIME_MS + 1_999L
+        restarted.sender.flushPending()
+        assertEquals(0, restarted.client.payloads.size)
+
+        restarted.now = BASE_TIME_MS + 2_000L
+        restarted.sender.flushPending()
+        assertEquals(1, restarted.client.payloads.size)
     }
 
     /**
@@ -515,8 +607,9 @@ class CloudTelemetrySenderTest {
 
     private fun setup(
         results: ArrayDeque<CloudSendResult> = ArrayDeque(),
-    ): TestSetup {
-        val settingsDao = FakeSettingsDao(
+        jitterFractions: ArrayDeque<Double> = ArrayDeque(),
+        queue: FakeCloudSyncQueueDao = FakeCloudSyncQueueDao(),
+        settings: FakeSettingsDao = FakeSettingsDao(
             mapOf(
                 SettingsRepository.KEY_CLOUD_SYNC_ENABLED to "true",
                 SettingsRepository.KEY_CLOUD_SYNC_URL to SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
@@ -525,23 +618,24 @@ class CloudTelemetrySenderTest {
                 SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY to "false",
                 SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS to "false",
             )
-        )
-        val queue = FakeCloudSyncQueueDao()
+        ),
+    ): TestSetup {
         val hourly = FakeHourlyRollupDao()
         val trips = FakeTripRollupDao()
         val client = FakeCloudTelemetryClient(results)
         var now = 0L
         val sender = CloudTelemetrySender(
             context = ApplicationProvider.getApplicationContext<Context>(),
-            settingsRepository = SettingsRepository(settingsDao),
+            settingsRepository = SettingsRepository(settings),
             queueDao = queue,
             hourlyDao = hourly,
             tripDao = trips,
             client = client,
         ).apply {
             nowProvider = { now }
+            jitterFractionProvider = { jitterFractions.removeFirstOrNull() ?: 0.5 }
         }
-        return TestSetup(sender, queue, trips, client, settingsDao, getNow = { now }, setNow = { now = it })
+        return TestSetup(sender, queue, trips, client, settings, getNow = { now }, setNow = { now = it })
     }
 
     private fun snapshot(

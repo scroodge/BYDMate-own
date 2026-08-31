@@ -70,6 +70,12 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"
         const val KEY_CLOUD_SYNC_LAST_ACK = "cloud_sync_last_ack"
+        /** Consecutive retryable telemetry delivery failures; persisted across process restarts. */
+        const val KEY_CLOUD_SYNC_FAILURE_COUNT = "cloud_sync_failure_count"
+        /** Epoch millis before which queued telemetry must not retry. */
+        const val KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT = "cloud_sync_next_attempt_at"
+        /** Epoch millis when the one-token backlog drain bucket refills. */
+        const val KEY_CLOUD_SYNC_NEXT_DRAIN_AT = "cloud_sync_next_drain_at"
         /** Max trips.start_ts (ms) already acknowledged by /api/bydmate/trip-summaries. */
         const val KEY_TRIP_SUMMARY_SYNC_TS = "trip_summary_sync_ts"
         const val KEY_TRIP_SUMMARY_SYNC_LAST_RESULT = "trip_summary_sync_last_result"
