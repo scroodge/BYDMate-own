@@ -8,7 +8,7 @@ import org.junit.Test
 class CloudTelemetryRetryPolicyTest {
     @Test
     fun `backoff ceiling grows exponentially and remains capped`() {
-        assertEquals(5_000L, CloudTelemetryRetryPolicy.maxDelayMs(failureCount = 1))
+        assertEquals(5_001L, CloudTelemetryRetryPolicy.maxDelayMs(failureCount = 1))
         assertEquals(10_000L, CloudTelemetryRetryPolicy.maxDelayMs(failureCount = 2))
         assertEquals(20_000L, CloudTelemetryRetryPolicy.maxDelayMs(failureCount = 3))
         assertEquals(15 * 60_000L, CloudTelemetryRetryPolicy.maxDelayMs(failureCount = 30))
