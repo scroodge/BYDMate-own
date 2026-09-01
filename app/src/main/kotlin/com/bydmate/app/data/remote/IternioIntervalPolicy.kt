@@ -1,5 +1,7 @@
 package com.bydmate.app.data.remote
 
+import com.bydmate.app.domain.ChargingStateClassifier
+
 /**
  * Pure adaptive cadence policy for Iternio Telemetry sends.
  *
@@ -47,7 +49,11 @@ object IternioIntervalPolicy {
      * present.
      */
     fun classifyFromDiPars(data: com.bydmate.app.data.remote.DiParsData): TelemetryState {
-        val charging = data.chargeGunState in CHARGING_GUN_STATES
+        val charging = ChargingStateClassifier.isCharging(
+            autoserviceGun = null,
+            diPlusGun = data.chargeGunState,
+            chargingStatus = data.chargingStatus,
+        )
         val gear = data.gear
         val parked = when {
             gear == 1 -> true
@@ -57,5 +63,4 @@ object IternioIntervalPolicy {
         return classify(charging = charging, parked = parked)
     }
 
-    private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 }
