@@ -48,7 +48,7 @@ import com.bydmate.app.data.local.entity.TripRollupEntity
         HourlyRollupEntity::class,
         TripRollupEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {

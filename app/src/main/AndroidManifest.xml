@@ -122,6 +122,13 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- Export is required for shell app_process IPC; provider rejects every UID except 2000. -->
+        <provider
+            android:name=".data.cloud.DaemonQueueBrokerProvider"
+            android:authorities="dev.scroodge.cloudevmate.daemon-telemetry"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
+
     </application>
 
 </manifest>

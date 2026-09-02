@@ -5,6 +5,9 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import com.bydmate.app.BuildConfig
+import com.bydmate.app.data.cloud.DaemonDurableIngress
+import com.bydmate.app.data.cloud.DaemonTelemetrySpool
+import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
@@ -56,6 +59,12 @@ object CommandDaemon {
     private const val DEFAULT_CONF = "/data/local/tmp/voltflow_cmd.conf"
     private const val BASE_POLL_MS = CommandPollingCadence.BASE_POLL_MS
     private const val MAX_BACKOFF_MS = 30_000L
+    private val durableIngress by lazy {
+        DaemonDurableIngress(
+            DaemonTelemetrySpool(File(DaemonTelemetrySpool.EXTERNAL_DIRECTORY)),
+            ShellContentQueueIpc(),
+        )
+    }
 
     /**
      * Next command-poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
@@ -1204,14 +1213,16 @@ object CommandDaemon {
                 liveOnly,
                 autoserviceSoc,
                 autoserviceGun,
-            ).toString()
+            )
+            if (!liveOnly) persistDaemonTelemetry(payload)
+            val payloadJson = payload.toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("X-API-Key", conf.apiKey)
                 .header("X-Vehicle-Id", conf.vehicleId)
                 .header("X-App", "VoltFlow-Mate-Daemon")
-                .post(payload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .post(payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
             ok.newCall(request).execute().use {
                 val mode = if (liveOnly) " live_only" else ""
@@ -1241,6 +1252,7 @@ object CommandDaemon {
                 "telemetry (di+ down, autoservice fallback): soc=${diplus?.opt("soc")} " +
                     "gun=${diplus?.opt("charge_gun_state")}"
             )
+            persistDaemonTelemetry(payload)
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -1255,6 +1267,19 @@ object CommandDaemon {
             }
         } catch (e: Exception) {
             log("autoservice fallback push failed: ${e.message}")
+        }
+    }
+
+    /** Durable ingress is authoritative; HTTP below remains only the low-latency lane. */
+    private fun persistDaemonTelemetry(payload: JSONObject) {
+        try {
+            val deviceTime = payload.getString("device_time")
+            val retained = durableIngress.capture(payload.toString(), deviceTime)
+            log(if (retained == null) "telemetry committed to app queue" else "telemetry spooled (${retained.name})")
+        } catch (e: Exception) {
+            // Keep the daemon alive and retain the existing best-effort POST, but make the
+            // durability failure unmistakable in the field log.
+            log("URGENT telemetry durability failure: ${e.message}")
         }
     }
 

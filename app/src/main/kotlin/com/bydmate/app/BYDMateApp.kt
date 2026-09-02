@@ -12,6 +12,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.bydmate.app.data.local.DataThinningWorker
+import com.bydmate.app.data.cloud.DaemonSpoolImporter
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.repository.SettingsRepository
@@ -34,6 +35,7 @@ class BYDMateApp : Application(), Configuration.Provider {
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var chargeDao: ChargeDao
+    @Inject lateinit var daemonSpoolImporter: DaemonSpoolImporter
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -46,6 +48,11 @@ class BYDMateApp : Application(), Configuration.Provider {
         super.onCreate()
         initOsmdroid()
         appScope.launch {
+            // Canonicalize shell-daemon ingress before this process starts normal upload work.
+            val spool = daemonSpoolImporter.importReady()
+            if (spool.imported + spool.duplicates + spool.invalid > 0) {
+                android.util.Log.i("BYDMateApp", "daemon spool import: $spool")
+            }
             // One-shot migration: remove phantom autoservice rows created by the
             // lifetime_kwh driving-counter bug in v2.4.15/v2.4.16.
             if (!settingsRepository.isMigrationV2_4_17Done()) {
