@@ -1323,7 +1323,7 @@ object CommandDaemon {
         }
     }
 
-    private fun buildTelemetryPayload(
+    internal fun buildTelemetryPayload(
         vehicleId: String,
         d: DiParsData,
         kwhCharged: Float? = null,
@@ -1406,6 +1406,11 @@ object CommandDaemon {
             if (liveOnly) put("live_only", true)
             put("telemetry", telemetry)
             put("diplus", diplus)
+            // Same optional wire shape as CloudTelemetryPayload. This is the exact value used
+            // above by ChargingStateClassifier, not a second read that could race and diverge.
+            if (autoserviceGun != null) {
+                put("autoservice", JSONObject().put("gun_state", autoserviceGun))
+            }
             // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
             put("location", JSONObject())
         }

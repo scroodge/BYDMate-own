@@ -306,9 +306,10 @@ class CommandDaemonTest {
         mileage: Double? = null,
         voltage12v: Double? = null,
         chargeGunState: Int? = null,
+        chargingStatus: Int? = null,
     ) = DiParsData(
         soc = soc, speed = null, mileage = mileage, power = power, chargeGunState = chargeGunState,
-        maxBatTemp = null, avgBatTemp = null, minBatTemp = null, chargingStatus = null,
+        maxBatTemp = null, avgBatTemp = null, minBatTemp = null, chargingStatus = chargingStatus,
         batteryCapacityKwh = null, totalElecConsumption = null, voltage12v = voltage12v,
         maxCellVoltage = null, minCellVoltage = null, exteriorTemp = null, gear = null,
         powerState = null, insideTemp = null, acStatus = null, acTemp = null, fanLevel = null,
@@ -319,6 +320,33 @@ class CommandDaemonTest {
         workMode = null, autoPark = null, rain = null, lightLow = null, drl = null,
         sunshade = null, sentryState = null, remoteLockState = null,
     )
+
+    @Test
+    fun `daemon emits the autoservice gun value used by charging classifier`() {
+        // Deliberately contradict DiPlus/status: autoservice=1 wins, is serialized as 1, and
+        // makes the sample non-charging. One captured value drives both decision and evidence.
+        val payload = CommandDaemon.buildTelemetryPayload(
+            vehicleId = "way",
+            d = diPars(chargeGunState = 2, chargingStatus = 1),
+            autoserviceGun = 1,
+        )
+
+        assertEquals(1, payload.getJSONObject("autoservice").getInt("gun_state"))
+        assertFalse(payload.getJSONObject("telemetry").getBoolean("is_charging"))
+    }
+
+    @Test
+    fun `daemon omits autoservice object when gun source is absent`() {
+        val payload = CommandDaemon.buildTelemetryPayload(
+            vehicleId = "way",
+            d = diPars(chargeGunState = 2, chargingStatus = 1),
+            autoserviceGun = null,
+        )
+
+        assertFalse(payload.has("autoservice"))
+        // Classification itself is unchanged: DiPlus still supplies the fallback input.
+        assertTrue(payload.getJSONObject("telemetry").getBoolean("is_charging"))
+    }
 
     // di+ value-staleness detection (isDiPlusValueStale / diPlusValueSignature). Ported from the
     // 2026-07-27 field investigation into a frozen-but-successful di+ read (soc/power static for
