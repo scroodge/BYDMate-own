@@ -29,9 +29,19 @@ class CloudTelemetryCadence {
     }
 
     private fun rawState(snapshot: VehicleTelemetrySnapshot): IternioIntervalPolicy.TelemetryState {
-        snapshot.diPlusData?.let { return IternioIntervalPolicy.classifyFromDiPars(it) }
-        val charging = snapshot.isCharging == true ||
+        val charging = snapshot.isCharging ?: (
             abs(snapshot.chargePowerKw ?: snapshot.powerKw ?: 0.0) > CHARGING_POWER_THRESHOLD_KW
+        )
+        snapshot.diPlusData?.let { data ->
+            if (charging) return IternioIntervalPolicy.TelemetryState.CHARGING
+            val gear = data.gear
+            val parked = when {
+                gear == 1 -> true
+                gear != null -> false
+                else -> (data.speed ?: 0) <= 0
+            }
+            return IternioIntervalPolicy.classify(charging = false, parked = parked)
+        }
         val moving = (snapshot.speedKmh ?: 0.0) > MOVING_SPEED_THRESHOLD_KMH
         return IternioIntervalPolicy.classify(charging = charging, parked = !moving && !charging)
     }

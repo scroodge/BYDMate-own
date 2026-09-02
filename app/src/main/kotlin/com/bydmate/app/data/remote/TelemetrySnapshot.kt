@@ -5,6 +5,7 @@ import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.autoservice.ChargingReading
 import com.bydmate.app.domain.SocScaleCalibration
 import com.bydmate.app.domain.SocSource
+import com.bydmate.app.domain.ChargingStateClassifier
 import com.bydmate.app.domain.autoserviceToRawPercent
 import java.time.Instant
 import kotlin.math.roundToInt
@@ -77,7 +78,6 @@ data class VehicleTelemetrySnapshot(
     companion object {
         private const val POWER_MIN_KW = -300
         private const val POWER_MAX_KW = 500
-        private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
         private val DCFC_GUN_STATES = setOf(3, 4, 5)
 
         fun from(
@@ -96,7 +96,11 @@ data class VehicleTelemetrySnapshot(
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
             val gunState = charging?.gunConnectState ?: data?.chargeGunState
-            val isCharging = gunState?.let { it in CHARGING_GUN_STATES }
+            val isCharging = ChargingStateClassifier.isCharging(
+                autoserviceGun = charging?.gunConnectState,
+                diPlusGun = data?.chargeGunState,
+                chargingStatus = data?.chargingStatus,
+            )
             val chargePower = if (isCharging == true) {
                 powerKw?.takeIf { it < 0.0 }?.let { -it } ?: 0.0
             } else {

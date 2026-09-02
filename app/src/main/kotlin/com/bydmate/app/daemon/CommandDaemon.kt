@@ -13,6 +13,7 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.resolveTelemetrySoc
 import com.bydmate.app.domain.SocSource
+import com.bydmate.app.domain.ChargingStateClassifier
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -1155,10 +1156,12 @@ object CommandDaemon {
             // when a Di+ update omits SOC but the independent autoservice FID is available.
             val autoserviceSoc = readSocPercentAutoservice()
             val autoservicePowerKw = readEnginePowerKwAutoservice()
+            val autoserviceGun = readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
             if (autoserviceSoc != null || autoservicePowerKw != null) {
                 log(
                     "autoservice check: soc=$autoserviceSoc (diplus=${data.soc}) " +
-                        "power_kw=$autoservicePowerKw (diplus=${data.power})"
+                        "power_kw=$autoservicePowerKw (diplus=${data.power}) " +
+                        "gun=$autoserviceGun (diplus=${data.chargeGunState}, status=${data.chargingStatus})"
                 )
             }
             // di+ value-staleness check (log-only — see isDiPlusValueStale). Reuses the
@@ -1175,9 +1178,11 @@ object CommandDaemon {
                     autoserviceSocMovedAtMs = now
                     lastAutoserviceSocForStaleness = socInt
                 }
-                val gun = data.chargeGunState
-                val charging = (data.chargingStatus != null && data.chargingStatus!! > 0) ||
-                    (gun != null && gun in 2..5)
+                val charging = ChargingStateClassifier.isCharging(
+                    autoserviceGun = autoserviceGun,
+                    diPlusGun = data.chargeGunState,
+                    chargingStatus = data.chargingStatus,
+                )
                 if (isDiPlusValueStale(now, diPlusSignatureUnchangedSinceMs, autoserviceSocMovedAtMs, charging)) {
                     val frozenMin = (now - diPlusSignatureUnchangedSinceMs) / 60_000
                     log("di+ value-stale=true (sig frozen ${frozenMin}m, autoservice soc=$autoserviceSoc)")
@@ -1198,6 +1203,7 @@ object CommandDaemon {
                 sohPercent,
                 liveOnly,
                 autoserviceSoc,
+                autoserviceGun,
             ).toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
@@ -1278,7 +1284,11 @@ object CommandDaemon {
         val tireRR = readAutoserviceIntFid(1001, -1728052944)
         val sohPercent = readSohPercent()
         val kwhCharged = readKwhCharged()
-        val isCharging = gun != null && gun in 2..5
+        val isCharging = ChargingStateClassifier.isCharging(
+            autoserviceGun = gun,
+            diPlusGun = null,
+            chargingStatus = null,
+        )
 
         val diplus = JSONObject().apply {
             putIfPresent("soc", soc); putIfPresent("power_kw", powerKw); putIfPresent("charge_gun_state", gun)
@@ -1320,6 +1330,7 @@ object CommandDaemon {
         sohPercent: Int? = null,
         liveOnly: Boolean = false,
         autoserviceSocPercent: Float? = null,
+        autoserviceGun: Int? = null,
     ): JSONObject {
         val resolvedSoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
         val telemetrySoc = resolvedSoc.percent
@@ -1328,9 +1339,12 @@ object CommandDaemon {
         } else {
             null
         }
-        val gun = d.chargeGunState
-        val isCharging = (d.chargingStatus != null && d.chargingStatus!! > 0) ||
-            (gun != null && gun in 2..5)
+        val gun = autoserviceGun ?: d.chargeGunState
+        val isCharging = ChargingStateClassifier.isCharging(
+            autoserviceGun = autoserviceGun,
+            diPlusGun = d.chargeGunState,
+            chargingStatus = d.chargingStatus,
+        )
 
         val diplus = JSONObject().apply {
             putIfPresent("soc", d.soc); putIfPresent("speed_kmh", d.speed); putIfPresent("mileage_km", d.mileage)
