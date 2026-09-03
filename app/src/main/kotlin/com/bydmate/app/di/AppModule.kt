@@ -2,6 +2,7 @@ package com.bydmate.app.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.bydmate.app.data.cloud.CloudTelemetryClient
@@ -14,6 +15,7 @@ import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.IdleDrainDao
 import com.bydmate.app.data.local.dao.OdometerSampleDao
 import com.bydmate.app.data.local.dao.PlaceDao
+import com.bydmate.app.data.local.dao.QueueStorageMetadataDao
 import com.bydmate.app.data.local.dao.RuleDao
 import com.bydmate.app.data.local.dao.RuleLogDao
 import com.bydmate.app.data.local.dao.SettingsDao
@@ -21,6 +23,7 @@ import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.local.dao.TripPointDao
 import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.database.AppDatabase
+import com.bydmate.app.data.local.QueueStorageSchema
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
 import com.bydmate.app.domain.calculator.RangeAvgSource
 import com.bydmate.app.domain.calculator.RangeCalculator
@@ -33,6 +36,8 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
@@ -324,6 +329,39 @@ object AppModule {
         }
     }
 
+    /** Stage 3 adds measurement only; the effective queue limit remains exactly 1,000 rows. */
+    internal val MIGRATION_17_18 = object : Migration(17, 18) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE cloud_sync_queue ADD COLUMN payloadBytes INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE cloud_sync_queue ADD COLUMN capturedAt INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE cloud_sync_queue ADD COLUMN origin TEXT NOT NULL DEFAULT 'app'")
+            db.execSQL("ALTER TABLE cloud_sync_queue ADD COLUMN compactionTier INTEGER NOT NULL DEFAULT 0")
+            // No payload parsing on Room's database-open path. Legacy creation time is the safe
+            // capture-time fallback; exact UTF-8 byte counts are backfilled later in bounded IO.
+            db.execSQL("UPDATE cloud_sync_queue SET capturedAt=createdAt")
+            db.execSQL("UPDATE cloud_sync_queue SET origin='daemon' WHERE sampleId IS NOT NULL")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_cloud_sync_queue_sentAt_capturedAt " +
+                    "ON cloud_sync_queue(sentAt,capturedAt)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS index_cloud_sync_queue_compactionTier_capturedAt " +
+                    "ON cloud_sync_queue(compactionTier,capturedAt)"
+            )
+            QueueStorageSchema.installAccounting(db)
+        }
+    }
+
+    internal val QUEUE_STORAGE_CALLBACK = object : RoomDatabase.Callback() {
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            QueueStorageSchema.installAccounting(db)
+        }
+
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            QueueStorageSchema.installAccounting(db)
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
@@ -332,7 +370,8 @@ object AppModule {
             AppDatabase::class.java,
             "bydmate.db"
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
+            .addCallback(QUEUE_STORAGE_CALLBACK)
             .build()
     }
 
@@ -350,7 +389,12 @@ object AppModule {
     @Provides fun provideCloudSyncQueueDao(db: AppDatabase): CloudSyncQueueDao = db.cloudSyncQueueDao()
     @Provides fun provideHourlyRollupDao(db: AppDatabase): HourlyRollupDao = db.hourlyRollupDao()
     @Provides fun provideTripRollupDao(db: AppDatabase): TripRollupDao = db.tripRollupDao()
+    @Provides fun provideQueueStorageMetadataDao(db: AppDatabase): QueueStorageMetadataDao = db.queueStorageMetadataDao()
     @Provides fun provideCloudTelemetryClientApi(client: CloudTelemetryClient): CloudTelemetryClientApi = client
+
+    @Provides
+    @IoDispatcher
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
     @Provides
     @Singleton

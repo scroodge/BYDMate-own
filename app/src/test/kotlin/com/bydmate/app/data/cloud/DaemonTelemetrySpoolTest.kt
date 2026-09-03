@@ -104,6 +104,10 @@ class DaemonTelemetrySpoolTest {
         assertEquals(SAMPLE_ID, row.sampleId)
         assertEquals(payload, row.payloadJson)
         assertEquals(java.time.Instant.parse(deviceTime).toEpochMilli(), row.createdAt)
+        assertEquals(payload.toByteArray(Charsets.UTF_8).size.toLong(), row.payloadBytes)
+        assertEquals(java.time.Instant.parse(deviceTime).toEpochMilli(), row.capturedAt)
+        assertEquals("daemon", row.origin)
+        assertEquals(0, row.compactionTier)
         assertFalse(directory.resolve("$SAMPLE_ID.ready").exists())
     }
 
