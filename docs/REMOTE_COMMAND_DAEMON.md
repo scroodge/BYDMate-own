@@ -87,6 +87,15 @@ remains the fallback. Verify this path after an APK update by driving, parking, 
 within a few seconds; confirm a fresh P/off `bydmate_live_snapshots` row within the live flush
 window, and then confirm daemon telemetry still arrives after the app is force-stopped.
 
+Daemon history samples use the same durability model through a spool-first ingress path. Before
+its low-latency HTTP POST, the shell daemon fsyncs an immutable record under
+`<externalFilesDir>/telemetry/daemon-spool` and atomically renames it to `.ready`. It then attempts
+a shell-UID-only ContentProvider call whose acknowledgement means the app committed the stable
+`sampleId` to Room. If the app is unavailable, the ready file remains across daemon death and
+reboot. App startup and `TrackingService` import ready records transactionally; the unique Room
+key makes replay safe if a process dies after commit but before deleting the file. The daemon
+never opens `bydmate.db`.
+
 **Command polling stays always-on** regardless of app liveness — commands are idempotent and
 server-acked, so a brief double-poll is harmless and maximizes control reliability. When the
 server returns `commands_enabled: false`, both command pollers reduce their cadence to one request

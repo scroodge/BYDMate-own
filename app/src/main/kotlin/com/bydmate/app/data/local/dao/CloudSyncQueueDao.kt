@@ -2,6 +2,7 @@ package com.bydmate.app.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
 
@@ -9,6 +10,10 @@ import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
 interface CloudSyncQueueDao {
     @Insert
     suspend fun insert(entity: CloudSyncQueueEntity): Long
+
+    /** Duplicate daemon imports are successful no-ops after a commit/delete crash. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDaemonIfAbsent(entity: CloudSyncQueueEntity): Long
 
     @Query("SELECT * FROM cloud_sync_queue WHERE sentAt IS NULL ORDER BY createdAt ASC LIMIT :limit")
     suspend fun getUnsent(limit: Int): List<CloudSyncQueueEntity>

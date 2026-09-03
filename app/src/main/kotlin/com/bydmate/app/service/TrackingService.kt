@@ -21,6 +21,7 @@ import androidx.core.content.ContextCompat
 import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.cloud.CloudTelemetrySender
+import com.bydmate.app.data.cloud.DaemonSpoolImporter
 import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.VehicleCommandPoller
@@ -76,6 +77,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
     @Inject lateinit var adbOnDeviceClient: com.bydmate.app.data.autoservice.AdbOnDeviceClient
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
+    @Inject lateinit var daemonSpoolImporter: DaemonSpoolImporter
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -101,6 +103,7 @@ class TrackingService : Service(), LocationListener {
     // to avoid hammering the launcher when D+ is genuinely broken.
     @Volatile private var lastDiPlusRelaunchTs: Long = 0L
     @Volatile private var lastWakeLockRenewTs: Long = 0L
+    @Volatile private var lastDaemonSpoolImportMs: Long = 0L
 
     // Widget session (ignition-on → ignition-off) — decoupled from TripTracker GPS state.
     // Primary signal: DiPars powerState ≥ 1. Fallback when powerState is unreliable:
@@ -184,6 +187,7 @@ class TrackingService : Service(), LocationListener {
         private const val SOH_BATTERY_READ_INTERVAL_MS = 15L * 60_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
+        private const val DAEMON_SPOOL_IMPORT_INTERVAL_MS = 30_000L
         private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
@@ -516,6 +520,13 @@ class TrackingService : Service(), LocationListener {
                 // the queue/settings layer stopped the beacon as well, and the daemon —
                 // seeing a stale beacon — silently took over the telemetry stream.
                 writeAppAliveHeartbeat()
+                if (nowMs - lastDaemonSpoolImportMs >= DAEMON_SPOOL_IMPORT_INTERVAL_MS) {
+                    val imported = daemonSpoolImporter.importReady()
+                    lastDaemonSpoolImportMs = nowMs
+                    if (imported.imported + imported.duplicates + imported.invalid > 0) {
+                        Log.i(TAG, "daemon spool import: $imported")
+                    }
+                }
                 cloudTelemetrySender.enqueue(snapshot).onFailure { e ->
                     Log.w(TAG, "Cloud Sync enqueue: ${e.message}")
                 }

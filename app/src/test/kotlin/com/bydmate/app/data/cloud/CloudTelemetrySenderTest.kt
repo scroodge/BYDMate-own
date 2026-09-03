@@ -772,6 +772,11 @@ class CloudTelemetrySenderTest {
             return id
         }
 
+        override suspend fun insertDaemonIfAbsent(entity: CloudSyncQueueEntity): Long {
+            if (entity.sampleId != null && items.any { it.sampleId == entity.sampleId }) return -1L
+            return insert(entity)
+        }
+
         override suspend fun getUnsent(limit: Int): List<CloudSyncQueueEntity> =
             items.filter { it.sentAt == null }
                 .sortedBy { it.createdAt }
