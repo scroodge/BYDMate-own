@@ -1372,7 +1372,7 @@ object CommandDaemon {
         )
 
         val diplus = JSONObject().apply {
-            putIfPresent("soc", d.soc); putIfPresent("speed_kmh", d.speed); putIfPresent("mileage_km", d.mileage)
+            putIfPresent("soc", d.socPrecise ?: d.soc); putIfPresent("speed_kmh", d.speed); putIfPresent("mileage_km", d.mileage)
             putIfPresent("power_kw", d.power); putIfPresent("charge_gun_state", d.chargeGunState)
             putIfPresent("max_battery_temp_c", d.maxBatTemp); putIfPresent("avg_battery_temp_c", d.avgBatTemp)
             putIfPresent("min_battery_temp_c", d.minBatTemp); putIfPresent("charging_status", d.chargingStatus)
