@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.QueuePayloadMetrics
 import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
@@ -17,6 +18,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.abs
 import kotlin.random.Random
+
+/** Stage 3 measures storage; raising this reconnect blast-radius limit belongs to Stage 4. */
+internal const val CLOUD_QUEUE_MAX_ROWS = 1_000
 
 @Singleton
 class CloudTelemetrySender @Inject constructor(
@@ -103,7 +107,7 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         val now = nowProvider()
-        queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
+        queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
         ensureTripHydrated(config.vehicleId)
 
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
@@ -195,7 +199,7 @@ class CloudTelemetrySender @Inject constructor(
                 message = "queued $unsentCount; waiting for Wi-Fi",
                 isNetworkAttempt = false,
             )
-            queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
+            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
             return Result.success(Unit)
         }
 
@@ -270,7 +274,7 @@ class CloudTelemetrySender @Inject constructor(
                 append("; queued $remaining")
             }
             saveStatus(ok = true, message = message, ack = ack, isNetworkAttempt = true)
-            queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
+            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
             hourlyDao.pruneCleanBefore(HourlyRollupAccumulator.hourStartOf(now - HOURLY_RETENTION_MS))
             tripDao.pruneCleanBefore(now - TRIP_RETENTION_MS)
             Result.success(Unit)
@@ -285,7 +289,7 @@ class CloudTelemetrySender @Inject constructor(
                 if (!ack.isNullOrBlank()) append("; $ack")
             }
             saveStatus(ok = false, message = message, ack = ack, isNetworkAttempt = true)
-            queueDao.pruneToMaxRows(MAX_QUEUE_ROWS)
+            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
             Result.failure(IllegalStateException(message))
         }
     }
@@ -810,6 +814,7 @@ class CloudTelemetrySender @Inject constructor(
     private fun pendingQueueEntity(payload: String, now: Long) = CloudSyncQueueEntity(
         createdAt = now,
         payloadJson = payload,
+        capturedAt = QueuePayloadMetrics.capturedAt(payload, now),
     )
 
     private data class Config(
@@ -852,7 +857,6 @@ class CloudTelemetrySender @Inject constructor(
 
     private companion object {
         val NO_TRIP_PLAN = TripPlan(tripId = null, clientTrip = false, opening = false, closing = false)
-        const val MAX_QUEUE_ROWS = 1000
         /**
          * Hour blocks per flush. Only the current hour is normally dirty; more than a handful
          * means a long offline stretch, and those settle across successive flushes.

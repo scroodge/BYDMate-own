@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.room.withTransaction
 import com.bydmate.app.data.local.database.AppDatabase
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
+import com.bydmate.app.data.local.entity.CloudSyncQueueEntity.Companion.ORIGIN_DAEMON
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONObject
 import java.io.File
@@ -78,6 +79,8 @@ internal class DaemonSpoolImportEngine(
                     createdAt = capturedAt,
                     payloadJson = record.payloadJson,
                     sampleId = record.sampleId,
+                    capturedAt = capturedAt,
+                    origin = ORIGIN_DAEMON,
                 )
             ) != -1L
         }

@@ -56,6 +56,7 @@ queued). Queue is capped at **1000** rows, oldest trimmed.
 | `charges` | Charge sessions | Gun-state edge via `GunStateEdgeDetector`; `AutoserviceChargingDetector.runCatchUp()` at service start for charges that happened while DiLink slept | Permanent |
 | `battery_snapshots` | Capacity / SoH estimates | On charges with a sufficient SOC delta | Permanent |
 | `cloud_sync_queue` | Pending cloud payloads | See §1 | Trimmed past 1000 rows; marked finished on ACK |
+| `queue_storage_metadata` | Payload-byte totals, unknown legacy rows, DB/WAL/SHM bytes, allocatable bytes | Transactional queue triggers; reconciled after bounded startup backfill | One singleton row; Stage 3 keeps the 1,000-row cap unchanged |
 | `hourly_rollups` / `trip_rollups` | Client-side aggregates | See §1 | Pruned 24 h after going clean |
 | `settings` | Last SOC, session state, `cloud_sync_last_ok` / `_error` / `_ts` / `_ack` | Every flush and poll | Permanent |
 | Session prefs | Widget session id + last-active timestamp | Every poll. **Deliberately not cleared in `onDestroy`** so a sys-kill mid-trip resumes | Cleared only on ignition-off |

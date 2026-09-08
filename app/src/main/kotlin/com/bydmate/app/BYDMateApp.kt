@@ -14,6 +14,7 @@ import androidx.work.WorkManager
 import com.bydmate.app.data.local.DataThinningWorker
 import com.bydmate.app.data.cloud.DaemonSpoolImporter
 import com.bydmate.app.data.local.HistoryImporter
+import com.bydmate.app.data.local.QueueStorageAccounting
 import com.bydmate.app.data.local.dao.ChargeDao
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.widget.WidgetController
@@ -36,6 +37,7 @@ class BYDMateApp : Application(), Configuration.Provider {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var chargeDao: ChargeDao
     @Inject lateinit var daemonSpoolImporter: DaemonSpoolImporter
+    @Inject lateinit var queueStorageAccounting: QueueStorageAccounting
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -53,6 +55,8 @@ class BYDMateApp : Application(), Configuration.Provider {
             if (spool.imported + spool.duplicates + spool.invalid > 0) {
                 android.util.Log.i("BYDMateApp", "daemon spool import: $spool")
             }
+            val storage = queueStorageAccounting.backfillAndMeasure()
+            android.util.Log.i("BYDMateApp", "queue storage accounting: $storage")
             // One-shot migration: remove phantom autoservice rows created by the
             // lifetime_kwh driving-counter bug in v2.4.15/v2.4.16.
             if (!settingsRepository.isMigrationV2_4_17Done()) {
