@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,10 +35,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.bydmate.app.R
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.onboarding.DiPlusDependency
+import com.bydmate.app.onboarding.DiPlusOnboardingState
 import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.gateway.GatewayScreen
+import com.bydmate.app.ui.onboarding.DiPlusOnboardingDialog
 import com.bydmate.app.ui.settings.UpdateDialog
 import com.bydmate.app.ui.settings.UpdateState
 import com.bydmate.app.ui.theme.AccentGreen
@@ -50,6 +57,8 @@ import kotlinx.coroutines.launch
 fun AppNavigation(
     @Suppress("UNUSED_PARAMETER") settingsRepository: SettingsRepository,
     updateChecker: UpdateChecker,
+    diPlusDependency: DiPlusDependency,
+    onDiPlusReady: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -58,6 +67,23 @@ fun AppNavigation(
     var updateDialogState by remember { mutableStateOf<UpdateState?>(null) }
     var autoCheckEnabled by remember {
         mutableStateOf(UpdateChecker.isAutoCheckEnabled(context))
+    }
+    var diPlusState by remember { mutableStateOf(diPlusDependency.state()) }
+    var diPlusWasOpened by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) diPlusState = diPlusDependency.state()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val dependencyAccepted = diPlusState is DiPlusOnboardingState.Ready ||
+        (diPlusState as? DiPlusOnboardingState.Outdated)?.warningAccepted == true
+    LaunchedEffect(dependencyAccepted) {
+        if (dependencyAccepted) onDiPlusReady()
     }
 
     fun runManualUpdateCheck() {
@@ -157,6 +183,28 @@ fun AppNavigation(
         },
         onCheckUpdatesNow = { runManualUpdateCheck() },
     )
+
+    val stateRequiringGuidance = when (val state = diPlusState) {
+        is DiPlusOnboardingState.Outdated -> state.takeUnless { it.warningAccepted }
+        is DiPlusOnboardingState.Ready -> null
+        else -> state
+    }
+    stateRequiringGuidance?.let { state ->
+        DiPlusOnboardingDialog(
+            state = state,
+            diPlusWasOpened = diPlusWasOpened,
+            onInstall = { diPlusDependency.openInstallPage() },
+            onOpenDiPlus = { diPlusWasOpened = diPlusDependency.openDiPlus() },
+            onConfirmFirstLaunch = { versionCode ->
+                diPlusDependency.confirmFirstLaunch(versionCode)
+                diPlusState = diPlusDependency.state()
+            },
+            onAcceptOutdated = { versionCode ->
+                diPlusDependency.confirmOutdatedWarning(versionCode)
+                diPlusState = diPlusDependency.state()
+            },
+        )
+    }
 }
 
 @Composable
