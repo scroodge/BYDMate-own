@@ -302,6 +302,7 @@ class CommandDaemonTest {
 
     private fun diPars(
         soc: Int? = null,
+        socPrecise: Double? = null,
         power: Double? = null,
         mileage: Double? = null,
         voltage12v: Double? = null,
@@ -319,7 +320,23 @@ class CommandDaemonTest {
         tirePressFR = null, tirePressRL = null, tirePressRR = null, driveMode = null,
         workMode = null, autoPark = null, rain = null, lightLow = null, drl = null,
         sunshade = null, sentryState = null, remoteLockState = null,
+        socPrecise = socPrecise,
     )
+
+    @Test
+    fun `daemon emits precise DiPlus SOC under the existing soc key`() {
+        // Regression from the live daemon-origin snapshot: telemetry.soc=69.5 while the
+        // separately-built diplus object rounded the same reading to 70.
+        val payload = CommandDaemon.buildTelemetryPayload(
+            vehicleId = "way",
+            d = diPars(soc = 70, socPrecise = 69.5),
+        )
+
+        val telemetrySoc = payload.getJSONObject("telemetry").get("soc").toString()
+        val diPlusSoc = payload.getJSONObject("diplus").get("soc").toString()
+        assertEquals("69.5", telemetrySoc)
+        assertEquals(telemetrySoc, diPlusSoc)
+    }
 
     @Test
     fun `daemon emits the autoservice gun value used by charging classifier`() {
