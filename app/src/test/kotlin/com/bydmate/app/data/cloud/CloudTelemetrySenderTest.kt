@@ -3,6 +3,7 @@ package com.bydmate.app.data.cloud
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
+import com.bydmate.app.data.local.QueueRetentionManager
 import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.dao.TripRollupDao
@@ -25,6 +26,44 @@ import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class CloudTelemetrySenderTest {
+    @Test
+    fun `missing remote cap keeps legacy one thousand row guard`() = runTest {
+        val setup = setup()
+        repeat(1_001) { index ->
+            setup.queue.insert(queueRow("way", BASE_TIME_MS - 2_000L + index))
+        }
+        setup.now = BASE_TIME_MS + 1_000L
+
+        setup.sender.enqueue(snapshot())
+
+        assertEquals(1_000, setup.queue.items.size)
+        assertTrue(setup.queue.items.maxOf { it.createdAt } >= BASE_TIME_MS)
+        assertEquals(
+            null,
+            setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_OFFLINE_BUFFER_CAP_BYTES],
+        )
+    }
+
+    @Test
+    fun `authenticated ingest response persists remote offline buffer cap`() = runTest {
+        val setup = setup(
+            results = ArrayDeque(
+                listOf(
+                    CloudSendResult.Success(
+                        """{"ok":true,"inserted_count":1,"sample_count":1,"offline_buffer_cap_bytes":268435456}""",
+                    ),
+                ),
+            ),
+        )
+
+        setup.sender.sendTest(snapshot())
+
+        assertEquals(
+            "268435456",
+            setup.settings.values[SettingsRepository.KEY_CLOUD_SYNC_OFFLINE_BUFFER_CAP_BYTES],
+        )
+    }
+
     @Test
     fun `active samples enqueue every second and flush every fifteen seconds`() = runTest {
         val setup = setup()
@@ -624,13 +663,20 @@ class CloudTelemetrySenderTest {
         val trips = FakeTripRollupDao()
         val client = FakeCloudTelemetryClient(results)
         var now = 0L
+        val settingsRepository = SettingsRepository(settings)
+        val queueRetentionManager = QueueRetentionManager(
+            ApplicationProvider.getApplicationContext(),
+            settingsRepository,
+            queue,
+        )
         val sender = CloudTelemetrySender(
             context = ApplicationProvider.getApplicationContext<Context>(),
-            settingsRepository = SettingsRepository(settings),
+            settingsRepository = settingsRepository,
             queueDao = queue,
             hourlyDao = hourly,
             tripDao = trips,
             client = client,
+            queueRetentionManager = queueRetentionManager,
         ).apply {
             nowProvider = { now }
             jitterFractionProvider = { jitterFractions.removeFirstOrNull() ?: 0.5 }
@@ -796,6 +842,56 @@ class CloudTelemetrySenderTest {
             if (items.size <= maxRows) return
             val keep = items.sortedByDescending { it.createdAt }.take(maxRows).map { it.id }.toSet()
             items.removeAll { it.id !in keep }
+        }
+
+        override suspend fun unsentPayloadBytes(): Long =
+            items.filter { it.sentAt == null }.sumOf { it.payloadBytes }
+
+        override suspend fun oldestUnsentCapturedAt(): Long? =
+            items.filter { it.sentAt == null }.minOfOrNull { it.capturedAt }
+
+        override suspend fun newestUnsentCapturedAt(): Long? =
+            items.filter { it.sentAt == null }.maxOfOrNull { it.capturedAt }
+
+        override suspend fun getCompactionCandidates(
+            cutoff: Long,
+            targetTier: Int,
+            limit: Int,
+        ): List<CloudSyncQueueEntity> = items
+            .filter { it.sentAt == null && it.capturedAt < cutoff && it.compactionTier < targetTier }
+            .sortedWith(compareBy<CloudSyncQueueEntity> { it.capturedAt }.thenBy { it.id })
+            .take(limit)
+
+        override suspend fun getOldestCompacted(cutoff: Long, limit: Int): List<CloudSyncQueueEntity> =
+            items.filter { it.sentAt == null && it.compactionTier > 0 && it.capturedAt < cutoff }
+                .sortedWith(compareBy<CloudSyncQueueEntity> { it.capturedAt }.thenBy { it.id })
+                .take(limit)
+
+        override suspend fun markCompacted(ids: List<Long>, tier: Int) {
+            ids.forEach { id -> update(id) { it.copy(compactionTier = tier) } }
+        }
+
+        override suspend fun deleteByIds(ids: List<Long>) {
+            items.removeAll { it.id in ids }
+        }
+
+        override suspend fun deleteAcknowledgedBefore(cutoff: Long) {
+            items.removeAll { it.sentAt != null && it.lastError == null && it.sentAt < cutoff }
+        }
+
+        override suspend fun deleteQuarantinedBefore(cutoff: Long) {
+            items.removeAll { it.sentAt != null && it.lastError != null && it.sentAt < cutoff }
+        }
+
+        override suspend fun quarantinedPayloadBytes(): Long =
+            items.filter { it.sentAt != null && it.lastError != null }.sumOf { it.payloadBytes }
+
+        override suspend fun deleteOldestQuarantined(limit: Int) {
+            val ids = items.filter { it.sentAt != null && it.lastError != null }
+                .sortedWith(compareBy<CloudSyncQueueEntity> { it.sentAt }.thenBy { it.id })
+                .take(limit)
+                .mapTo(mutableSetOf()) { it.id }
+            items.removeAll { it.id in ids }
         }
 
         private fun update(id: Long, transform: (CloudSyncQueueEntity) -> CloudSyncQueueEntity) {

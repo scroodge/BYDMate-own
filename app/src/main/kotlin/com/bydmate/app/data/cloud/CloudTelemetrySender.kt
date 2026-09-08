@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.util.Log
 import com.bydmate.app.data.local.dao.CloudSyncQueueDao
 import com.bydmate.app.data.local.QueuePayloadMetrics
+import com.bydmate.app.data.local.QueueRetentionManager
 import com.bydmate.app.data.local.dao.HourlyRollupDao
 import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.entity.CloudSyncQueueEntity
@@ -30,6 +31,7 @@ class CloudTelemetrySender @Inject constructor(
     private val hourlyDao: HourlyRollupDao,
     private val tripDao: TripRollupDao,
     private val client: CloudTelemetryClientApi,
+    private val queueRetentionManager: QueueRetentionManager,
 ) {
     @Volatile private var lastQueuedSampleMs: Long = 0L
     @Volatile private var lastFlushAttemptMs: Long = 0L
@@ -107,7 +109,6 @@ class CloudTelemetrySender @Inject constructor(
         }
 
         val now = nowProvider()
-        queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
         ensureTripHydrated(config.vehicleId)
 
         val omitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
@@ -162,6 +163,7 @@ class CloudTelemetrySender @Inject constructor(
                 clientTrip = tripPlan.clientTrip,
             )
             queueDao.insert(pendingQueueEntity(payload, now))
+            queueRetentionManager.enforce(now)
             if (!decision.liveOnly) {
                 accumulateHourly(config.vehicleId, payload, now)
                 applyTripPlan(config.vehicleId, tripPlan, payload, now)
@@ -199,7 +201,7 @@ class CloudTelemetrySender @Inject constructor(
                 message = "queued $unsentCount; waiting for Wi-Fi",
                 isNetworkAttempt = false,
             )
-            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
+            queueRetentionManager.enforce(now)
             return Result.success(Unit)
         }
 
@@ -274,7 +276,7 @@ class CloudTelemetrySender @Inject constructor(
                 append("; queued $remaining")
             }
             saveStatus(ok = true, message = message, ack = ack, isNetworkAttempt = true)
-            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
+            queueRetentionManager.enforce(now)
             hourlyDao.pruneCleanBefore(HourlyRollupAccumulator.hourStartOf(now - HOURLY_RETENTION_MS))
             tripDao.pruneCleanBefore(now - TRIP_RETENTION_MS)
             Result.success(Unit)
@@ -289,7 +291,7 @@ class CloudTelemetrySender @Inject constructor(
                 if (!ack.isNullOrBlank()) append("; $ack")
             }
             saveStatus(ok = false, message = message, ack = ack, isNetworkAttempt = true)
-            queueDao.pruneToMaxRows(CLOUD_QUEUE_MAX_ROWS)
+            queueRetentionManager.enforce(now)
             Result.failure(IllegalStateException(message))
         }
     }
@@ -310,9 +312,9 @@ class CloudTelemetrySender @Inject constructor(
         // frequent thing the car sends, so reading the grant back off them keeps the window
         // alive without depending on the (now 60s) command poll.
         if (result is CloudSendResult.Success) {
-            onLiveFastGranted(
-                CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1).liveFastSeconds,
-            )
+            val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1)
+            onLiveFastGranted(ack.liveFastSeconds)
+            onOfflineBufferCapGranted(ack.offlineBufferCapBytes)
         }
         // Logged because this path is otherwise invisible: it writes no queue row and no
         // history row, so without this line a ping that never fired looks exactly like a
@@ -328,6 +330,11 @@ class CloudTelemetrySender @Inject constructor(
     fun onLiveFastGranted(seconds: Int) {
         if (seconds <= 0) return
         liveFastUntilMs = nowProvider() + seconds * 1000L
+    }
+
+    /** Accept a signed/authenticated server rollout decision without requiring a new APK. */
+    suspend fun onOfflineBufferCapGranted(bytes: Long?) {
+        queueRetentionManager.updateRemoteCap(bytes)
     }
 
     suspend fun send(snapshot: VehicleTelemetrySnapshot): Result<Unit> {
@@ -353,6 +360,7 @@ class CloudTelemetrySender @Inject constructor(
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
             is CloudSendResult.Success -> {
                 val ack = CloudTelemetryAckParser.parse(result.responseBody, sentCount = 1)
+                onOfflineBufferCapGranted(ack.offlineBufferCapBytes)
                 val ackText = ack.formatDiagnostics()
                 settingsRepository.setString(SettingsRepository.KEY_CLOUD_SYNC_LAST_ACK, ackText)
                 if (!ack.isFullyAcknowledged()) {
@@ -430,6 +438,7 @@ class CloudTelemetrySender @Inject constructor(
                 // parked/charging), so it is what bounds how long a car takes to notice
                 // someone opened the live view now that the command poll idles at 60s.
                 onLiveFastGranted(ack.liveFastSeconds)
+                onOfflineBufferCapGranted(ack.offlineBufferCapBytes)
                 if (ack.isFullyAcknowledged()) {
                     items.forEach { queueDao.markFinished(it.id, null, now) }
                     // Guarded by sampleCount: if a sample folded into the hour while this
