@@ -197,6 +197,36 @@ class CloudTelemetryPayloadTest {
     }
 
     @Test
+    fun `full and live only diplus payloads emit precise soc under existing key`() {
+        val data = diPlusData(
+            maxCellVoltage = null,
+            minCellVoltage = null,
+            soc = 66,
+            socPrecise = 66.2,
+        )
+        // Existing integer consumers keep their established rounded value.
+        assertEquals(66, data.soc)
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = data,
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val full = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        val liveOnly = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
+
+        assertEquals(66.2, full.getJSONObject("diplus").getDouble("soc"), 0.0001)
+        assertEquals(66.2, liveOnly.getJSONObject("diplus").getDouble("soc"), 0.0001)
+        assertEquals(66.2, full.getJSONObject("telemetry").getDouble("soc"), 0.0001)
+    }
+
+    @Test
     fun `payload omits unknown tyre pressures`() {
         val snapshot = VehicleTelemetrySnapshot.from(
             data = diPlusData(
@@ -376,6 +406,7 @@ class CloudTelemetryPayloadTest {
         maxCellVoltage: Double?,
         minCellVoltage: Double?,
         soc: Int? = 73,
+        socPrecise: Double? = soc?.toDouble(),
         speed: Int = 0,
         gear: Int = 1,
         tirePressFL: Int? = 240,
@@ -384,6 +415,7 @@ class CloudTelemetryPayloadTest {
         tirePressRR: Int? = 242,
     ) = DiParsData(
         soc = soc,
+        socPrecise = socPrecise,
         speed = speed,
         mileage = 12345.0,
         power = 0.0,

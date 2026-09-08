@@ -215,7 +215,7 @@ object CloudTelemetryPayload {
     }
 
     private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
-        putIfPresent("soc", soc)
+        putIfPresent("soc", socPrecise ?: soc)
         putIfPresent("gear", gear)
         putIfPresent("charge_gun_state", chargeGunState)
         putIfPresent("speed_kmh", speed)
@@ -230,7 +230,7 @@ object CloudTelemetryPayload {
     }
 
     private fun DiParsData.toJson(includePower: Boolean): JSONObject = JSONObject().apply {
-        putIfPresent("soc", soc)
+        putIfPresent("soc", socPrecise ?: soc)
         putIfPresent("gear", gear)
         if (includePower) {
             putIfPresent("speed_kmh", speed)
