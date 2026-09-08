@@ -301,14 +301,16 @@ Two consequences worth keeping in mind:
 - **Fixed in `versionCode 340`** by `DiParsClient.parseNum` / `parseIntNum`, which accept
   both decimal separators and reject unsubstituted placeholders. `soc` stays a rounded
   `Int?` for existing consumers; `socPrecise: Double?` carries the decimal to the cloud
-  in **`telemetry.soc`** (`CloudTelemetryPayload.kt:31`). The **`diplus` object in the
-  same payload still carries the rounded `Int`** — `DiParsData.toJson` / `toStatusJson`
-  read `DiParsData.soc` — and the cloud flattens `diplus_soc` from that object, which is
-  why the column stayed integer on `340`: measured on prod 2026-08-14,
+  in **`telemetry.soc`** (`CloudTelemetryPayload.kt:31`). Since B-16, the **`diplus`
+  object in full and live-only payloads also prefers `socPrecise` under the existing
+  `soc` key**, while `DiParsData.soc` remains a rounded `Int?` for existing consumers.
+  Before B-16 the cloud flattened `diplus_soc` from that rounded object, which is why
+  the column stayed integer on `340`: measured on prod 2026-08-14,
   `telemetry->>'soc' = 66.2` next to `diplus->>'soc' = 66`. Resolved cloud-side rather
   than in the app, so cars already on `340` needed no new release — the ingest RPC now
   takes the `telemetry` value when it is within 0.5 of the di+ one (cloud repo's
-  `supabase/migrations/20260814180000_diplus_soc_precise.sql`).
+  `supabase/migrations/20260814180000_diplus_soc_precise.sql`). That compatibility rule
+  remains required for fleet APKs predating B-16 and must not be removed.
 
 To re-check the wire value on any car:
 
