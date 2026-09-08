@@ -14,6 +14,7 @@ import androidx.compose.runtime.produceState
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.onboarding.DiPlusDependency
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.components.ConsumptionThresholds
@@ -28,6 +29,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var updateChecker: UpdateChecker
+    @Inject lateinit var diPlusDependency: DiPlusDependency
+
+    private var dependencyOnboardingStarted = false
 
     companion object {
         private const val TAG = "MainActivity"
@@ -38,7 +42,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestPermissionsIfNeeded()
         if (com.bydmate.app.util.BackgroundRestriction.isRestricted(this)) {
             Log.w(TAG, "Background activity is RESTRICTED (DiLink 'Disable background Apps' ON) — " +
                 "telemetry will stop when the car sleeps. Gateway screen shows a warning.")
@@ -55,10 +58,18 @@ class MainActivity : ComponentActivity() {
                     AppNavigation(
                         settingsRepository = settingsRepository,
                         updateChecker = updateChecker,
+                        diPlusDependency = diPlusDependency,
+                        onDiPlusReady = ::continueAfterDiPlusOnboarding,
                     )
                 }
             }
         }
+    }
+
+    private fun continueAfterDiPlusOnboarding() {
+        if (dependencyOnboardingStarted) return
+        dependencyOnboardingStarted = true
+        requestPermissionsIfNeeded()
     }
 
     private fun requestPermissionsIfNeeded() {

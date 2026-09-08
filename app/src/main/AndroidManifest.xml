@@ -23,6 +23,8 @@
         tools:ignore="ProtectedPermissions" />
 
     <queries>
+        <!-- Explicit dependency queried during onboarding. This is visibility only; the APK is never bundled. -->
+        <package android:name="com.van.diplus" />
         <!-- ACTION_DIAL (call action — user taps green button to actually dial) -->
         <intent>
             <action android:name="android.intent.action.DIAL" />
