@@ -76,6 +76,10 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_NEXT_ATTEMPT_AT = "cloud_sync_next_attempt_at"
         /** Epoch millis when the one-token backlog drain bucket refills. */
         const val KEY_CLOUD_SYNC_NEXT_DRAIN_AT = "cloud_sync_next_drain_at"
+        /** Server-controlled byte ceiling. Zero/missing preserves the legacy 1,000-row guard. */
+        const val KEY_CLOUD_SYNC_OFFLINE_BUFFER_CAP_BYTES = "cloud_sync_offline_buffer_cap_bytes"
+        /** Non-empty only after emergency loss of an already-compacted historical bucket. */
+        const val KEY_CLOUD_SYNC_BUFFER_DIAGNOSTIC = "cloud_sync_buffer_diagnostic"
         /** Max trips.start_ts (ms) already acknowledged by /api/bydmate/trip-summaries. */
         const val KEY_TRIP_SUMMARY_SYNC_TS = "trip_summary_sync_ts"
         const val KEY_TRIP_SUMMARY_SYNC_LAST_RESULT = "trip_summary_sync_last_result"

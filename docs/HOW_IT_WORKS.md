@@ -314,8 +314,15 @@ Two guards keep this honest:
 | Idle / parked | **60 s** (setting, 5–300 s) | 120 samples |
 | State transition to parked, gear change, D→P→power-off | immediate | — |
 
-Queue caps at **1000 rows**; oldest are trimmed. If "Wi-Fi only" is on and Wi-Fi is
-down, samples simply stay queued. If the queue backlogs past 15 unsent, delivery
+The queue keeps the legacy **1000-row** guard until an authenticated server response
+supplies `offline_buffer_cap_bytes`. That rollout ceiling is persisted across restarts and
+combined with the device limit
+`min(4 GiB, max(256 MiB, allocatable − max(5 GiB, 10% filesystem capacity)))`. If the
+reserve is already unavailable, the 256 MiB minimum is not forced: old data enters
+state-aware compaction immediately. The newest 72 hours, state transitions, extrema, GPS
+anchors and the reconnect/newest edge are protected; emergency eviction removes only the
+oldest already-compacted buckets. If "Wi-Fi only" is on and Wi-Fi is down, samples simply
+stay queued. If the queue backlogs past 15 unsent, delivery
 uses batches of at most **300** (the server contract cap) and a persisted one-token
 bucket refilling every **2 seconds**. Retryable failures use persisted exponential
 backoff with full jitter (5 s base, 15 min cap), and `Retry-After` is a mandatory
@@ -334,7 +341,7 @@ strand the car in fast mode.
 
 ### 4.4 Local storage and retention
 
-Room DB, schema v17, ~14 entities (trips, trip points, charges, charge points,
+Room DB, schema v18, ~14 entities (trips, trip points, charges, charge points,
 places, rules, rule logs, battery snapshots, idle drains, odometer samples,
 settings, and the three cloud-side tables: `cloud_sync_queue`, `hourly_rollups`,
 `trip_rollups`).
@@ -585,6 +592,7 @@ Set it once, at first setup, as a short latin slug. If you must rename: update
 `cloud_sync_enabled` (default **true**), `cloud_sync_url`, `cloud_sync_api_key`,
 `cloud_sync_vehicle_id`, `cloud_sync_interval_sec` (default 60, clamped 5–300),
 `cloud_sync_wifi_only`, `cloud_sync_omit_gps`, `cloud_sync_keep_wifi_awake`,
+`cloud_sync_offline_buffer_cap_bytes` (server-managed; missing/zero keeps the 1000-row guard),
 `autoservice_enabled`, `data_source`, `app_language`, plus read-only diagnostics
 `cloud_sync_last_ok` / `_last_ts` / `_last_error` / `_last_ack`.
 

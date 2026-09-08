@@ -123,6 +123,13 @@ class VehicleCommandPoller @Inject constructor(
             // Read before the empty-queue return — an idle command queue is the normal case
             // and must not skip the grant. Absent on older servers, which reads as 0 = off.
             cloudTelemetrySender.onLiveFastGranted(json.optInt("live_fast_seconds", 0))
+            cloudTelemetrySender.onOfflineBufferCapGranted(
+                if (json.has("offline_buffer_cap_bytes")) {
+                    json.optLong("offline_buffer_cap_bytes").coerceAtLeast(0L)
+                } else {
+                    null
+                },
+            )
             val nextPollMs = pollIntervalMs(
                 serverSeconds = json.optInt("poll_after_seconds", 0),
                 commandsEnabled = json.optBoolean("commands_enabled", true),

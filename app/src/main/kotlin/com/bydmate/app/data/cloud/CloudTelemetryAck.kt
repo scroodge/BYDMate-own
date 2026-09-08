@@ -19,6 +19,8 @@ data class CloudTelemetryAck(
      * which reads as 0 and simply lets the current window lapse.
      */
     val liveFastSeconds: Int = 0,
+    /** Persisted server rollout ceiling; null means an older server made no policy decision. */
+    val offlineBufferCapBytes: Long? = null,
 ) {
     fun isFullyAcknowledged(): Boolean =
         parseError == null &&
@@ -73,6 +75,11 @@ object CloudTelemetryAckParser {
                 skippedStaleCount = skippedStale,
                 error = json.optString("error", null)?.takeIf { it.isNotBlank() },
                 liveFastSeconds = json.optInt("live_fast_seconds", 0),
+                offlineBufferCapBytes = if (json.has("offline_buffer_cap_bytes")) {
+                    json.optLong("offline_buffer_cap_bytes").coerceAtLeast(0L)
+                } else {
+                    null
+                },
             )
         } catch (e: Exception) {
             CloudTelemetryAck(

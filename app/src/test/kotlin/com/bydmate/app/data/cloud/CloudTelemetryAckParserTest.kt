@@ -48,5 +48,16 @@ class CloudTelemetryAckParserTest {
             sentCount = 1,
         )
         assertEquals(0, ack.liveFastSeconds)
+        assertEquals(null, ack.offlineBufferCapBytes)
+    }
+
+    @Test
+    fun `ingest carries remotely controlled offline buffer cap`() {
+        val ack = CloudTelemetryAckParser.parse(
+            """{"ok":true,"inserted_count":1,"sample_count":1,"offline_buffer_cap_bytes":1073741824}""",
+            sentCount = 1,
+        )
+        assertEquals(1_073_741_824L, ack.offlineBufferCapBytes)
+        assertTrue(ack.isFullyAcknowledged())
     }
 }
