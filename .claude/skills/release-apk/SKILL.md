@@ -59,11 +59,20 @@ now happened twice: v0.4.1, and v0.5.2's four-day silent outage.
 construction unless the release updates it, which is exactly how it drifted a full
 version behind before 2026-08-12.
 
-- `docs/BACKLOG.md` — set the baseline line to the version being tagged:
-  ``**Обновлено:** YYYY-MM-DD · база: `main` @ `<version>` (`versionCode <N>`).``
+- `docs/BACKLOG.md` — set the baseline line to the version being tagged, **including the
+  tag and the commit it points at** — without them the ledger cannot say which commit
+  shipped:
+  ``**Обновлено:** YYYY-MM-DD · база: `main` @ `<version>` (`versionCode <N>`, тег `v<version>` → `<short-sha>`).``
 - `docs/ROADMAP.md` — set **Текущая версия кода в `main`** and **Обновлено** to match.
-- Move every item shipped in this release from `in-progress`/`todo` to `done`, and
-  out of the 🔧 section of ROADMAP.
+- Move items shipped in this release out of the 🔧 section of ROADMAP, and set the status
+  by **whether the acceptance criterion was verified**, not by whether the code shipped:
+  - `done` — criterion confirmed, with the measurement cited in the row.
+  - `shipped` [verify] — released, criterion **not yet** confirmed. Use this whenever
+    acceptance needs an on-car or production measurement you do not have yet.
+  Marking an item `done` on build output alone is the failure this step exists to prevent.
+- Any divergence, unproven criterion, or open question surfaced during the release gets
+  **its own ledger item** with an acceptance criterion — not a line in the release notes.
+  A finding that lives only in prose is invisible by the next release.
 - If the release settled a question the ledger recorded as open, add or update the
   entry under **Решено не делать** — negative decisions are first-class.
 - If any decision in this release was hard to reverse, surprising without context,
