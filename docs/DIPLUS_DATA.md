@@ -567,6 +567,92 @@ i.e. **65.4 kW**, against `发动机功率` reporting `-65` at the same moment.
 So the practical ceiling is now **~20 s resolution fractional power**, not "session-average
 only". Consuming it is 2.0-only (`versionCode >= 158`) and is part of **B-14**.
 
+### B-14 verdict — negative for trips, measured on closed intervals (2026-09-09)
+
+**The fractional energy above lives only while the interval is open. It is not persisted
+when a segment closes.** That kills B-14's premise for trips, which is what its acceptance
+criterion asked about, so **B-14 is closed as a negative result and the dependency is not
+taken.** Everything below is measured on the capture of 2026-09-09 from car `way`, di+
+`2.0.0b1` (`versionCode 158`): `/api/vehicleSegments` → 100 records (99 `closed: true`),
+`/api/chargingSessions` → 23 records (22 closed, `state: 3`, all ended and unplugged). Two
+segment pulls 2.5 h apart (09:02 and 11:35 local) agree field for field.
+
+**On all 99 closed segments, in both pulls:**
+
+| Field | Closed segments | Open segment |
+|---|---|---|
+| `batteryEnergyKwh` | `0.0` — **99/99** | `1.6603` → `1.7098` (charging, two reads) |
+| `batteryPowerMax` | `0.0` — **99/99** | `4.105` |
+| `batteryEnergyCoverageMs` | `0` — **99/99** | `1522390` |
+| `chargingCapacityEnergy`, `maxChargingPower` | `0.0` — **99/99** | populated |
+| `batteryVoltageMin/Max`, `batteryCurrentMin/Max`, `batterySohStart/End` | populated — **99/99** (`280…331` V, `−212…330.5` A, SoH `97`) | populated |
+
+So the min/max electrical extremes survive the close and the *integrated* quantities do
+not. A consumer can still recompute a peak from `batteryVoltageMax × |batteryCurrentMin|`,
+but there is no closed-interval energy to compare against — the comparison the backlog
+mandates has nothing on the di+ side.
+
+**Numbers for the closed trips in the window** (`electricNetDelta` is the car's own
+lifetime-consumption counter, which Mate already ingests as `TotalElecCon`; SOC-implied
+uses the median `estimatedUsableCapacityKwh` = `47.40` kWh from the 22 sessions):
+
+| segment | km | min | ΔSOC | SOC-implied kWh | counter Δ kWh | di+ `batteryEnergyKwh` | kWh/100 km |
+|---|---|---|---|---|---|---|---|
+| `5278` | 5.0 | 6.5 | 1.3 | 0.616 | `0.6003` | **0.000** | 12.0 |
+| `5258` | 2.1 | 2.8 | 0.4 | 0.190 | `0.2000` | **0.000** | 9.5 |
+| `5282` | 1.9 | 2.6 | 0.7 | 0.332 | `0.3003` | **0.000** | 15.8 |
+| `5250` | 1.6 | 2.0 | 0.4 | 0.190 | `0.3000` | **0.000** | 18.8 |
+| `5260` | 1.4 | 1.8 | 0.4 | 0.190 | `0.2003` | **0.000** | 14.3 |
+
+The two sources we already have agree within one counter quantum (`0.1` kWh), and di+ 2.0
+adds nothing to them. Two more reasons the endpoint is a poor trip source regardless:
+`distance` is **0.1 km units** (`50.0` = 5.0 km at `maxSpeed 69` over 6.5 min — the raw-km
+trap again), and a segment is **not a trip**: the 47 segments with any movement are **36**
+for one 57-minute evening drive (21.3 km, 2.5 kWh on the counter) plus **11** for a
+3-minute morning move (0.9 km). The endpoint also returns only the newest 100 records —
+about **13 h** of history in this capture (`2026-09-08 16:55` → `2026-09-09 05:56` UTC).
+
+**Where the fractional energy does survive: `chargingSessions`.** All 22 closed sessions
+keep `batteryEnergyKwh` (`4.615` – `40.104` kWh), `maxBatteryPower`, pack voltage/current,
+SoH and fractional `chargeStartSoc`/`chargeEndSoc`. It is self-consistent: implied usable
+capacity (`batteryEnergyKwh ÷ ΔSOC`) is `41.7` – `49.9` kWh, median `46.6`, CV `4.1 %`
+across ΔSOC spanning `9.9` – `89.0` points. It is also the only usable figure — the
+pre-2.0 `chargedEnergy` (`energySource: SESSION_CHARGE_CAPACITY`, the autoservice
+charge-capacity float) is present on only **13/22** sessions and reads `0.538 ×` the V×I
+energy, which implies a `24.5` kWh pack, so it cannot be substituted.
+
+Where that would matter is **AC charging only**. Our integration folds *whole-kW*
+`发动机功率` samples, and the AC sessions sit almost exactly on the rounding boundary:
+
+| Session power band | Sessions | Mean power from di+ | Worst-case whole-kW bias |
+|---|---|---|---|
+| DC fast | 9 | `39.5` – `64.7` kW | `0.1 – 1.2 %` (`≤ 0.37` kWh) |
+| AC | 13 | `4.48` – `6.40` kW | `5.5 – 10.7 %` (up to `3.4` kWh on a 31.8 kWh session) |
+
+That bias is an upper bound, not a measurement: it assumes the integer readout stays on one
+side of the boundary for the whole session. **A like-for-like comparison against our own
+integration over the same windows was not possible from the captured data** — the capture
+holds only the di+ side, and no Mate/cloud samples for those windows were captured with it.
+This is a charging-session finding, outside B-14's trip criterion; it is recorded here as a
+candidate rather than filed as work.
+
+**Sentinel audit of this capture** (the mandatory filter — none of the numbers above touch
+a sentinel-carrying field):
+
+- `chargingSessions`: **44** sentinel-valued fields — `startExternalChargingTotal` and
+  `endExternalChargingTotal` = `104857.5` on **22/22**.
+- `vehicleSegments`: **1000** across 10 fields on **100/100** — `fuelStart`/`fuelEnd`
+  `255.0`, `startTotalFuelCon`/`endTotalFuelCon` and
+  `startExternalChargingTotal`/`endExternalChargingTotal` `104857.5`, `fuelMin`/`fuelMax`
+  `-1.0`, and `startEvMileage`/`endEvMileage` **`1048575.0`**.
+- **New:** the ev-mileage marker on this endpoint is `1048575.0`, *not* the `10485750`
+  documented for `/api/trips`. It clears the `1_000_000` threshold by `48575`, so
+  `sanitizeSentinelInt` catches it only by luck.
+- **Worse than a magnitude trap:** `externalChargingDelta` and `fuelDelta` are `0.0` on
+  **100/100** segments and **22/22** sessions — that zero is `104857.5 − 104857.5` and
+  `255 − 255`. A *derived* sentinel arrives as a clean, plausible zero that no threshold
+  filter can ever catch. Any consumer must reject the operands, not the result.
+
 ## Full endpoint audit — 2026-08-18
 
 Car `way`, di+ `2.0.0b1` (`versionCode 158`), `en-US`, **mid DC fast-charge**
