@@ -13,6 +13,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.bydmate.app.data.local.DataThinningWorker
 import com.bydmate.app.data.cloud.DaemonSpoolImporter
+import com.bydmate.app.data.cloud.TripSummaryCloudSync
 import com.bydmate.app.data.local.HistoryImporter
 import com.bydmate.app.data.local.QueueStorageAccounting
 import com.bydmate.app.data.local.dao.ChargeDao
@@ -29,6 +30,19 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
+/**
+ * Whether an app-foreground resume should trigger [HistoryImporter.syncFromEnergyData] +
+ * [TripSummaryCloudSync.syncNewTrips]. Extracted as a pure function so the resume-trigger
+ * decision is unit-testable without Robolectric/instrumentation on [BYDMateApp] itself --
+ * same reasoning as [com.bydmate.app.daemon.CommandDaemon]'s `planPush`/`loopSleepMs`.
+ * `DIPLUS`-source cars already get cloud trips from live telemetry and must stay quiet here
+ * to avoid double-reporting (see [TripSummaryCloudSync]'s class doc).
+ */
+internal fun shouldSyncEnergyDataOnForeground(
+    setupCompleted: Boolean,
+    dataSource: SettingsRepository.DataSource,
+): Boolean = setupCompleted && dataSource == SettingsRepository.DataSource.ENERGYDATA
+
 @HiltAndroidApp
 class BYDMateApp : Application(), Configuration.Provider {
 
@@ -38,6 +52,7 @@ class BYDMateApp : Application(), Configuration.Provider {
     @Inject lateinit var chargeDao: ChargeDao
     @Inject lateinit var daemonSpoolImporter: DaemonSpoolImporter
     @Inject lateinit var queueStorageAccounting: QueueStorageAccounting
+    @Inject lateinit var tripSummaryCloudSync: TripSummaryCloudSync
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -77,7 +92,15 @@ class BYDMateApp : Application(), Configuration.Provider {
             }
         }
         scheduleDataThinning()
-        registerActivityLifecycleCallbacks(WidgetLifecycleCallbacks(this))
+        registerActivityLifecycleCallbacks(
+            WidgetLifecycleCallbacks(
+                app = this,
+                appScope = appScope,
+                settingsRepository = settingsRepository,
+                historyImporter = historyImporter,
+                tripSummaryCloudSync = tripSummaryCloudSync,
+            ),
+        )
     }
 
     private fun initOsmdroid() {
@@ -95,7 +118,13 @@ class BYDMateApp : Application(), Configuration.Provider {
         }
     }
 
-    private class WidgetLifecycleCallbacks(private val app: Context) : ActivityLifecycleCallbacks {
+    private class WidgetLifecycleCallbacks(
+        private val app: Context,
+        private val appScope: CoroutineScope,
+        private val settingsRepository: SettingsRepository,
+        private val historyImporter: HistoryImporter,
+        private val tripSummaryCloudSync: TripSummaryCloudSync,
+    ) : ActivityLifecycleCallbacks {
         private var resumedCount = 0
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
@@ -109,6 +138,32 @@ class BYDMateApp : Application(), Configuration.Provider {
                 // next time the app goes to background.
                 WidgetPreferences(app).setHiddenUntilAppLaunch(false)
                 WidgetController.setAppForegrounded(true)
+                syncOnForeground()
+            }
+        }
+
+        /**
+         * v0.5.6: the ENERGYDATA sync doc comment on `syncFromEnergyData` has long
+         * claimed it runs "on service start and app foreground", but only the service
+         * -start call ever existed (`HistoryImporter.runSync()` from `TrackingService`
+         * / `BYDMateApp.onCreate()`). With no periodic trigger either, a user who opens
+         * the app to check a just-finished trip while `TrackingService` has been running
+         * continuously all day sees nothing until the *next* service restart -- reported
+         * live as "trips not syncing" for cars on the no-ADB ENERGYDATA source (VoltFlow
+         * BACKLOG: Kevlar_5, 2026-09-22). `syncFromEnergyData()` is cheap to call here:
+         * it bails immediately via `EnergyDataReader.hasSourceChanged()` when the car's
+         * on-device trip log file hasn't changed, so this adds no meaningful cost on the
+         * far more common "nothing new" resume. Uses the lighter sync (not `runSync()`)
+         * to skip the heavier dedup/consumption-recalc maintenance pass that already runs
+         * at service start.
+         */
+        private fun syncOnForeground() {
+            appScope.launch {
+                val setupCompleted = settingsRepository.isSetupCompleted()
+                val dataSource = settingsRepository.getDataSource()
+                if (!shouldSyncEnergyDataOnForeground(setupCompleted, dataSource)) return@launch
+                historyImporter.syncFromEnergyData()
+                tripSummaryCloudSync.syncNewTrips()
             }
         }
 

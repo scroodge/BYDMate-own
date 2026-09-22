@@ -11,6 +11,24 @@
 > субсекундным `device_time`; live-снимок показывает `mate_version 0.5.4`. Публичный
 > GitHub Release не создавался.
 
+## [Unreleased]
+
+### Fixed
+- **ENERGYDATA-трипы теперь синхронизируются и при возврате приложения на передний
+  план, а не только при (пере)старте сервиса/приложения.** Комментарий к
+  `syncFromEnergyData` давно утверждал «Called on service start and app foreground»,
+  но триггера на foreground не существовало вовсе — только на холодный старт
+  (`BYDMateApp.onCreate`) и на старт `TrackingService`. Пока `TrackingService` работал
+  непрерывно весь день, новые поездки из бортового журнала машины (`EC_database.db`,
+  безADB-путь) не попадали в облако до следующего рестарта сервиса — репортилось
+  живьём как «поездки не подтягиваются» (Kevlar_5, 2026-09-22, две поездки подряд).
+  `BYDMateApp` теперь вызывает `historyImporter.syncFromEnergyData()` +
+  `tripSummaryCloudSync.syncNewTrips()` на каждом первом `onActivityResumed` после
+  возврата в приложение — дёшево на частом случае «ничего нового»
+  (`EnergyDataReader.hasSourceChanged()` выходит сразу), тихо на `DIPLUS`-машинах
+  (те получают трипы из live-телеметрии и не должны дублироваться). Решение вынесено
+  в чистую функцию `shouldSyncEnergyDataOnForeground` и покрыто `BYDMateAppTest`.
+
 ## [0.5.5] - 2026-09-09
 
 ### Added
