@@ -754,6 +754,10 @@ class TrackingService : Service(), LocationListener {
             "provider=${location.provider}")
     }
 
+    /** [runIsolated] bound to this service's TAG/Log.w — see its doc for why. */
+    private suspend fun <T> isolated(label: String, block: suspend () -> T): T? =
+        runIsolated(label, onError = { l, e -> Log.w(TAG, "$l failed: ${e.message}", e) }, block)
+
     private fun startPolling() {
         Log.i(TAG, "Starting polling with interval=${POLL_INTERVAL_MS}ms")
         pollingJob = serviceScope.launch {
@@ -867,15 +871,13 @@ class TrackingService : Service(), LocationListener {
                         // Room-backed (OdometerSampleDao) — same failure class as the SQLite
                         // grammar bug in ADR-0002. Isolated so an insert failure here can't
                         // abort the tick before it reaches maybeSendCloudTelemetry below.
-                        try {
+                        isolated("odometerBuffer.onSample") {
                             odometerBuffer.onSample(
                                 mileage = data.mileage,
                                 totalElec = data.totalElecConsumption,
                                 socPercent = data.soc,
                                 sessionId = sessionId,
                             )
-                        } catch (e: Exception) {
-                            Log.w(TAG, "odometerBuffer.onSample failed: ${e.message}", e)
                         }
                         liveTripBuffer.onSample(
                             mileage = data.mileage,
@@ -929,10 +931,8 @@ class TrackingService : Service(), LocationListener {
                         _tripDistanceKm.value = tripDistance
 
                         sessionId?.let {
-                            try {
+                            isolated("sessionPersistence.save") {
                                 sessionPersistence.save(it, sessionLastActiveTs)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "sessionPersistence.save failed: ${e.message}", e)
                             }
                         }
 
@@ -944,22 +944,10 @@ class TrackingService : Service(), LocationListener {
                         // Android framework APIs that can throw on this OEM ROM. All three are
                         // isolated so a failure here can't abort the tick before it reaches
                         // maybeSendCloudTelemetry below.
-                        try {
-                            automationEngine.evaluate(data, sessionId)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "automationEngine.evaluate failed: ${e.message}", e)
-                        }
-                        try {
-                            updateNotification(data)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "updateNotification failed: ${e.message}", e)
-                        }
+                        isolated("automationEngine.evaluate") { automationEngine.evaluate(data, sessionId) }
+                        isolated("updateNotification") { updateNotification(data) }
                         maybeLogSessionSummary(nowMs, data, sessionId)
-                        try {
-                            renewWakeLockIfNeeded()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "renewWakeLockIfNeeded failed: ${e.message}", e)
-                        }
+                        isolated("renewWakeLockIfNeeded") { renewWakeLockIfNeeded() }
                         val cloudEnabled = cloudSyncEnabledCached
                         if (cloudEnabled) {
                             var autoserviceOn = autoserviceEnabledCached
