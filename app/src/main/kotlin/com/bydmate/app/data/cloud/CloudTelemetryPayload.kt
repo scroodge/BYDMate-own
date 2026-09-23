@@ -7,19 +7,47 @@ import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * The single builder for the cloud telemetry payload — the app's 1 Hz poll loop and the
+ * daemon's parked/charging push both go through here (B-19). Previously each process
+ * hand-maintained its own field mapping; a fix landing in one and not the other already
+ * shipped two production defects. [VehicleTelemetrySnapshot] is the shared port: the app
+ * builds one via [VehicleTelemetrySnapshot.from], the daemon via its own plain-constructor
+ * call (it has no Context/DI for the `.from()` factory's `android.location.Location` input).
+ */
 object CloudTelemetryPayload {
-    fun build(
-        vehicleId: String,
-        snapshot: VehicleTelemetrySnapshot,
-        omitGps: Boolean = false,
-        telemetryState: IternioIntervalPolicy.TelemetryState? = null,
-        dropLocationForThinning: Boolean = false,
-        liveOnly: Boolean = false,
-        clientHourly: Boolean = false,
-        tripId: String? = null,
-        clientTrip: Boolean = false,
-    ): String {
-        val telemetryState = telemetryState ?: classifyPayloadState(snapshot)
+
+    /**
+     * How a payload's shape is selected. [Mode.Standard] now applies the same
+     * vehicle-state-derived thinning and field rounding to every caller — app or daemon —
+     * so the wire shape for equivalent underlying state cannot drift between the two
+     * processes again. Previously the daemon's normal push never thinned and never rounded.
+     * [Mode.AutoserviceFallback] is a genuinely different, smaller shape (no di+ fields at
+     * all) used only when di+ is unreachable; it is never inferred from
+     * `snapshot.diPlusData == null` — a caller must ask for it explicitly.
+     */
+    sealed interface Mode {
+        data class Standard(
+            val liveOnly: Boolean = false,
+            val omitGps: Boolean = false,
+            val dropLocationForThinning: Boolean = false,
+            val telemetryState: IternioIntervalPolicy.TelemetryState? = null,
+            val clientHourly: Boolean = false,
+            val tripId: String? = null,
+            val clientTrip: Boolean = false,
+        ) : Mode
+
+        object AutoserviceFallback : Mode
+    }
+
+    fun build(vehicleId: String, snapshot: VehicleTelemetrySnapshot, mode: Mode = Mode.Standard()): String =
+        when (mode) {
+            is Mode.Standard -> buildStandard(vehicleId, snapshot, mode)
+            Mode.AutoserviceFallback -> buildAutoserviceFallback(vehicleId, snapshot)
+        }
+
+    private fun buildStandard(vehicleId: String, snapshot: VehicleTelemetrySnapshot, mode: Mode.Standard): String {
+        val telemetryState = mode.telemetryState ?: classifyPayloadState(snapshot)
         val moving = telemetryState == IternioIntervalPolicy.TelemetryState.DRIVING
         val charging = telemetryState == IternioIntervalPolicy.TelemetryState.CHARGING
         val idleOnly = telemetryState == IternioIntervalPolicy.TelemetryState.PARKED
@@ -43,7 +71,7 @@ object CloudTelemetryPayload {
             if (charging) {
                 putIfPresent("charge_power_kw", snapshot.chargePowerKw)
                 putIfPresent("charge_type", snapshot.chargeType)
-                putRounded("kwh_charged", snapshot.kwhCharged, 3)
+                putRounded("kwh_charged", snapshot.kwhCharged, KWH_CHARGED_DECIMALS)
             }
             if (!idleOnly) {
                 putIfPresent("battery_temp_c", snapshot.batteryTempC)
@@ -69,9 +97,13 @@ object CloudTelemetryPayload {
                     2,
                 )
             }
+            // Daemon-normal samples carried this field; the app's own samples never did.
+            // Unifying the two builders means it now goes out on both — additive, optional
+            // on the wire (ADR-0003), never previously read on the app path.
+            putIfPresent("is_parked", snapshot.isParked)
         }
 
-        val location = if (omitGps || dropLocationForThinning) {
+        val location = if (mode.omitGps || mode.dropLocationForThinning) {
             JSONObject()
         } else {
             val loc = snapshot.location
@@ -101,18 +133,18 @@ object CloudTelemetryPayload {
             // live state only and skips the history/hourly/trip writes. Omitted
             // (rather than sent as false) so normal samples keep their exact
             // current shape on the wire.
-            if (liveOnly) put("live_only", true)
+            if (mode.liveOnly) put("live_only", true)
             // The hourly rollup for this sample is accumulated on-device and shipped once per
             // flush in the batch envelope's "hourly" block, so the server must not also fold
             // the sample in per-sample or the hour would be counted twice. Omitted (never
             // false) so a sample's shape is unchanged when the client isn't doing rollups.
-            if (clientHourly) put("client_hourly", true)
+            if (mode.clientHourly) put("client_hourly", true)
             // The trip rollup for this sample is accumulated on-device and shipped once per flush
             // in the batch envelope's "trips" block, so the server must not also run its own trip
             // open/extend logic for it. Omitted (never false) so a sample's shape is unchanged
             // when the client isn't tracking a trip (parked/charging/idle samples).
-            if (clientTrip && tripId != null) {
-                put("trip_id", tripId)
+            if (mode.clientTrip && mode.tripId != null) {
+                put("trip_id", mode.tripId)
                 put("client_trip", true)
             }
             put("telemetry", telemetry)
@@ -135,6 +167,59 @@ object CloudTelemetryPayload {
             }
             if (autoservice.length() > 0) put("autoservice", autoservice)
             put("location", location)
+        }.toString()
+    }
+
+    /**
+     * The reduced shape used only when di+ is unreachable — no `diplus`-from-di+ fields,
+     * sourced entirely from autoservice reads on [snapshot]. Matches
+     * `CommandDaemon.buildAutoserviceFallbackPayload`'s wire shape exactly: same field set,
+     * same "soc" left uncalibrated (unlike [buildStandard]'s `resolveTelemetrySoc` path —
+     * this asymmetry already existed and is preserved, not introduced here).
+     */
+    private fun buildAutoserviceFallback(vehicleId: String, snapshot: VehicleTelemetrySnapshot): String {
+        val isCharging = snapshot.isCharging ?: false
+
+        val telemetry = JSONObject().apply {
+            // Every SOC here is the autoservice display scale by construction — there is no
+            // di+ read in this path. Tagged so a consumer can tell these samples apart from
+            // raw-scale di+ ones; see SocScaleCalibration.
+            putIfPresent("soc", snapshot.soc)
+            putIfPresent("soc_source", snapshot.socSource?.wireName)
+            putIfPresent("power_kw", snapshot.autoservicePowerKw?.toDouble())
+            putIfPresent("aux_voltage_v", snapshot.auxVoltageV)
+            put("is_charging", isCharging)
+            putIfPresent("charge_power_kw", if (isCharging) snapshot.chargePowerKw else null)
+            putRounded("kwh_charged", if (isCharging) snapshot.kwhCharged else null, KWH_CHARGED_DECIMALS)
+            putIfPresent("charge_type", if (isCharging) snapshot.chargeType else null)
+            put("is_parked", !isCharging)
+            putIfPresent("soh_percent", snapshot.sohPercent)
+        }
+        val diplus = JSONObject().apply {
+            putIfPresent("soc", snapshot.soc)
+            putIfPresent("power_kw", snapshot.autoservicePowerKw)
+            putIfPresent("charge_gun_state", snapshot.autoserviceGunState)
+            putIfPresent("voltage_12v", snapshot.auxVoltageV)
+            putIfPresent("door_fl", snapshot.autoserviceDoorFL)
+            putIfPresent("door_fr", snapshot.autoserviceDoorFR)
+            putIfPresent("door_rl", snapshot.autoserviceDoorRL)
+            putIfPresent("door_rr", snapshot.autoserviceDoorRR)
+            putIfPresent("trunk", snapshot.autoserviceTrunk)
+            putIfPresent("hood", snapshot.autoserviceHood)
+            putIfPresent("tire_press_fl_kpa", snapshot.tirePressFL)
+            putIfPresent("tire_press_fr_kpa", snapshot.tirePressFR)
+            putIfPresent("tire_press_rl_kpa", snapshot.tirePressRL)
+            putIfPresent("tire_press_rr_kpa", snapshot.tirePressRR)
+        }
+        return JSONObject().apply {
+            put("schema_version", 1)
+            put("vehicle_id", vehicleId)
+            put("device_time", snapshot.deviceTimeIso)
+            put("source", "BYDMate")
+            put("mate_version", BuildConfig.VERSION_NAME)
+            put("telemetry", telemetry)
+            put("diplus", diplus)
+            put("location", JSONObject())
         }.toString()
     }
 
@@ -196,6 +281,14 @@ object CloudTelemetryPayload {
         null
     }
 
+    /**
+     * Omits the key entirely when [value] is absent — never writes `JSONObject.NULL`. Also
+     * matters for `bydmate_telemetry_samples_soh_analytics_idx` (`telemetry ? 'soh_percent'`):
+     * jsonb key-existence is true even for an explicit null, so a literal-null `soh_percent`
+     * would index a row the query's `between 0 and 100` check then discards. Absent and null
+     * are equivalent everywhere else downstream (Zod fields are `.nullable().optional()`,
+     * `telemetry-sanitizer.ts` gates on `value != null`) — this is the one place it isn't.
+     */
     private fun JSONObject.putIfPresent(name: String, value: Any?) {
         if (value == null) return
         put(name, value)
@@ -207,6 +300,9 @@ object CloudTelemetryPayload {
      * JSON payload and the cloud's telemetry jsonb column. Mirrors the decimal places
      * the cloud sanitizer (telemetry-sanitizer.ts) already applies server-side, so
      * rounding here is a no-op for the server and only saves bytes on the wire.
+     *
+     * Now applied uniformly for every caller — previously only the app's own path rounded;
+     * the daemon's normal push wrote raw doubles straight to the wire.
      */
     private fun JSONObject.putRounded(name: String, value: Double?, decimals: Int) {
         if (value == null || !value.isFinite()) return
@@ -278,4 +374,5 @@ object CloudTelemetryPayload {
     private const val CHARGING_POWER_THRESHOLD_KW = 0.1
     private const val MAX_GPS_ACCURACY_M = 30.0
     private const val CELL_VOLTAGE_DECIMALS = 4
+    private const val KWH_CHARGED_DECIMALS = 3
 }

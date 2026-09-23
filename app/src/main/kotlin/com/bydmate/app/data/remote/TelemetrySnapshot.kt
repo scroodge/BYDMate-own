@@ -74,6 +74,16 @@ data class VehicleTelemetrySnapshot(
     val autoserviceBatteryType: Int? = null,
     val autoserviceLifetimeMileageKm: Float? = null,
     val autoserviceLifetimeKwh: Float? = null,
+    // Bodywork state has no di+-independent source anywhere else on this type — only needed
+    // by CloudTelemetryPayload.Mode.AutoserviceFallback, which has no DiParsData to read it
+    // from. Left null (and unset) by VehicleTelemetrySnapshot.from(): the app's own samples
+    // always carry a DiParsData and get these fields via diPlusData.toJson() instead.
+    val autoserviceDoorFL: Int? = null,
+    val autoserviceDoorFR: Int? = null,
+    val autoserviceDoorRL: Int? = null,
+    val autoserviceDoorRR: Int? = null,
+    val autoserviceTrunk: Int? = null,
+    val autoserviceHood: Int? = null,
 ) {
     companion object {
         private const val POWER_MIN_KW = -300

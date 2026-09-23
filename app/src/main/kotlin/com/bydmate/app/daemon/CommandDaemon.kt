@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import com.bydmate.app.BuildConfig
+import com.bydmate.app.data.cloud.CloudTelemetryPayload
 import com.bydmate.app.data.cloud.DaemonDurableIngress
 import com.bydmate.app.data.cloud.DaemonTelemetrySpool
 import com.bydmate.app.data.cloud.ShellContentQueueIpc
@@ -14,6 +15,7 @@ import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
+import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.remote.resolveTelemetrySoc
 import com.bydmate.app.domain.SocSource
 import com.bydmate.app.domain.ChargingStateClassifier
@@ -1205,17 +1207,21 @@ object CommandDaemon {
                     "tires_kpa(fl/fr/rl/rr)=$tirePressures " +
                     "(diplus=${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
             )
-            val payload = buildTelemetryPayload(
-                conf.vehicleId,
-                data,
-                kwhCharged,
-                sohPercent,
-                liveOnly,
-                autoserviceSoc,
-                autoserviceGun,
+            val snapshot = buildDaemonSnapshot(
+                d = data,
+                kwhCharged = kwhCharged,
+                sohPercent = sohPercent,
+                autoserviceSocPercent = autoserviceSoc,
+                autoserviceGun = autoserviceGun,
+                capturedAtMs = System.currentTimeMillis(),
             )
+            val payloadJson = CloudTelemetryPayload.build(
+                conf.vehicleId,
+                snapshot,
+                CloudTelemetryPayload.Mode.Standard(liveOnly = liveOnly),
+            )
+            val payload = JSONObject(payloadJson)
             if (!liveOnly) persistDaemonTelemetry(payload)
-            val payloadJson = payload.toString()
             val request = Request.Builder()
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
@@ -1246,7 +1252,13 @@ object CommandDaemon {
      */
     private fun pushAutoserviceFallback(ok: OkHttpClient, conf: Conf) {
         try {
-            val payload = buildAutoserviceFallbackPayload(conf.vehicleId)
+            val snapshot = buildAutoserviceFallbackSnapshot(capturedAtMs = System.currentTimeMillis())
+            val payloadJson = CloudTelemetryPayload.build(
+                conf.vehicleId,
+                snapshot,
+                CloudTelemetryPayload.Mode.AutoserviceFallback,
+            )
+            val payload = JSONObject(payloadJson)
             val diplus = payload.optJSONObject("diplus")
             log(
                 "telemetry (di+ down, autoservice fallback): soc=${diplus?.opt("soc")} " +
@@ -1259,7 +1271,7 @@ object CommandDaemon {
                 .header("X-API-Key", conf.apiKey)
                 .header("X-Vehicle-Id", conf.vehicleId)
                 .header("X-App", "VoltFlow-Mate-Daemon")
-                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .post(payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
             ok.newCall(request).execute().use {
                 log("telemetry HTTP ${it.code} (autoservice fallback)")
@@ -1284,14 +1296,92 @@ object CommandDaemon {
     }
 
     /**
-     * Assembles a telemetry payload purely from autoservice reads (dev=1001 bodywork/tyre,
-     * dev=1009 charging, dev=1012 engine, dev=1014 statistic — see [FidRegistry] for the fid
-     * catalog). Only fields already live-validated against di+ (2026-07-22) are populated;
-     * everything di+-only is simply omitted via the same [putIfPresent] convention
-     * [buildTelemetryPayload] already uses, so downstream consumers see a normal partial sample,
-     * not a malformed one.
+     * Maps the daemon's locally-available di+ read plus autoservice extras into the shared
+     * [VehicleTelemetrySnapshot] port that [CloudTelemetryPayload.build] consumes — the app
+     * builds the same type via `VehicleTelemetrySnapshot.from`, the daemon via this plain
+     * constructor call since it has no Context/DI for that factory's `android.location.Location`
+     * input. Pure mapping, no I/O — extracted from [pushTelemetry] so it's testable without a
+     * running daemon process (B-19).
+     *
+     * `autoserviceSocPercent` is used only to resolve [VehicleTelemetrySnapshot.soc] via
+     * [resolveTelemetrySoc] — it is deliberately NOT stored on the snapshot's own
+     * `autoserviceSocPercent` field, because that field also feeds the wire `autoservice`
+     * object, which historically carries only `gun_state` for daemon-normal samples. Storing
+     * it there would add a `soc_percent` key that never existed on this path.
      */
-    private fun buildAutoserviceFallbackPayload(vehicleId: String): JSONObject {
+    internal fun buildDaemonSnapshot(
+        d: DiParsData,
+        kwhCharged: Float?,
+        sohPercent: Int?,
+        autoserviceSocPercent: Float?,
+        autoserviceGun: Int?,
+        capturedAtMs: Long,
+    ): VehicleTelemetrySnapshot {
+        val resolvedSoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
+        val gun = autoserviceGun ?: d.chargeGunState
+        val isCharging = ChargingStateClassifier.isCharging(
+            autoserviceGun = autoserviceGun,
+            diPlusGun = d.chargeGunState,
+            chargingStatus = d.chargingStatus,
+        )
+        val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
+            d.maxCellVoltage - d.minCellVoltage
+        } else {
+            null
+        }
+        return VehicleTelemetrySnapshot(
+            capturedAtMs = capturedAtMs,
+            deviceTimeIso = isoNow(),
+            diPlusData = d,
+            soc = resolvedSoc.percent,
+            socSource = resolvedSoc.source,
+            speedKmh = d.speed?.toDouble(),
+            powerKw = d.power,
+            batteryTempC = d.avgBatTemp?.toDouble(),
+            cabinTempC = d.insideTemp?.toDouble(),
+            outsideTempC = d.exteriorTemp?.toDouble(),
+            batteryVoltageV = null,
+            auxVoltageV = d.voltage12v,
+            cellVoltageMinV = d.minCellVoltage,
+            cellVoltageMaxV = d.maxCellVoltage,
+            cellDeltaV = cellDelta,
+            odometerKm = d.mileage,
+            sohPercent = sohPercent?.toDouble(),
+            isCharging = isCharging,
+            chargePowerKw = if (isCharging) d.power?.let { kotlin.math.abs(it) } else null,
+            chargeType = if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null,
+            kwhCharged = kwhCharged?.toDouble(),
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            isParked = d.gear == 1,
+            tirePressFL = d.tirePressFL,
+            tirePressFR = d.tirePressFR,
+            tirePressRL = d.tirePressRL,
+            tirePressRR = d.tirePressRR,
+            location = null,
+            // Same optional wire shape as CloudTelemetryPayload's own autoservice object: this
+            // is the exact gun value used by ChargingStateClassifier above, not a second read
+            // that could race and diverge. soc_percent/power_kw/etc. are left null — the
+            // daemon-normal path never populated them, only gun_state.
+            autoserviceGunState = autoserviceGun,
+        )
+    }
+
+    /**
+     * Maps autoservice-only reads (dev=1001 bodywork/tyre, dev=1009 charging, dev=1012 engine,
+     * dev=1014 statistic — see [FidRegistry] for the fid catalog) into a [VehicleTelemetrySnapshot]
+     * with `diPlusData = null`, for [CloudTelemetryPayload.Mode.AutoserviceFallback]. Only fields
+     * already live-validated against di+ (2026-07-22) are populated; everything di+-only is
+     * simply left null, so downstream consumers see a normal partial sample, not a malformed one.
+     * Pure mapping (the FID reads themselves stay in [pushAutoserviceFallback]) — same reasoning
+     * as [buildDaemonSnapshot].
+     *
+     * `soc` is deliberately left uncalibrated (unlike [buildDaemonSnapshot], which resolves it
+     * via [resolveTelemetrySoc]) — this asymmetry already existed in the pre-B-19 code and is
+     * preserved here, not introduced.
+     */
+    private fun buildAutoserviceFallbackSnapshot(capturedAtMs: Long): VehicleTelemetrySnapshot {
         val soc = readSocPercentAutoservice()?.toInt()
         val powerKw = readEnginePowerKwAutoservice()
         val gun = readAutoserviceIntFid(1009, 876609586) // FID_GUN_CONNECT_STATE
@@ -1314,131 +1404,46 @@ object CommandDaemon {
             diPlusGun = null,
             chargingStatus = null,
         )
-
-        val diplus = JSONObject().apply {
-            putIfPresent("soc", soc); putIfPresent("power_kw", powerKw); putIfPresent("charge_gun_state", gun)
-            putIfPresent("voltage_12v", voltage12v)
-            putIfPresent("door_fl", doorFL); putIfPresent("door_fr", doorFR); putIfPresent("door_rl", doorRL); putIfPresent("door_rr", doorRR)
-            putIfPresent("trunk", trunk); putIfPresent("hood", hood)
-            putIfPresent("tire_press_fl_kpa", tireFL); putIfPresent("tire_press_fr_kpa", tireFR)
-            putIfPresent("tire_press_rl_kpa", tireRL); putIfPresent("tire_press_rr_kpa", tireRR)
-        }
-        val telemetry = JSONObject().apply {
-            // Every SOC here is the autoservice display scale by construction — there is no
-            // di+ read in this path. Tagged so a consumer can tell these samples apart from
-            // raw-scale di+ ones; see SocScaleCalibration.
-            putIfPresent("soc", soc); putIfPresent("soc_source", SocSource.AUTOSERVICE.wireName)
-            putIfPresent("power_kw", powerKw); putIfPresent("aux_voltage_v", voltage12v)
-            put("is_charging", isCharging)
-            putIfPresent("charge_power_kw", if (isCharging) powerKw?.let { kotlin.math.abs(it) } else null)
-            putRounded("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null, KWH_CHARGED_DECIMALS)
-            putIfPresent("charge_type", if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
-            put("is_parked", !isCharging)
-            putIfPresent("soh_percent", sohPercent?.toDouble())
-        }
-        return JSONObject().apply {
-            put("schema_version", 1)
-            put("vehicle_id", vehicleId)
-            put("device_time", isoNow())
-            put("source", "BYDMate")
-            put("mate_version", BuildConfig.VERSION_NAME)
-            put("telemetry", telemetry)
-            put("diplus", diplus)
-            put("location", JSONObject())
-        }
-    }
-
-    internal fun buildTelemetryPayload(
-        vehicleId: String,
-        d: DiParsData,
-        kwhCharged: Float? = null,
-        sohPercent: Int? = null,
-        liveOnly: Boolean = false,
-        autoserviceSocPercent: Float? = null,
-        autoserviceGun: Int? = null,
-    ): JSONObject {
-        val resolvedSoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
-        val telemetrySoc = resolvedSoc.percent
-        val cellDelta = if (d.maxCellVoltage != null && d.minCellVoltage != null) {
-            d.maxCellVoltage!! - d.minCellVoltage!!
-        } else {
-            null
-        }
-        val gun = autoserviceGun ?: d.chargeGunState
-        val isCharging = ChargingStateClassifier.isCharging(
-            autoserviceGun = autoserviceGun,
-            diPlusGun = d.chargeGunState,
-            chargingStatus = d.chargingStatus,
+        return VehicleTelemetrySnapshot(
+            capturedAtMs = capturedAtMs,
+            deviceTimeIso = isoNow(),
+            diPlusData = null,
+            soc = soc,
+            socSource = SocSource.AUTOSERVICE,
+            speedKmh = null,
+            powerKw = null,
+            batteryTempC = null,
+            cabinTempC = null,
+            outsideTempC = null,
+            batteryVoltageV = null,
+            auxVoltageV = voltage12v?.toDouble(),
+            cellVoltageMinV = null,
+            cellVoltageMaxV = null,
+            cellDeltaV = null,
+            odometerKm = null,
+            sohPercent = sohPercent?.toDouble(),
+            isCharging = isCharging,
+            chargePowerKw = if (isCharging) powerKw?.let { kotlin.math.abs(it).toDouble() } else null,
+            chargeType = if (isCharging) when (chargingType) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null,
+            kwhCharged = kwhCharged?.toDouble(),
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            isParked = !isCharging,
+            tirePressFL = tireFL,
+            tirePressFR = tireFR,
+            tirePressRL = tireRL,
+            tirePressRR = tireRR,
+            location = null,
+            autoservicePowerKw = powerKw,
+            autoserviceGunState = gun,
+            autoserviceDoorFL = doorFL,
+            autoserviceDoorFR = doorFR,
+            autoserviceDoorRL = doorRL,
+            autoserviceDoorRR = doorRR,
+            autoserviceTrunk = trunk,
+            autoserviceHood = hood,
         )
-
-        val diplus = JSONObject().apply {
-            putIfPresent("soc", d.socPrecise ?: d.soc); putIfPresent("speed_kmh", d.speed); putIfPresent("mileage_km", d.mileage)
-            putIfPresent("power_kw", d.power); putIfPresent("charge_gun_state", d.chargeGunState)
-            putIfPresent("max_battery_temp_c", d.maxBatTemp); putIfPresent("avg_battery_temp_c", d.avgBatTemp)
-            putIfPresent("min_battery_temp_c", d.minBatTemp); putIfPresent("charging_status", d.chargingStatus)
-            putIfPresent("battery_capacity_kwh", d.batteryCapacityKwh)
-            putIfPresent("total_elec_consumption_kwh", d.totalElecConsumption)
-            putIfPresent("voltage_12v", d.voltage12v)
-            putRounded("max_cell_voltage_v", d.maxCellVoltage, CELL_VOLTAGE_DECIMALS)
-            putRounded("min_cell_voltage_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)
-            putRounded("cell_delta_v", cellDelta, CELL_VOLTAGE_DECIMALS)
-            putIfPresent("exterior_temp_c", d.exteriorTemp); putIfPresent("gear", d.gear); putIfPresent("power_state", d.powerState)
-            putIfPresent("inside_temp_c", d.insideTemp); putIfPresent("ac_status", d.acStatus); putIfPresent("ac_temp_c", d.acTemp)
-            putIfPresent("fan_level", d.fanLevel); putIfPresent("ac_circ", d.acCirc)
-            putIfPresent("door_fl", d.doorFL); putIfPresent("door_fr", d.doorFR); putIfPresent("door_rl", d.doorRL); putIfPresent("door_rr", d.doorRR)
-            putIfPresent("window_fl_percent", d.windowFL); putIfPresent("window_fr_percent", d.windowFR)
-            putIfPresent("window_rl_percent", d.windowRL); putIfPresent("window_rr_percent", d.windowRR)
-            putIfPresent("sunroof_percent", d.sunroof); putIfPresent("trunk", d.trunk); putIfPresent("hood", d.hood)
-            putIfPresent("seatbelt_fl", d.seatbeltFL); putIfPresent("lock_fl", d.lockFL)
-            putIfPresent("tire_press_fl_kpa", d.tirePressFL); putIfPresent("tire_press_fr_kpa", d.tirePressFR)
-            putIfPresent("tire_press_rl_kpa", d.tirePressRL); putIfPresent("tire_press_rr_kpa", d.tirePressRR)
-            putIfPresent("drive_mode", d.driveMode); putIfPresent("work_mode", d.workMode); putIfPresent("auto_park", d.autoPark)
-            putIfPresent("rain", d.rain); putIfPresent("light_low", d.lightLow); putIfPresent("drl", d.drl)
-            putIfPresent("sunshade_percent", d.sunshade)
-            putIfPresent("sentry_state", d.sentryState); putIfPresent("remote_lock_state", d.remoteLockState)
-            putIfPresent("stall_sentry_mode", d.stallSentryMode)
-        }
-
-        val telemetry = JSONObject().apply {
-            // Mirrors CloudTelemetryPayload: prefer di+ 2.0's 0.1 %-resolution value, and
-            // tag which scale it is on (di+ raw BMS vs autoservice display — see
-            // SocScaleCalibration).
-            putIfPresent("soc", d.socPrecise ?: telemetrySoc)
-            putIfPresent("soc_source", resolvedSoc.source?.wireName)
-            putIfPresent("speed_kmh", d.speed?.toDouble()); putIfPresent("power_kw", d.power)
-            putIfPresent("battery_temp_c", d.avgBatTemp?.toDouble()); putIfPresent("cabin_temp_c", d.insideTemp?.toDouble())
-            putIfPresent("outside_temp_c", d.exteriorTemp?.toDouble()); putIfPresent("aux_voltage_v", d.voltage12v)
-            putRounded("cell_voltage_min_v", d.minCellVoltage, CELL_VOLTAGE_DECIMALS)
-            putRounded("cell_voltage_max_v", d.maxCellVoltage, CELL_VOLTAGE_DECIMALS)
-            putRounded("cell_delta_v", cellDelta, CELL_VOLTAGE_DECIMALS)
-            putIfPresent("odometer_km", d.mileage)
-            put("is_charging", isCharging)
-            putIfPresent("charge_power_kw", if (isCharging) d.power?.let { kotlin.math.abs(it) } else null)
-            putRounded("kwh_charged", if (isCharging) kwhCharged?.toDouble() else null, KWH_CHARGED_DECIMALS)
-            putIfPresent("charge_type", if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null)
-            put("is_parked", d.gear == 1)
-            putIfPresent("soh_percent", sohPercent?.toDouble())
-        }
-
-        return JSONObject().apply {
-            put("schema_version", 1)
-            put("vehicle_id", vehicleId)
-            put("device_time", isoNow())
-            put("source", "BYDMate")
-            put("mate_version", BuildConfig.VERSION_NAME)
-            // Parked heartbeat with nothing material changed: server refreshes live state only.
-            // Omitted (not false) when unset so a normal sample keeps its exact current shape.
-            if (liveOnly) put("live_only", true)
-            put("telemetry", telemetry)
-            put("diplus", diplus)
-            // Same optional wire shape as CloudTelemetryPayload. This is the exact value used
-            // above by ChargingStateClassifier, not a second read that could race and diverge.
-            if (autoserviceGun != null) {
-                put("autoservice", JSONObject().put("gun_state", autoserviceGun))
-            }
-            // location is required by the ingest schema; the daemon has no GPS → empty (fields are nullable).
-            put("location", JSONObject())
-        }
     }
 
     /**
@@ -1458,63 +1463,6 @@ object CommandDaemon {
         val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
         fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
         return fmt.format(Date())
-    }
-
-    /**
-     * Omits the key entirely when the value is absent, matching
-     * `CloudTelemetryPayload.putIfPresent` in the app.
-     *
-     * This used to write `JSONObject.NULL`, so every key was on the wire on every push —
-     * roughly 30 of the 50 `diplus` keys as literal `null` on a parked car, ~800 bytes a push
-     * and by far the largest remaining payload cost (an order of magnitude more than the
-     * float rounding above). It also polluted the partial index
-     * `bydmate_telemetry_samples_soh_analytics_idx`, whose predicate is
-     * `telemetry ? 'soh_percent'`: jsonb key-existence is true even when the value is null, so
-     * daemon rows with no SoH reading were indexed and then discarded by the query's
-     * `between 0 and 100` check.
-     *
-     * **Safe because absent and null are equivalent everywhere downstream** (checked
-     * 2026-08-06): the Zod fields are `.nullable().optional()`; `telemetry-sanitizer.ts` gates
-     * on `value != null`, which catches `undefined` identically; and the only jsonb
-     * key-existence checks on `telemetry`/`diplus` are the two `soh_percent` ones above. The
-     * `location ? 'lat'` checks in the GPS-retention functions are unaffected — the daemon has
-     * no GPS and already sends `location: {}` with no keys at all.
-     */
-    private fun JSONObject.putIfPresent(key: String, value: Any?) {
-        if (value == null) return
-        put(key, value)
-    }
-
-    /** Wire precision for cell voltages. Mirrors `CloudTelemetryPayload.CELL_VOLTAGE_DECIMALS`. */
-    private const val CELL_VOLTAGE_DECIMALS = 4
-
-    /** Wire precision for `kwh_charged`. Mirrors `CloudTelemetryPayload`'s 3 dp. */
-    private const val KWH_CHARGED_DECIMALS = 3
-
-    /**
-     * Rounds a value before serializing, so raw-double artifacts don't bloat the JSON and the
-     * cloud's telemetry jsonb column.
-     *
-     * The app got this in Phase 1 of `docs/CLOUD_OFFLOAD_PLAN.md`; the daemon never did, even
-     * though it is the writer for most of the day. The worst offender is `cell_delta_v`, which
-     * both builders compute as `maxCellVoltage - minCellVoltage` — exactly the subtraction that
-     * produces `0.019999999999999` (~20 chars) on every sample.
-     *
-     * Matches the decimals `telemetry-sanitizer.ts` already applies server-side, so this is a
-     * no-op for the backend and purely saves wire bytes.
-     *
-     * Non-finite input returns null rather than serializing `NaN`/`Infinity`, which are not
-     * valid JSON numbers.
-     */
-    internal fun roundForWire(value: Double?, decimals: Int): Double? {
-        if (value == null || !value.isFinite()) return null
-        val factor = Math.pow(10.0, decimals.toDouble())
-        return Math.round(value * factor) / factor
-    }
-
-    /** [putIfPresent] with [roundForWire] applied, so an absent reading omits its key as usual. */
-    private fun JSONObject.putRounded(key: String, value: Double?, decimals: Int) {
-        putIfPresent(key, roundForWire(value, decimals))
     }
 
     /** Same regex as AutoserviceClientImpl — parses `Result: Parcel(00000000 <8hex> ...)`. */

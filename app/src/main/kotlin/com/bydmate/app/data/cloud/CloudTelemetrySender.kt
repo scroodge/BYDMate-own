@@ -134,9 +134,11 @@ class CloudTelemetrySender @Inject constructor(
             pendingStatusPingPayload = CloudTelemetryPayload.build(
                 config.vehicleId,
                 snapshot,
-                omitGps = omitGps,
-                telemetryState = telemetryState,
-                liveOnly = true,
+                CloudTelemetryPayload.Mode.Standard(
+                    omitGps = omitGps,
+                    telemetryState = telemetryState,
+                    liveOnly = true,
+                ),
             )
             lastFastPingMs = now
         }
@@ -152,15 +154,17 @@ class CloudTelemetrySender @Inject constructor(
             val payload = CloudTelemetryPayload.build(
                 config.vehicleId,
                 snapshot,
-                omitGps = omitGps,
-                telemetryState = telemetryState,
-                dropLocationForThinning = dropLocationForThinning,
-                liveOnly = decision.liveOnly,
-                // A live_only sample never reaches the hourly rollup server-side, so there is
-                // nothing to take over for it and no flag to set.
-                clientHourly = !decision.liveOnly,
-                tripId = tripPlan.tripId,
-                clientTrip = tripPlan.clientTrip,
+                CloudTelemetryPayload.Mode.Standard(
+                    omitGps = omitGps,
+                    telemetryState = telemetryState,
+                    dropLocationForThinning = dropLocationForThinning,
+                    liveOnly = decision.liveOnly,
+                    // A live_only sample never reaches the hourly rollup server-side, so there
+                    // is nothing to take over for it and no flag to set.
+                    clientHourly = !decision.liveOnly,
+                    tripId = tripPlan.tripId,
+                    clientTrip = tripPlan.clientTrip,
+                ),
             )
             queueDao.insert(pendingQueueEntity(payload, now))
             queueRetentionManager.enforce(now)
@@ -354,8 +358,10 @@ class CloudTelemetrySender @Inject constructor(
         val payload = CloudTelemetryPayload.build(
             config.vehicleId,
             snapshot,
-            omitGps = omitGps,
-            telemetryState = telemetryState,
+            CloudTelemetryPayload.Mode.Standard(
+                omitGps = omitGps,
+                telemetryState = telemetryState,
+            ),
         )
         return when (val result = client.send(config.url, config.apiKey, config.vehicleId, payload)) {
             is CloudSendResult.Success -> {

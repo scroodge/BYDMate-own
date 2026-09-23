@@ -1,9 +1,11 @@
 package com.bydmate.app.daemon
 
+import com.bydmate.app.data.cloud.CloudTelemetryPayload
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.resolveTelemetrySoc
 import com.bydmate.app.domain.SocScaleCalibration
 import com.bydmate.app.domain.SocSource
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -323,14 +325,29 @@ class CommandDaemonTest {
         socPrecise = socPrecise,
     )
 
+    private fun daemonPayload(
+        d: DiParsData,
+        kwhCharged: Float? = null,
+        sohPercent: Int? = null,
+        autoserviceSocPercent: Float? = null,
+        autoserviceGun: Int? = null,
+    ): JSONObject {
+        val snapshot = CommandDaemon.buildDaemonSnapshot(
+            d = d,
+            kwhCharged = kwhCharged,
+            sohPercent = sohPercent,
+            autoserviceSocPercent = autoserviceSocPercent,
+            autoserviceGun = autoserviceGun,
+            capturedAtMs = t0,
+        )
+        return JSONObject(CloudTelemetryPayload.build("way", snapshot))
+    }
+
     @Test
     fun `daemon emits precise DiPlus SOC under the existing soc key`() {
         // Regression from the live daemon-origin snapshot: telemetry.soc=69.5 while the
         // separately-built diplus object rounded the same reading to 70.
-        val payload = CommandDaemon.buildTelemetryPayload(
-            vehicleId = "way",
-            d = diPars(soc = 70, socPrecise = 69.5),
-        )
+        val payload = daemonPayload(d = diPars(soc = 70, socPrecise = 69.5))
 
         val telemetrySoc = payload.getJSONObject("telemetry").get("soc").toString()
         val diPlusSoc = payload.getJSONObject("diplus").get("soc").toString()
@@ -342,9 +359,10 @@ class CommandDaemonTest {
     fun `daemon emits the autoservice gun value used by charging classifier`() {
         // Deliberately contradict DiPlus/status: autoservice=1 wins, is serialized as 1, and
         // makes the sample non-charging. One captured value drives both decision and evidence.
-        val payload = CommandDaemon.buildTelemetryPayload(
-            vehicleId = "way",
-            d = diPars(chargeGunState = 2, chargingStatus = 1),
+        // soc is set so the now-unified thinning (B-19) doesn't idle-omit is_charging — this
+        // test is about the gun-classification override, not about thinning.
+        val payload = daemonPayload(
+            d = diPars(soc = 50, chargeGunState = 2, chargingStatus = 1),
             autoserviceGun = 1,
         )
 
@@ -354,8 +372,7 @@ class CommandDaemonTest {
 
     @Test
     fun `daemon omits autoservice object when gun source is absent`() {
-        val payload = CommandDaemon.buildTelemetryPayload(
-            vehicleId = "way",
+        val payload = daemonPayload(
             d = diPars(chargeGunState = 2, chargingStatus = 1),
             autoserviceGun = null,
         )
@@ -589,26 +606,9 @@ class CommandDaemonTest {
         assertEquals(6_000L, CommandDaemon.commandPollIntervalMs(0, commandsEnabled = true))
     }
 
-    @Test
-    fun `the cell delta subtraction artifact is rounded away`() {
-        // The exact case Phase 1 of CLOUD_OFFLOAD_PLAN.md exists to remove: maxCell - minCell
-        // producing ~20 characters of noise on every sample the daemon sends.
-        assertEquals(0.02, CommandDaemon.roundForWire(0.019999999999999, 4)!!, 0.0)
-        assertEquals(4.1235, CommandDaemon.roundForWire(4.12345678, 4)!!, 0.0)
-    }
-
-    @Test
-    fun `kwh charged keeps three decimals`() {
-        assertEquals(1.235, CommandDaemon.roundForWire(1.2345678, 3)!!, 0.0)
-    }
-
-    @Test
-    fun `a missing or non-finite reading never reaches the wire`() {
-        // NaN/Infinity are not valid JSON numbers, so they must degrade to null, not serialize.
-        assertNull(CommandDaemon.roundForWire(null, 4))
-        assertNull(CommandDaemon.roundForWire(Double.NaN, 4))
-        assertNull(CommandDaemon.roundForWire(Double.POSITIVE_INFINITY, 4))
-    }
+    // Rounding-before-serialize (cell delta, kwh_charged) moved to CloudTelemetryPayload with
+    // B-19 — the daemon no longer has its own copy of this logic, so its rounding behavior is
+    // covered by CloudTelemetryPayloadTest, not here.
 
     @Test
     fun `a nonsensical interval can never strand the car off-cadence`() {

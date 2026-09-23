@@ -160,7 +160,9 @@ class CloudTelemetryPayloadTest {
             CloudTelemetryPayload.build(
                 "way",
                 snapshot,
-                telemetryState = com.bydmate.app.data.remote.IternioIntervalPolicy.TelemetryState.DRIVING,
+                CloudTelemetryPayload.Mode.Standard(
+                    telemetryState = com.bydmate.app.data.remote.IternioIntervalPolicy.TelemetryState.DRIVING,
+                ),
             ),
         ).getJSONObject("telemetry")
 
@@ -219,7 +221,9 @@ class CloudTelemetryPayloadTest {
         )
 
         val full = JSONObject(CloudTelemetryPayload.build("way", snapshot))
-        val liveOnly = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
+        val liveOnly = JSONObject(
+            CloudTelemetryPayload.build("way", snapshot, CloudTelemetryPayload.Mode.Standard(liveOnly = true)),
+        )
 
         assertEquals(66.2, full.getJSONObject("diplus").getDouble("soc"), 0.0001)
         assertEquals(66.2, liveOnly.getJSONObject("diplus").getDouble("soc"), 0.0001)
@@ -273,7 +277,9 @@ class CloudTelemetryPayloadTest {
         val normal = JSONObject(CloudTelemetryPayload.build("way", snapshot))
         assertEquals(false, normal.has("live_only"))
 
-        val liveOnly = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
+        val liveOnly = JSONObject(
+            CloudTelemetryPayload.build("way", snapshot, CloudTelemetryPayload.Mode.Standard(liveOnly = true)),
+        )
         assertEquals(true, liveOnly.getBoolean("live_only"))
     }
 
@@ -293,8 +299,9 @@ class CloudTelemetryPayloadTest {
             location = null,
         )
 
-        val diPlus = JSONObject(CloudTelemetryPayload.build("way", snapshot, liveOnly = true))
-            .getJSONObject("diplus")
+        val diPlus = JSONObject(
+            CloudTelemetryPayload.build("way", snapshot, CloudTelemetryPayload.Mode.Standard(liveOnly = true)),
+        ).getJSONObject("diplus")
 
         assertEquals(1, diPlus.getInt("gear"))
         assertEquals(1, diPlus.getInt("charge_gun_state"))
@@ -346,7 +353,11 @@ class CloudTelemetryPayloadTest {
         assertEquals(false, normal.has("client_trip"))
 
         val tripped = JSONObject(
-            CloudTelemetryPayload.build("way", snapshot, tripId = "abc-123", clientTrip = true),
+            CloudTelemetryPayload.build(
+                "way",
+                snapshot,
+                CloudTelemetryPayload.Mode.Standard(tripId = "abc-123", clientTrip = true),
+            ),
         )
         assertEquals("abc-123", tripped.getString("trip_id"))
         assertEquals(true, tripped.getBoolean("client_trip"))
@@ -366,7 +377,13 @@ class CloudTelemetryPayloadTest {
             location = null,
         )
 
-        val json = JSONObject(CloudTelemetryPayload.build("way", snapshot, tripId = null, clientTrip = true))
+        val json = JSONObject(
+            CloudTelemetryPayload.build(
+                "way",
+                snapshot,
+                CloudTelemetryPayload.Mode.Standard(tripId = null, clientTrip = true),
+            ),
+        )
         assertEquals(false, json.has("trip_id"))
         assertEquals(false, json.has("client_trip"))
     }
@@ -390,6 +407,174 @@ class CloudTelemetryPayloadTest {
         assertEquals(false, batch.has("trips"))
     }
 
+    // Rounding edge cases — moved here from CommandDaemonTest with B-19 (the daemon no longer
+    // has its own copy of this logic).
+
+    @Test
+    fun `kwh_charged keeps three decimals`() {
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null, chargeGunState = 3),
+            battery = null,
+            charging = com.bydmate.app.data.autoservice.ChargingReading(
+                gunConnectState = 3,
+                chargingType = 2,
+                chargeBatteryVoltV = null,
+                batteryType = null,
+                chargingCapacityKwh = 1.2345678f,
+                bmsState = null,
+                readAtMs = 1_700_000_000_000L,
+            ),
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("telemetry")
+
+        assertEquals(1.235, telemetry.getDouble("kwh_charged"), 0.0)
+    }
+
+    @Test
+    fun `a non-finite reading never reaches the wire`() {
+        // NaN/Infinity are not valid JSON numbers, so they must degrade to omission, not
+        // serialize. cellDeltaV is the field that can realistically go non-finite (a raw
+        // subtraction of two out-of-range doubles); constructed directly since VehicleTelemetrySnapshot.from
+        // has no path that produces NaN itself.
+        val snapshot = VehicleTelemetrySnapshot.from(
+            data = diPlusData(maxCellVoltage = null, minCellVoltage = null),
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        ).copy(cellDeltaV = Double.NaN, cellVoltageMinV = Double.POSITIVE_INFINITY)
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("telemetry")
+
+        assertEquals(false, telemetry.has("cell_delta_v"))
+        assertEquals(false, telemetry.has("cell_voltage_min_v"))
+    }
+
+    // B-19: the app path (VehicleTelemetrySnapshot.from) and the daemon path
+    // (CommandDaemon.buildDaemonSnapshot) must serialize equivalent underlying vehicle state
+    // identically once fed into the one shared builder — this is what makes the old
+    // three-builder drift structurally impossible instead of merely tested-against.
+    @Test
+    fun `app path and daemon path serialize equivalent driving state identically`() {
+        val data = diPlusData(
+            maxCellVoltage = 3.70,
+            minCellVoltage = 3.65,
+            soc = 70,
+            socPrecise = 70.3,
+            speed = 45,
+            gear = 4,
+            chargeGunState = 1,
+        )
+
+        val appSnapshot = VehicleTelemetrySnapshot.from(
+            data = data,
+            battery = null,
+            charging = null,
+            enginePowerKw = null,
+            capturedAtMs = 1_700_000_000_000L,
+            // Trip/range are app-only derived values with no daemon equivalent — excluded from
+            // both sides so the comparison covers only fields the daemon can actually populate.
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            location = null,
+        )
+        val daemonSnapshot = com.bydmate.app.daemon.CommandDaemon.buildDaemonSnapshot(
+            d = data,
+            kwhCharged = null,
+            sohPercent = null,
+            autoserviceSocPercent = null,
+            autoserviceGun = null,
+            capturedAtMs = 1_700_000_000_000L,
+        )
+
+        val appPayload = JSONObject(CloudTelemetryPayload.build("way", appSnapshot))
+        val daemonPayload = JSONObject(CloudTelemetryPayload.build("way", daemonSnapshot))
+        // device_time is expected to differ: the app derives it from capturedAtMs, the daemon
+        // always stamps the real wall clock (isoNow()) — a mechanism difference, not a
+        // field-mapping divergence, so it's excluded from this comparison on purpose.
+        appPayload.remove("device_time")
+        daemonPayload.remove("device_time")
+
+        assertTrueJson(appPayload.similar(daemonPayload), appPayload, daemonPayload)
+    }
+
+    private fun assertTrueJson(condition: Boolean, a: JSONObject, b: JSONObject) {
+        if (!condition) {
+            throw AssertionError("Payloads diverge.\napp:    $a\ndaemon: $b")
+        }
+    }
+
+    @Test
+    fun `autoservice fallback mode produces the reduced di+-free shape`() {
+        val snapshot = VehicleTelemetrySnapshot(
+            capturedAtMs = 1_700_000_000_000L,
+            deviceTimeIso = "2026-06-05T10:00:00Z",
+            diPlusData = null,
+            soc = 55,
+            socSource = com.bydmate.app.domain.SocSource.AUTOSERVICE,
+            speedKmh = null,
+            powerKw = null,
+            batteryTempC = null,
+            cabinTempC = null,
+            outsideTempC = null,
+            batteryVoltageV = null,
+            auxVoltageV = 12.4,
+            cellVoltageMinV = null,
+            cellVoltageMaxV = null,
+            cellDeltaV = null,
+            odometerKm = null,
+            sohPercent = 97.0,
+            isCharging = true,
+            chargePowerKw = 6.6,
+            chargeType = "AC",
+            kwhCharged = 12.3456,
+            rangeEstKm = null,
+            currentTripDistanceKm = null,
+            currentTripConsumptionKwh100km = null,
+            isParked = false,
+            tirePressFL = 240,
+            tirePressFR = 241,
+            tirePressRL = 239,
+            tirePressRR = 242,
+            location = null,
+            autoservicePowerKw = -7,
+            autoserviceGunState = 3,
+            autoserviceDoorFL = 0,
+            autoserviceDoorFR = 0,
+            autoserviceDoorRL = 0,
+            autoserviceDoorRR = 0,
+            autoserviceTrunk = 0,
+            autoserviceHood = 0,
+        )
+
+        val payload = JSONObject(
+            CloudTelemetryPayload.build("way", snapshot, CloudTelemetryPayload.Mode.AutoserviceFallback),
+        )
+
+        // No di+ fields at all — the whole point of this mode.
+        assertEquals(false, payload.getJSONObject("diplus").has("gear"))
+        assertEquals(false, payload.getJSONObject("diplus").has("speed_kmh"))
+        assertEquals(3, payload.getJSONObject("diplus").getInt("charge_gun_state"))
+        assertEquals(0, payload.getJSONObject("diplus").getInt("door_fl"))
+        assertEquals(55, payload.getJSONObject("telemetry").getInt("soc"))
+        assertEquals("autoservice", payload.getJSONObject("telemetry").getString("soc_source"))
+        assertEquals(true, payload.getJSONObject("telemetry").getBoolean("is_charging"))
+        assertEquals(12.346, payload.getJSONObject("telemetry").getDouble("kwh_charged"), 0.0)
+        assertEquals(false, payload.getJSONObject("telemetry").getBoolean("is_parked"))
+    }
+
     private fun sampleSnapshot() = VehicleTelemetrySnapshot.from(
         data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
         battery = null,
@@ -409,6 +594,7 @@ class CloudTelemetryPayloadTest {
         socPrecise: Double? = soc?.toDouble(),
         speed: Int = 0,
         gear: Int = 1,
+        chargeGunState: Int? = 1,
         tirePressFL: Int? = 240,
         tirePressFR: Int? = 241,
         tirePressRL: Int? = 239,
@@ -419,7 +605,7 @@ class CloudTelemetryPayloadTest {
         speed = speed,
         mileage = 12345.0,
         power = 0.0,
-        chargeGunState = 1,
+        chargeGunState = chargeGunState,
         maxBatTemp = 28,
         avgBatTemp = 26,
         minBatTemp = 24,
