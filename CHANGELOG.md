@@ -28,6 +28,24 @@
   (`EnergyDataReader.hasSourceChanged()` выходит сразу), тихо на `DIPLUS`-машинах
   (те получают трипы из live-телеметрии и не должны дублироваться). Решение вынесено
   в чистую функцию `shouldSyncEnergyDataOnForeground` и покрыто `BYDMateAppTest`.
+- **Ещё пять шагов 1 Hz poll-цикла изолированы от общего `catch` — тот же класс
+  сбоя, что вызвал 4-дневный простой в 0.5.2 (ADR-0002).** После того инцидента
+  собственный `try/catch` получил только шаг сохранения SOC
+  (`LastKnownSocPersistencePolicy`). Запись в `odometerBuffer` (Room, `OdometerSampleDao`
+  — тот же класс сбоя: SQL компилируется в Room, но падает на головном устройстве),
+  `automationEngine.evaluate` (тоже Room, `RuleDao`/`RuleLogDao`), `sessionPersistence.save`,
+  `updateNotification` и `renewWakeLockIfNeeded` (Android framework, может бросить на
+  этой OEM-прошивке) оставались под одним внешним `catch (e: Exception)` вместе с
+  вызовом `maybeSendCloudTelemetry` — бросок в любом из них до сих пор мог оставить и
+  облачный пуш, и daemon-beacon без обновления в этом тике. Все пять точек обёрнуты
+  локальным try/catch-и-лог, затем вынесены в один переиспользуемый
+  `runIsolated(label, onError, block)` (`TrackingService.kt`, новый
+  `PollStepIsolation.kt`) — маленький интерфейс, покрытый тремя тестами в
+  `PollStepIsolationTest.kt` без зависимости от Android/Room. Проверено на `way` по
+  чек-листу `HOW_IT_WORKS.md` §10 после переустановки через wireless ADB (обе фазы;
+  `adb install -r` не перезапускает foreground-сервис сам, нужен ручной запуск
+  `MainActivity`): 0 строк `Polling error`/`*failed` за 60 с, возраст beacon 624 мс и
+  427 мс.
 
 ## [0.5.5] - 2026-09-09
 
