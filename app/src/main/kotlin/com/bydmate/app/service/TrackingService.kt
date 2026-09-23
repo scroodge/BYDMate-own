@@ -864,12 +864,19 @@ class TrackingService : Service(), LocationListener {
 
                         val sessionId = updateSessionState(nowMs, data)
 
-                        odometerBuffer.onSample(
-                            mileage = data.mileage,
-                            totalElec = data.totalElecConsumption,
-                            socPercent = data.soc,
-                            sessionId = sessionId,
-                        )
+                        // Room-backed (OdometerSampleDao) — same failure class as the SQLite
+                        // grammar bug in ADR-0002. Isolated so an insert failure here can't
+                        // abort the tick before it reaches maybeSendCloudTelemetry below.
+                        try {
+                            odometerBuffer.onSample(
+                                mileage = data.mileage,
+                                totalElec = data.totalElecConsumption,
+                                socPercent = data.soc,
+                                sessionId = sessionId,
+                            )
+                        } catch (e: Exception) {
+                            Log.w(TAG, "odometerBuffer.onSample failed: ${e.message}", e)
+                        }
                         liveTripBuffer.onSample(
                             mileage = data.mileage,
                             totalElec = data.totalElecConsumption,
@@ -921,14 +928,38 @@ class TrackingService : Service(), LocationListener {
 
                         _tripDistanceKm.value = tripDistance
 
-                        sessionId?.let { sessionPersistence.save(it, sessionLastActiveTs) }
+                        sessionId?.let {
+                            try {
+                                sessionPersistence.save(it, sessionLastActiveTs)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "sessionPersistence.save failed: ${e.message}", e)
+                            }
+                        }
 
                         // Idle drain tracked via energydata zero-km records only (HistoryImporter).
                         // Live power integration removed — DiPars 发动机功率 ≠ total battery drain.
-                        automationEngine.evaluate(data, sessionId)
-                        updateNotification(data)
+                        //
+                        // automationEngine is Room-backed (RuleDao/RuleLogDao) — same failure
+                        // class as ADR-0002. updateNotification/renewWakeLockIfNeeded call
+                        // Android framework APIs that can throw on this OEM ROM. All three are
+                        // isolated so a failure here can't abort the tick before it reaches
+                        // maybeSendCloudTelemetry below.
+                        try {
+                            automationEngine.evaluate(data, sessionId)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "automationEngine.evaluate failed: ${e.message}", e)
+                        }
+                        try {
+                            updateNotification(data)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "updateNotification failed: ${e.message}", e)
+                        }
                         maybeLogSessionSummary(nowMs, data, sessionId)
-                        renewWakeLockIfNeeded()
+                        try {
+                            renewWakeLockIfNeeded()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "renewWakeLockIfNeeded failed: ${e.message}", e)
+                        }
                         val cloudEnabled = cloudSyncEnabledCached
                         if (cloudEnabled) {
                             var autoserviceOn = autoserviceEnabledCached
