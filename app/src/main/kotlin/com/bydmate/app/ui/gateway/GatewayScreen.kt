@@ -715,7 +715,10 @@ private fun LiveDataCard(
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric(strings.battery, fmtTemp(batteryTemp), Modifier.weight(1f))
-            Metric(strings.cabin, fmtTemp(cabinTemp), Modifier.weight(1f))
+            // DiLink 3.0 (2024 cars) has no cabin temperature sensor — hide rather than show "—".
+            if (com.bydmate.app.util.HeadUnitModel.hasCabinTemp()) {
+                Metric(strings.cabin, fmtTemp(cabinTemp), Modifier.weight(1f))
+            }
             Metric(strings.outside, fmtTemp(outsideTemp), Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(8.dp))

@@ -154,6 +154,7 @@ object WidgetController {
                     batTemp = batTempState.value,
                     voltage12v = voltsState.value,
                     cloud = cloudState.value,
+                    showCabinTemp = com.bydmate.app.util.HeadUnitModel.hasCabinTemp(),
                     alpha = alphaState.value,
                     scaleFactor = scaleState.value,
                 )

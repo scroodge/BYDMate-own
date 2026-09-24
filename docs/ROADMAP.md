@@ -31,8 +31,8 @@
   reserve `10808281907 B`, `reserveAvailable=true`, ceiling `4294967296 B`; remote cap
   отсутствует, активен fails-closed default в 1000 строк. Eviction под реальным давлением
   **не проверен**: нужна offline-поездка >17 минут с установленным remote cap.
-- B-14 остаётся `todo`: сняты 22 закрытых `chargingSessions` и 99 закрытых
-  `vehicleSegments`, сентинелы `255`, `104857.5`, `10485750` отфильтрованы, вывода нет.
+- B-14 закрыт 2026-09-09 отрицательным результатом: у закрытых `vehicleSegments` дробная
+  энергия обнулена (99/99), зависимость от di+ 2.0 не берём — см. `BACKLOG.md`.
 - Не подтверждены после многократных попыток два облачных результата: попала ли phantom
   drain phase 1 в production database и какова фактическая false-positive rate B-12.
 

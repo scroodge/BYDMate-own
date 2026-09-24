@@ -62,6 +62,7 @@ import kotlinx.coroutines.delay
  * VoltFlow layout — 260 × 108 dp (WidgetController's drag/trash math assumes it), 3 rows.
  *
  * Row 1 (climate + link): cabin temp (🚗), outside temp (🌡), 12V (⚡), cloud link indicator.
+ *   Cabin temp is dropped on DiLink 3.0 (2024 cars have no cabin sensor) — see HeadUnitModel.
  * Row 2 (main): SOC% (status color) · AI range km (28sp) · AI consumption + trend.
  *   AI values are the car-side port of the web's AI Range formula (AiRangeEstimator),
  *   smoothed for display by AiRangeMonitor; the trend is AI consumption short vs long EMA.
@@ -83,6 +84,7 @@ fun FloatingWidgetView(
     batTemp: Int?,
     voltage12v: Double?,
     cloud: CloudLinkEvents,
+    showCabinTemp: Boolean,
     alpha: Float,
     scaleFactor: Float = 1.0f,
 ) {
@@ -111,7 +113,7 @@ fun FloatingWidgetView(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            RowClimate(insideTemp = insideTemp, outsideTemp = outsideTemp, voltage12v = voltage12v, cloud = cloud)
+            RowClimate(insideTemp = insideTemp, showCabinTemp = showCabinTemp, outsideTemp = outsideTemp, voltage12v = voltage12v, cloud = cloud)
             WidgetDivider()
             // No distance gate here (unlike the old odometer trend): AiRangeSmoother keeps
             // the trend at NONE until two minutes of actual driving have fed it.
@@ -202,6 +204,7 @@ private fun RowEnergy(
 @Composable
 private fun RowClimate(
     insideTemp: Int?,
+    showCabinTemp: Boolean,
     outsideTemp: Int?,
     voltage12v: Double?,
     cloud: CloudLinkEvents,
@@ -210,8 +213,10 @@ private fun RowClimate(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-            IconText(icon = Icons.Outlined.DirectionsCar, text = formatTemp(insideTemp))
+        if (showCabinTemp) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                IconText(icon = Icons.Outlined.DirectionsCar, text = formatTemp(insideTemp))
+            }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             IconText(icon = Icons.Outlined.Thermostat, text = formatTemp(outsideTemp))

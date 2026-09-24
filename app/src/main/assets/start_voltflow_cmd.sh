@@ -35,6 +35,33 @@ LOCKFILE="/data/local/tmp/voltflow_cmd_watchdog.pid"
 # App-liveness relaunch cooldown state — last successful relaunch attempt (epoch seconds).
 APP_RELAUNCH_TS_FILE="/data/local/tmp/voltflow_app_relaunch_ts"
 APP_RELAUNCH_COOLDOWN_SEC=60
+# TrackingService writes epoch millis here at 1 Hz and deletes it on a graceful stop.
+APP_BEACON="/storage/emulated/0/Android/data/$PKG/files/voltflow_mate_heartbeat"
+# A beacon this old with the process still alive means the service is gone (B-20).
+APP_BEACON_STALE_SEC=120
+
+# BEGIN app_relaunch_reason — extracted and run by AppRelaunchDecisionTest; keep POSIX.
+# Prints why the app must be relaunched, or nothing when it is fine.
+#   $1 pidof output for the app (empty = not running)   $2 beacon file content (may be empty)
+#   $3 now, epoch seconds                                 $4 stale threshold, seconds
+# Present-but-stale beacon with a live process: TrackingService died while the process
+# survived — seen after `adb install -r` on 2026-09-24, the watchdog never noticed. An
+# absent beacon with a live process is a graceful stop (onDestroy deletes the file), so it
+# is left alone rather than restarting a gateway the owner turned off.
+app_relaunch_reason() {
+  if [ -z "$1" ]; then echo "not running"; return 0; fi
+  case "$2" in ''|*[!0-9]*) return 0 ;; esac
+  # Epoch millis are 13 digits; anything shorter is a torn or foreign write, not a beacon.
+  case "$2" in ?????????????*) ;; *) return 0 ;; esac
+  # mksh arithmetic on the head unit is 32-bit and the beacon is epoch *millis*: drop the
+  # last three digits as text instead of dividing, or the subtraction overflows.
+  ARR_BEACON_S=${2%???}
+  [ -n "$ARR_BEACON_S" ] || return 0
+  ARR_AGE=$(( $3 - ARR_BEACON_S ))
+  if [ "$ARR_AGE" -gt "$4" ]; then echo "service stale (beacon age ${ARR_AGE}s)"; fi
+  return 0
+}
+# END app_relaunch_reason
 
 # --- VoltFlow Dashboard (cluster projection) auto-start ----------------------------
 # Separate APK. It projects the gauge cluster onto the 1280x480 virtual display, and it
@@ -185,17 +212,26 @@ while true; do
         break
       fi
 
-      # App-liveness check: relaunch dev.scroodge.cloudevmate if it's not running.
-      # Covers a hard crash/OOM kill — onTaskRemoved and the boot receiver don't reach
-      # those. Cooldown-gated so a genuinely broken app isn't hammered with `am start`
-      # every 30s.
-      if [ -z "$(pidof "$PKG" 2>/dev/null)" ]; then
-        NOW_TS=$(date +%s)
+      # App-liveness check: relaunch dev.scroodge.cloudevmate if it's not running, or if its
+      # process survived but TrackingService did not (stale beacon, B-20). Covers a hard
+      # crash/OOM kill — onTaskRemoved and the boot receiver don't reach those.
+      # Cooldown-gated so a genuinely broken app isn't hammered with `am start` every 30s.
+      # TrackingService itself is not exported, so `am start-foreground-service` on it always
+      # failed ("Requires permission not exported") — only Activities can be started from here.
+      NOW_TS=$(date +%s)
+      RELAUNCH_REASON=$(app_relaunch_reason "$(pidof "$PKG" 2>/dev/null)" \
+        "$(cat "$APP_BEACON" 2>/dev/null)" "$NOW_TS" "$APP_BEACON_STALE_SEC")
+      if [ -n "$RELAUNCH_REASON" ]; then
         LAST_TS=$(cat "$APP_RELAUNCH_TS_FILE" 2>/dev/null || echo 0)
         if [ $((NOW_TS - LAST_TS)) -ge $APP_RELAUNCH_COOLDOWN_SEC ]; then
-          echo "[$(date)] $PKG not running, relaunching" >> "$LOG_FILE"
-          am start-foreground-service -n "$PKG/com.bydmate.app.service.TrackingService" >/dev/null 2>&1
-          am start -n "$PKG/com.bydmate.app.MainActivity" >/dev/null 2>&1
+          echo "[$(date)] relaunch: $RELAUNCH_REASON" >> "$LOG_FILE"
+          if [ "$RELAUNCH_REASON" = "not running" ]; then
+            am start -n "$PKG/com.bydmate.app.MainActivity" >/dev/null 2>&1
+          else
+            # The process is up, possibly mid-drive: start the service through the invisible
+            # 1x1 SilentStartActivity instead of throwing the main UI over navigation.
+            am start -n "$PKG/com.bydmate.app.SilentStartActivity" >/dev/null 2>&1
+          fi
           echo "$NOW_TS" > "$APP_RELAUNCH_TS_FILE"
         fi
       fi
