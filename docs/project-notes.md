@@ -1,6 +1,6 @@
 # Project Notes
 
-## 2026-09-24: B-19 закрыт частично — демон не даёт себя поймать «в чистом виде» на живой машине
+## 2026-09-24: B-19 — daemon-origin окно поймано на ночной стоянке (23→24.09, 21:14–09:33)
 
 Реализовали B-19 (общий построитель telemetry-payload вместо трёх: `CloudTelemetryPayload`
 теперь единственный, `Mode.Standard`/`Mode.AutoserviceFallback`; `CommandDaemon` строит
@@ -31,12 +31,45 @@ identically\``) строит снэпшот через `.from()` и через `
 - `adb shell pm disable-user` для `MainActivity` **запрещён** с shell-uid на этой прошивке
   (`SecurityException: Shell cannot change component state`) — не сработает как способ
   форсировать daemon-origin окно на этой машине.
-- **Итог верификации**: обычный post-install smoke-check (9a/9b — 0 `Polling error`, свежий
-  beacon) прошёл дважды подряд после установки; демон сам подхватил новый код
-  (`APK changed, restarting daemon for new code`) без ошибок. Строгая приёмка B-19 —
-  daemon-origin сэмпл из production с приложением, реально остановленным на время проверки
-  (целые секунды `device_time`) — **не подтверждена**, отложена до естественного длительного
-  простоя (ночная стоянка). Статус — [`BACKLOG.md`](BACKLOG.md) (B-19).
+- **Итог верификации на момент вечера 23.09**: обычный post-install smoke-check (9a/9b —
+  0 `Polling error`, свежий beacon) прошёл дважды подряд после установки; демон сам
+  подхватил новый код (`APK changed, restarting daemon for new code`) без ошибок. Попытки
+  форсировать daemon-origin окно через `force-stop` (см. выше) не удались — но ждать не
+  пришлось долго.
+- **24.09, утро: найдено настоящее daemon-origin окно постфактум в `/data/local/tmp/
+  voltflow_cmd_daemon.log`** (растущий файл, не ротируется — доступна полная история).
+  Последний релонч `dev.scroodge.cloudevmate` — `23.09 21:14:17`; следующий — только
+  `24.09 09:33:41`. Между ними (строки лога 46904–49147, вырезано в
+  `/data/local/tmp/night_window.log` для анализа): **12+ часов без единой строки
+  «app alive»**, **694 успешных `telemetry HTTP 200`** через новый унифицированный
+  построитель, **0 ошибок сериализации/сборки**. Единственная аномалия — разовый
+  `poll error: Unable to resolve host "voltflow.life"` в 21:33:07 (DNS, не наш код),
+  самоисправился следующей попыткой через минуту. `device_time` этих сэмплов
+  гарантированно целые секунды **по построению** — `isoNow()` в `CommandDaemon` форматирует
+  без миллисекунд (`"yyyy-MM-dd'T'HH:mm:ss'Z'"`), так что это не нужно проверять на
+  каждом сэмпле отдельно. `Mode.AutoserviceFallback` в эту ночь не понадобился (di+ был
+  доступен всё время) — покрыт только unit-тестом, не живым наблюдением; не блокирует
+  приёмку, но повод вернуться, если/когда di+ реально ляжет на длительное время.
+- **Сверено напрямую в production** через `SUPABASE_SERVICE_ROLE_KEY` из
+  `EvAcChargeTimer/.env.local` (`supabase.voltflow.life` — по `CHANGELOG.md` того репо
+  это тот же backend, что и `supabase.mykid.life`, nginx отдаёт оба имени с одного
+  сервера). `bydmate_telemetry_samples` для `vehicle_id='way'` за 08:04–09:33 (часть
+  daemon-origin окна) несёт реальные значения ранее потерянных полей:
+  `diplus_power_state='关'`, `diplus_fan_level=0`, `diplus_door_fl='0'`,
+  `diplus_trunk='0'`, `diplus_drive_mode='1'`, `diplus_work_mode='3'`. Текущий
+  live-снэпшот `way` в `bydmate_live_snapshots` несёт полный `diplus` (40 ключей),
+  включая `stall_sentry_mode` с реальным значением (`开启缩时哨兵`) — подтверждает, что
+  функционально значимое поле (гейтит remote-command guard) дошло до прод-строки, а не
+  потерялось где-то по пути. Пагинация (`offset`) по `bydmate_telemetry_samples`
+  упирается в `statement timeout` на этом сервере — не стал давить дальше, 1000 свежих
+  строк с `order=desc` без диапазонного фильтра оказалось достаточно и отработало
+  быстро. **Важная деталь для будущих проверок**: строка с `vehicle_id='way'` в
+  `bydmate_live_snapshots` без явного `order=updated_at.desc` может вернуть чужую
+  устаревшую запись — на этой машине нашлась осиротевшая строка `way` от 29 мая рядом с
+  актуальной (см. B-03 про переименование машин).
+- **Итог**: критерий приёмки B-19 закрыт — daemon-origin окно подтверждено и локальным
+  логом демона, и прямой сверкой production-таблиц. Статус — [`BACKLOG.md`](BACKLOG.md)
+  (B-19, `done`).
 
 ## 2026-07-22: B-08 — watchdog теперь следит и за самим приложением
 
