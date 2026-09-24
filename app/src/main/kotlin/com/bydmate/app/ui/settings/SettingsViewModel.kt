@@ -3,6 +3,7 @@ package com.bydmate.app.ui.settings
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -140,6 +141,10 @@ data class SettingsUiState(
     val autoserviceEnabled: Boolean = false,
     val autoserviceStatus: AutoserviceStatus = AutoserviceStatus.NotEnabled,
     val adbStatus: AdbStatus = AdbStatus.UNKNOWN,
+    /** Floating widget preference (off by default; shown only while the app is in background). */
+    val floatingWidgetEnabled: Boolean = false,
+    /** Enabled, but the overlay permission is still missing — the widget cannot draw. */
+    val floatingWidgetNeedsPermission: Boolean = false,
     val daemonStatus: DaemonStatus = DaemonStatus.UNKNOWN,
     val cloudSyncEnabled: Boolean = true,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
@@ -348,6 +353,52 @@ class SettingsViewModel @Inject constructor(
                     else -> s
                 }
             }
+        }
+    }
+
+    fun refreshFloatingWidget() {
+        val enabled = com.bydmate.app.ui.widget.WidgetPreferences(appContext).isEnabled()
+        val canDraw = android.provider.Settings.canDrawOverlays(appContext)
+        _uiState.update { it.copy(floatingWidgetEnabled = enabled, floatingWidgetNeedsPermission = enabled && !canDraw) }
+    }
+
+    /**
+     * Turns the floating widget on/off. The overlay permission is granted over on-device
+     * ADB first (DiLink may have no "display over other apps" screen); the stock settings
+     * screen is only a fallback. The widget itself appears when the app goes to background.
+     */
+    fun setFloatingWidgetEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val prefs = com.bydmate.app.ui.widget.WidgetPreferences(appContext)
+            if (!enabled) {
+                prefs.setEnabled(false)
+                com.bydmate.app.ui.widget.WidgetController.detach()
+                Log.i("FloatingWidget", "disabled by user")
+                refreshFloatingWidget()
+                return@launch
+            }
+            var via = "already"
+            if (!android.provider.Settings.canDrawOverlays(appContext)) {
+                val adbGranted = runCatching {
+                    adbOnDeviceClient.isConnected() && adbOnDeviceClient.grantOverlayAppop(appContext.packageName)
+                }.getOrDefault(false)
+                via = if (adbGranted) "adb" else "settings"
+                if (!adbGranted) {
+                    runCatching {
+                        appContext.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                android.net.Uri.parse("package:${appContext.packageName}"),
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }.onFailure { via = "none (${it.javaClass.simpleName})" }
+                }
+            }
+            prefs.setHiddenUntilAppLaunch(false)
+            prefs.setEnabled(true)
+            Log.i("FloatingWidget", "enabled by user; overlay via=$via, " +
+                "canDraw=${android.provider.Settings.canDrawOverlays(appContext)}")
+            refreshFloatingWidget()
         }
     }
 

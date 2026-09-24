@@ -107,6 +107,7 @@ fun GatewayScreen(
                 backgroundRestricted = BackgroundRestriction.isRestricted(context)
                 viewModel.refreshAdbStatus()
                 viewModel.refreshDaemonStatus()
+                viewModel.refreshFloatingWidget()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -115,6 +116,7 @@ fun GatewayScreen(
     LaunchedEffect(Unit) {
         viewModel.refreshAdbStatus()
         viewModel.refreshDaemonStatus()
+        viewModel.refreshFloatingWidget()
     }
 
     Column(
@@ -162,6 +164,13 @@ fun GatewayScreen(
             tripDistanceKm = tripDistanceKm,
             hasLocation = location != null,
             lastUpdateMs = lastDiPlusUpdateMs,
+            strings = strings,
+        )
+
+        FloatingWidgetCard(
+            enabled = state.floatingWidgetEnabled,
+            needsPermission = state.floatingWidgetNeedsPermission,
+            onEnabledChange = viewModel::setFloatingWidgetEnabled,
             strings = strings,
         )
 
@@ -280,6 +289,38 @@ private fun LanguageButton(
     }
 }
 
+
+@Composable
+private fun FloatingWidgetCard(
+    enabled: Boolean,
+    needsPermission: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    strings: GatewayStrings,
+) {
+    GatewayCard {
+        Text(strings.widgetTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(strings.widgetToggle, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(strings.widgetHint, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = onEnabledChange,
+                colors = bydSwitchColors(),
+            )
+        }
+        if (needsPermission) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(strings.widgetNeedsPermission, color = AccentOrange, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+    }
+}
 
 @Composable
 private fun UpdatesCard(
@@ -1032,6 +1073,10 @@ private data class GatewayStrings(
     val logSaved: String,
     val logSaveFailed: String,
     val logStartFailed: String,
+    val widgetTitle: String,
+    val widgetToggle: String,
+    val widgetHint: String,
+    val widgetNeedsPermission: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -1117,6 +1162,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSaved = "Лог сохранён.",
             logSaveFailed = "Не удалось сохранить лог.",
             logStartFailed = "Не удалось запустить запись лога на этом устройстве.",
+            widgetTitle = "Плавающий виджет",
+            widgetToggle = "Показывать поверх других приложений",
+            widgetHint = "AI запас хода, AI расход с трендом, температуры, 12V и связь с облаком. Появляется, когда VoltFlow Mate свёрнут.",
+            widgetNeedsPermission = "Нет разрешения на показ поверх окон. Подключите ADB в «Расширенных функциях» и включите виджет ещё раз.",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -1199,6 +1248,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSaved = "Log saved.",
             logSaveFailed = "Could not save the log.",
             logStartFailed = "Could not start log recording on this device.",
+            widgetTitle = "Floating widget",
+            widgetToggle = "Show over other apps",
+            widgetHint = "AI range, AI consumption with trend, temperatures, 12V and cloud link. Appears while VoltFlow Mate is in the background.",
+            widgetNeedsPermission = "No permission to draw over other apps. Connect ADB under Advanced features, then turn the widget on again.",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -1281,6 +1334,10 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSaved = "Лог захаваны.",
             logSaveFailed = "Не ўдалося захаваць лог.",
             logStartFailed = "Не ўдалося запусціць запіс лога на гэтай прыладзе.",
+            widgetTitle = "Плавальны віджэт",
+            widgetToggle = "Паказваць паверх іншых праграм",
+            widgetHint = "AI запас ходу, AI расход з трэндам, тэмпературы, 12V і сувязь з воблакам. З'яўляецца, калі VoltFlow Mate згорнуты.",
+            widgetNeedsPermission = "Няма дазволу паказваць паверх вокнаў. Падключыце ADB у «Пашыраных функцыях» і ўключыце віджэт яшчэ раз.",
         )
     }
 

@@ -24,8 +24,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import com.bydmate.app.domain.calculator.ConsumptionAggregator
-import com.bydmate.app.domain.calculator.ConsumptionState
+import com.bydmate.app.data.cloud.CloudLinkEvents
+import com.bydmate.app.data.cloud.CloudLinkStatus
+import com.bydmate.app.domain.calculator.AiRangeMonitor
+import com.bydmate.app.domain.calculator.AiRangeState
 import com.bydmate.app.domain.calculator.Trend
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -75,9 +77,11 @@ object WidgetController {
 
     // Compose state for the widget data
     private var socState = mutableStateOf<Int?>(null)
-    private var rangeState = mutableStateOf<Double?>(null)
-    private var consumptionState = mutableStateOf<Double?>(null)
-    private var trendState = mutableStateOf(Trend.NONE)
+    private var aiRangeState = mutableStateOf<Double?>(null)
+    private var aiConsumptionState = mutableStateOf<Double?>(null)
+    private var aiTrendState = mutableStateOf(Trend.NONE)
+    private var outsideTempState = mutableStateOf<Int?>(null)
+    private var cloudState = mutableStateOf(CloudLinkEvents())
     private var sessionStartedAtState = mutableStateOf<Long?>(null)
     private var tripDistanceKmState = mutableStateOf<Double?>(null)
     private var insideTempState = mutableStateOf<Int?>(null)
@@ -140,14 +144,16 @@ object WidgetController {
             setContent {
                 FloatingWidgetView(
                     soc = socState.value,
-                    rangeKm = rangeState.value,
-                    consumption = consumptionState.value,
-                    trend = trendState.value,
+                    aiRangeKm = aiRangeState.value,
+                    aiConsumption = aiConsumptionState.value,
+                    aiTrend = aiTrendState.value,
                     sessionStartedAt = sessionStartedAtState.value,
                     tripDistanceKm = tripDistanceKmState.value,
                     insideTemp = insideTempState.value,
+                    outsideTemp = outsideTempState.value,
                     batTemp = batTempState.value,
                     voltage12v = voltsState.value,
+                    cloud = cloudState.value,
                     alpha = alphaState.value,
                     scaleFactor = scaleState.value,
                 )
@@ -223,10 +229,10 @@ object WidgetController {
     private fun startDataSubscription() {
         val scope = CoroutineScope(Dispatchers.Main)
         dataScope = scope
-        // Stock combine(...) is typed only up to 5 flows — bundle consumption +
+        // Stock combine(...) is typed only up to 5 flows — bundle AI range +
         // alpha + scale + cameraActive into one UiBundle so we stay under the limit.
         val uiFlow = combine(
-            ConsumptionAggregator.state,
+            AiRangeMonitor.state,
             prefsAlphaFlow,
             prefsScaleFlow,
             TrackingService.cameraActive,
@@ -234,31 +240,33 @@ object WidgetController {
         dataJob = scope.launch {
             combine(
                 TrackingService.lastData,
-                TrackingService.lastRangeKm,
+                CloudLinkStatus.events,
                 TrackingService.sessionStartedAt,
                 TrackingService.tripDistanceKm,
                 uiFlow,
-            ) { data, range, sessionStart, tripDist, bundled ->
+            ) { data, cloud, sessionStart, tripDist, bundled ->
                 WidgetSnapshot(
                     data = data,
-                    range = range,
+                    cloud = cloud,
                     sessionStartedAt = sessionStart,
                     tripDistanceKm = tripDist,
-                    consumption = bundled.consumption,
+                    ai = bundled.ai,
                     alpha = bundled.alpha,
                     scale = bundled.scale,
                     cameraActive = bundled.cameraActive,
                 )
             }.collect { snap ->
                 socState.value = snap.data?.soc
-                rangeState.value = snap.range
+                aiRangeState.value = snap.ai.rangeKm
+                aiConsumptionState.value = snap.ai.consumptionKwh100km
+                aiTrendState.value = snap.ai.trend
                 insideTempState.value = snap.data?.insideTemp
+                outsideTempState.value = snap.data?.exteriorTemp
+                cloudState.value = snap.cloud
                 batTempState.value = snap.data?.avgBatTemp
                 voltsState.value = snap.data?.voltage12v
                 sessionStartedAtState.value = snap.sessionStartedAt
                 tripDistanceKmState.value = snap.tripDistanceKm
-                consumptionState.value = snap.consumption.displayValue
-                trendState.value = snap.consumption.trend
                 alphaState.value = snap.alpha
 
                 if (scaleState.value != snap.scale) {
@@ -310,17 +318,17 @@ object WidgetController {
 
     private data class WidgetSnapshot(
         val data: com.bydmate.app.data.remote.DiParsData?,
-        val range: Double?,
+        val cloud: CloudLinkEvents,
         val sessionStartedAt: Long?,
         val tripDistanceKm: Double?,
-        val consumption: ConsumptionState,
+        val ai: AiRangeState,
         val alpha: Float,
         val scale: Float,
         val cameraActive: Boolean,
     )
 
     private data class UiBundle(
-        val consumption: ConsumptionState,
+        val ai: AiRangeState,
         val alpha: Float,
         val scale: Float,
         val cameraActive: Boolean,

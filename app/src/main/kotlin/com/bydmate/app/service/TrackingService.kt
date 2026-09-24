@@ -30,6 +30,8 @@ import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
+import com.bydmate.app.domain.calculator.AiRangeEstimator
+import com.bydmate.app.domain.calculator.AiRangeMonitor
 import com.bydmate.app.domain.calculator.BigNumberCalculator
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
 import com.bydmate.app.domain.calculator.LiveTripBuffer
@@ -188,6 +190,9 @@ class TrackingService : Service(), LocationListener {
         private const val SOH_BATTERY_READ_INTERVAL_MS = 15L * 60_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
+        private const val AI_RANGE_INPUT_REFRESH_MS = 60_000L
+        private const val AI_RANGE_SNAPSHOT_FRESH_MS = 10_000L
+        private const val AI_RANGE_MOVING_KMH = 5.0
         private const val DAEMON_SPOOL_IMPORT_INTERVAL_MS = 30_000L
         private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 
@@ -203,6 +208,13 @@ class TrackingService : Service(), LocationListener {
 
         private val _lastLocation = MutableStateFlow<Location?>(null)
         val lastLocation: StateFlow<Location?> = _lastLocation
+
+        /**
+         * The exact snapshot handed to the cloud sender on the latest tick (only built
+         * while cloud sync is on). The AI range loop prefers it so the widget computes
+         * from the same inputs the cloud receives.
+         */
+        private val _lastTelemetrySnapshot = MutableStateFlow<VehicleTelemetrySnapshot?>(null)
 
         /**
          * Current widget-session anchor (epoch millis of ignition-on), or null when
@@ -506,6 +518,68 @@ class TrackingService : Service(), LocationListener {
             "samples=${liveTripBuffer.sampleCount()}")
     }
 
+    /**
+     * AI range / AI consumption for the widget — the web's range-estimate.ts formula,
+     * run on the car (AiRangeEstimator). One tick per di+ sample. Inputs are the cloud
+     * snapshot when it is fresh, else an equivalent snapshot built from di+ alone (cloud
+     * sync off). Like the web, it sees only the single latest completed trip.
+     */
+    private suspend fun runAiRangeLoop() {
+        var lastTrip: AiRangeEstimator.TripInput? = null
+        var capacityKwh: Double? = null
+        var inputsRefreshedMs = 0L
+        var lastLogMs = 0L
+        _lastData.collect { data ->
+            if (data == null) return@collect
+            try {
+                val nowMs = System.currentTimeMillis()
+                if (nowMs - inputsRefreshedMs >= AI_RANGE_INPUT_REFRESH_MS) {
+                    inputsRefreshedMs = nowMs
+                    lastTrip = tripRepository.getRecentTrips(3)
+                        .first()
+                        .firstOrNull { it.endTs != null }
+                        ?.let { AiRangeEstimator.TripInput.from(it) }
+                    capacityKwh = settingsRepository.getBatteryCapacity()
+                }
+                val published = _lastTelemetrySnapshot.value
+                    ?.takeIf { nowMs - it.capturedAtMs <= AI_RANGE_SNAPSHOT_FRESH_MS }
+                val snapshot = published ?: VehicleTelemetrySnapshot.from(
+                    data = data,
+                    battery = null,
+                    charging = null,
+                    enginePowerKw = null,
+                    capturedAtMs = nowMs,
+                    rangeEstKm = null,
+                    currentTripDistanceKm = _tripDistanceKm.value,
+                    currentTripConsumptionKwh100km = ConsumptionAggregator.state.value.displayValue,
+                    location = null,
+                )
+                val estimate = AiRangeEstimator.estimate(
+                    AiRangeEstimator.Inputs.from(snapshot),
+                    listOfNotNull(lastTrip),
+                    capacityKwh,
+                )
+                val moving = (snapshot.speedKmh ?: 0.0) >= AI_RANGE_MOVING_KMH
+                AiRangeMonitor.update(estimate, nowMs, moving)
+                if (nowMs - lastLogMs >= SUMMARY_LOG_INTERVAL_MS) {
+                    lastLogMs = nowMs
+                    val s = AiRangeMonitor.state.value
+                    Log.i(TAG, "AI range: range=${s.rangeKm?.let { "%.0f".format(it) } ?: "—"} km " +
+                        "(raw ${s.rawRangeKm?.let { "%.0f".format(it) } ?: "—"}), " +
+                        "cons=${s.consumptionKwh100km?.let { "%.1f".format(it) } ?: "—"} " +
+                        "(raw ${s.rawConsumptionKwh100km?.let { "%.1f".format(it) } ?: "—"}) kWh/100, " +
+                        "trend=${s.trend}, src=${if (published != null) "snapshot" else "diplus"}, " +
+                        "trip=${lastTrip?.let { "%.1f km @ %.1f".format(it.distanceKm ?: 0.0, it.avgConsumptionKwh100km ?: 0.0) } ?: "none"}, " +
+                        "cap=$capacityKwh, soh=${snapshot.sohPercent}, moving=$moving")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "AI range tick failed: ${e.message}", e)
+            }
+        }
+    }
+
     private fun maybeSendCloudTelemetry(snapshot: VehicleTelemetrySnapshot, nowMs: Long) {
         serviceScope.launch {
             try {
@@ -765,7 +839,10 @@ class TrackingService : Service(), LocationListener {
             ) == "true"
             launch {
                 settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_ENABLED)
-                    .collect { cloudSyncEnabledCached = (it ?: com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) == "true" }
+                    .collect {
+                        cloudSyncEnabledCached = (it ?: com.bydmate.app.data.repository.SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) == "true"
+                        com.bydmate.app.data.cloud.CloudLinkStatus.setEnabled(cloudSyncEnabledCached)
+                    }
             }
             launch {
                 settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_AUTOSERVICE_ENABLED)
@@ -775,6 +852,9 @@ class TrackingService : Service(), LocationListener {
                 settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS)
                     .collect { omitGpsCached = (it ?: "false") == "true" }
             }
+            // Off the poll loop on purpose: a throw in the estimator must never abort a
+            // tick upstream of the cloud push and the liveness beacon (see CHANGELOG 0.5.2).
+            launch { runAiRangeLoop() }
             while (true) {
                 try {
                     val data = diParsClient.fetch()
@@ -997,6 +1077,7 @@ class TrackingService : Service(), LocationListener {
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }
+                            _lastTelemetrySnapshot.value = telemetrySnapshot
                             maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
                         }
                     } else {

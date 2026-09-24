@@ -188,6 +188,7 @@ class CloudTelemetrySender @Inject constructor(
         }
         val config = readConfig().getOrElse { error ->
             saveStatus(ok = false, message = error.message ?: "Ошибка настроек")
+            CloudLinkStatus.onConfigError(error.message ?: "config")
             return Result.failure(error)
         }
 
@@ -205,6 +206,7 @@ class CloudTelemetrySender @Inject constructor(
                 message = "queued $unsentCount; waiting for Wi-Fi",
                 isNetworkAttempt = false,
             )
+            CloudLinkStatus.onUpload(ok = false, queued = unsentCount, waitingForWifi = true)
             queueRetentionManager.enforce(now)
             return Result.success(Unit)
         }
@@ -280,6 +282,7 @@ class CloudTelemetrySender @Inject constructor(
                 append("; queued $remaining")
             }
             saveStatus(ok = true, message = message, ack = ack, isNetworkAttempt = true)
+            CloudLinkStatus.onUpload(ok = true, queued = remaining)
             queueRetentionManager.enforce(now)
             hourlyDao.pruneCleanBefore(HourlyRollupAccumulator.hourStartOf(now - HOURLY_RETENTION_MS))
             tripDao.pruneCleanBefore(now - TRIP_RETENTION_MS)
@@ -295,6 +298,7 @@ class CloudTelemetrySender @Inject constructor(
                 if (!ack.isNullOrBlank()) append("; $ack")
             }
             saveStatus(ok = false, message = message, ack = ack, isNetworkAttempt = true)
+            CloudLinkStatus.onUpload(ok = false, queued = remaining)
             queueRetentionManager.enforce(now)
             Result.failure(IllegalStateException(message))
         }

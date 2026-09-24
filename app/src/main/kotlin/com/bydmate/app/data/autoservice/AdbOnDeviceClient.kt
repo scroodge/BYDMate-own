@@ -52,6 +52,12 @@ interface AdbOnDeviceClient {
      */
     suspend fun grantUsageStatsAppop(packageName: String): Boolean
     /**
+     * Grants SYSTEM_ALERT_WINDOW appop to our own package via shell uid, for the
+     * floating widget — DiLink's settings UI is gutted, so the stock "display over
+     * other apps" screen may not exist. Returns true on success.
+     */
+    suspend fun grantOverlayAppop(packageName: String): Boolean = false
+    /**
      * Starts D+ MainService directly via shell uid `am start-foreground-service`.
      * Used by the watchdog when D+ has gone silent — `startActivity` against
      * StartMainServiceActivity crashes on Android 12+ due to background-service
@@ -165,6 +171,21 @@ class AdbOnDeviceClientImpl @Inject constructor(
             out.isBlank()
         } catch (e: Exception) {
             Log.w(TAG, "grantUsageStatsAppop failed: ${e.message}")
+            false
+        }
+    }
+
+    override suspend fun grantOverlayAppop(packageName: String): Boolean = withContext(Dispatchers.IO) {
+        // Only permit our own package — never grant appops to anything else.
+        require(packageName == ctx.packageName) {
+            "grantOverlayAppop: refused package $packageName"
+        }
+        val p = protocol ?: return@withContext false
+        try {
+            val out = p.exec("appops set $packageName SYSTEM_ALERT_WINDOW allow") ?: return@withContext false
+            out.isBlank()
+        } catch (e: Exception) {
+            Log.w(TAG, "grantOverlayAppop failed: ${e.message}")
             false
         }
     }

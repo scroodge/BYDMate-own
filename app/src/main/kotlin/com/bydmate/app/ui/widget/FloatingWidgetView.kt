@@ -16,9 +16,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Battery6Bar
 import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.TrendingDown
 import androidx.compose.material.icons.outlined.TrendingFlat
 import androidx.compose.material.icons.outlined.TrendingUp
@@ -40,6 +45,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.bydmate.app.data.cloud.CloudLinkClassifier
+import com.bydmate.app.data.cloud.CloudLinkEvents
+import com.bydmate.app.data.cloud.CloudLinkLevel
 import com.bydmate.app.domain.calculator.Trend
 import com.bydmate.app.ui.components.socColor as componentsSocColor
 import com.bydmate.app.ui.theme.AccentGreen
@@ -51,12 +59,13 @@ import com.bydmate.app.ui.theme.TextPrimary
 import kotlinx.coroutines.delay
 
 /**
- * v3.1 layout — 260 × 108 dp, 3 rows, SOC row vertically centered.
+ * VoltFlow layout — 260 × 108 dp (WidgetController's drag/trash math assumes it), 3 rows.
  *
- * Row 1 (top, service, three equal slots):
- *   left — trip duration (⏱), center — trip distance (🗺 route), right — cabin temp (🚗). 13sp.
- * Row 2 (center, main): SOC% (18sp, status color) · range km (28sp bold white) · consumption + trend (18sp).
- * Row 3 (bottom, service): battery temperature (🔋), 12V (⚡) — 13sp.
+ * Row 1 (climate + link): cabin temp (🚗), outside temp (🌡), 12V (⚡), cloud link indicator.
+ * Row 2 (main): SOC% (status color) · AI range km (28sp) · AI consumption + trend.
+ *   AI values are the car-side port of the web's AI Range formula (AiRangeEstimator),
+ *   smoothed for display by AiRangeMonitor; the trend is AI consumption short vs long EMA.
+ * Row 3 (trip): trip duration (⏱), trip distance (route), battery temperature (🔋).
  *
  * Icons are muted gray, values are white in service rows. Km is always white
  * regardless of SOC status (only the border + SOC % + trend text colorize).
@@ -64,14 +73,16 @@ import kotlinx.coroutines.delay
 @Composable
 fun FloatingWidgetView(
     soc: Int?,
-    rangeKm: Double?,
-    consumption: Double?,
-    trend: Trend,
+    aiRangeKm: Double?,
+    aiConsumption: Double?,
+    aiTrend: Trend,
     sessionStartedAt: Long?,
     tripDistanceKm: Double?,
     insideTemp: Int?,
+    outsideTemp: Int?,
     batTemp: Int?,
     voltage12v: Double?,
+    cloud: CloudLinkEvents,
     alpha: Float,
     scaleFactor: Float = 1.0f,
 ) {
@@ -100,32 +111,16 @@ fun FloatingWidgetView(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            RowTrip(
-                sessionStartedAt = sessionStartedAt,
-                tripDistanceKm = tripDistanceKm,
-                insideTemp = insideTemp,
-            )
+            RowClimate(insideTemp = insideTemp, outsideTemp = outsideTemp, voltage12v = voltage12v, cloud = cloud)
             WidgetDivider()
-            // First 300 m of an active session: the trend stat is still based on the
-            // PREVIOUS trip's buffer (current trip hasn't moved enough to enter the
-            // 2-km short window yet). A confident DOWN/UP arrow here would imply
-            // "your driving right now is going green/red", which misleads the user
-            // when they've just started or are idle. Suppress the trend until they've
-            // actually driven 300 m — by then the buffer has fresh rows for this trip.
-            // The numeric value still renders (Trend.NONE colors it muted gray) so
-            // the user can still eyeball range, just without a confident verdict.
-            val effectiveTrend = if (
-                sessionStartedAt != null &&
-                (tripDistanceKm ?: 0.0) < TRIP_DISTANCE_TREND_THRESHOLD_KM
-            ) Trend.NONE else trend
-            RowEnergy(soc = soc, rangeKm = rangeKm, consumption = consumption, trend = effectiveTrend)
+            // No distance gate here (unlike the old odometer trend): AiRangeSmoother keeps
+            // the trend at NONE until two minutes of actual driving have fed it.
+            RowEnergy(soc = soc, rangeKm = aiRangeKm, consumption = aiConsumption, trend = aiTrend)
             WidgetDivider()
-            RowService(batTemp = batTemp, voltage12v = voltage12v)
+            RowTrip(sessionStartedAt = sessionStartedAt, tripDistanceKm = tripDistanceKm, batTemp = batTemp)
         }
     }
 }
-
-internal const val TRIP_DISTANCE_TREND_THRESHOLD_KM = 0.3
 
 @Composable
 private fun RowEnergy(
@@ -154,7 +149,16 @@ private fun RowEnergy(
         )
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
-                text = rangeKm?.let { "~${"%.0f".format(it)}" } ?: "~—",
+                text = "AI",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace,
+                color = TextMuted,
+                modifier = Modifier.padding(bottom = 5.dp),
+            )
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text = rangeKm?.let { "%.0f".format(it) } ?: "—",
                 fontSize = 28.sp,
                 fontWeight = FontWeight.ExtraBold,
                 fontFamily = FontFamily.Monospace,
@@ -196,10 +200,69 @@ private fun RowEnergy(
 }
 
 @Composable
+private fun RowClimate(
+    insideTemp: Int?,
+    outsideTemp: Int?,
+    voltage12v: Double?,
+    cloud: CloudLinkEvents,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            IconText(icon = Icons.Outlined.DirectionsCar, text = formatTemp(insideTemp))
+        }
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            IconText(icon = Icons.Outlined.Thermostat, text = formatTemp(outsideTemp))
+        }
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            IconText(icon = Icons.Outlined.Bolt, text = voltage12v?.let { "%.1f".format(it) } ?: "—")
+        }
+        CloudLinkIndicator(cloud)
+    }
+}
+
+/**
+ * Passive — no tap target (the left third already opens the navigator). Re-classifies
+ * every 30 s so the time-based levels (silence, prolonged outage) age without a new event.
+ */
+@Composable
+private fun CloudLinkIndicator(cloud: CloudLinkEvents) {
+    val view by produceState(CloudLinkClassifier.classify(cloud, System.currentTimeMillis()), cloud) {
+        while (true) {
+            value = CloudLinkClassifier.classify(cloud, System.currentTimeMillis())
+            delay(30_000L)
+        }
+    }
+    val (icon, tint) = when (view.level) {
+        CloudLinkLevel.DISABLED -> return
+        CloudLinkLevel.UNKNOWN -> Icons.Outlined.Cloud to TextMuted
+        CloudLinkLevel.OK -> Icons.Outlined.CloudDone to AccentGreen
+        CloudLinkLevel.NO_DOWNLINK -> Icons.Outlined.Cloud to SocYellow
+        CloudLinkLevel.QUEUED -> Icons.Outlined.CloudUpload to SocYellow
+        CloudLinkLevel.ERROR -> Icons.Outlined.CloudOff to SocRed
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        val queued = view.queued
+        if (view.level in setOf(CloudLinkLevel.QUEUED, CloudLinkLevel.ERROR) && queued != null && queued > 0) {
+            Text(
+                text = formatQueued(queued),
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                color = tint,
+            )
+            Spacer(Modifier.width(3.dp))
+        }
+        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(15.dp))
+    }
+}
+
+@Composable
 private fun RowTrip(
     sessionStartedAt: Long?,
     tripDistanceKm: Double?,
-    insideTemp: Int?,
+    batTemp: Int?,
 ) {
     val durationText by produceState(initialValue = formatDurationShort(sessionStartedAt), sessionStartedAt) {
         while (true) {
@@ -219,27 +282,11 @@ private fun RowTrip(
             IconText(icon = Icons.Outlined.Route, text = formatTripKm(tripDistanceKm))
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            IconText(icon = Icons.Outlined.DirectionsCar, text = insideTemp?.let { "$it°" } ?: "—")
+            IconText(icon = Icons.Outlined.Battery6Bar, text = formatTemp(batTemp))
         }
     }
 }
 
-@Composable
-private fun RowService(
-    batTemp: Int?,
-    voltage12v: Double?,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconText(icon = Icons.Outlined.Battery6Bar, text = batTemp?.let { "$it°" } ?: "—")
-        IconText(icon = Icons.Outlined.Bolt, text = voltage12v?.let { "${"%.1f".format(it)} В" } ?: "—")
-    }
-}
-
-/** Icon muted gray, value white, 13sp. */
 @Composable
 private fun IconText(icon: ImageVector, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -278,6 +325,15 @@ internal fun formatDurationShort(sessionStartedAt: Long?): String {
     // Compact form in hours mode ("1ч 25м") keeps label narrow enough to fit in
     // the top row's 1/3-width slot alongside trip distance and cabin temp.
     return if (hours > 0) "${hours}ч ${minutes}м" else "$minutes мин"
+}
+
+internal fun formatTemp(temp: Int?): String = temp?.let { if (it > 0) "+$it°" else "$it°" } ?: "—"
+
+/** Queue depth in 4 chars max: 124, 1.2k, 12k. */
+internal fun formatQueued(count: Int): String = when {
+    count < 1000 -> count.toString()
+    count < 10_000 -> "%.1fk".format(count / 1000.0)
+    else -> "${count / 1000}k"
 }
 
 internal fun formatTripKm(km: Double?): String {

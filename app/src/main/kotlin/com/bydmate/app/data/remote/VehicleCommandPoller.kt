@@ -1,6 +1,7 @@
 package com.bydmate.app.data.remote
 
 import android.util.Log
+import com.bydmate.app.data.cloud.CloudLinkStatus
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.repository.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -114,11 +115,13 @@ class VehicleCommandPoller @Inject constructor(
             val response = pollClient.newCall(request).execute()
             if (!response.isSuccessful) {
                 Log.w(TAG, "Poll HTTP ${response.code} url=$commandsUrl")
+                CloudLinkStatus.onPoll(ok = false)
                 backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
                 return backoffMs
             }
 
             backoffMs = BASE_POLL_MS
+            CloudLinkStatus.onPoll(ok = true)
             val body = response.body?.string().orEmpty()
             val json = JSONObject(body)
             // Someone has the live view open: push status fast until this grant lapses.
@@ -156,6 +159,7 @@ class VehicleCommandPoller @Inject constructor(
             nextPollMs
         } catch (e: Exception) {
             Log.e(TAG, "Poll error: ${e.message}")
+            CloudLinkStatus.onPoll(ok = false)
             backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
             backoffMs
         }
