@@ -310,6 +310,34 @@ object CloudTelemetryPayload {
         put(name, Math.round(value * factor) / factor)
     }
 
+    /**
+     * Common to both [toStatusJson] (parked/idle) and [toJson] (driving/charging) — fields
+     * the daemon's pre-B-19 `diplus` block always sent regardless of state, but that never
+     * made it into either app-side extension. Restored here (B-19 follow-up) rather than left
+     * dropped: `stall_sentry_mode` gates a remote-command guard
+     * (`vehicle-control-guards.ts:29`) and is shown live in the comfort-controls UI; the rest
+     * feed the `/dev/bydmate-diplus` diagnostic page. All are additive/optional on the wire
+     * (ADR-0003), so restoring them is safe for old APKs and for the app path, which never
+     * sent them either.
+     */
+    private fun JSONObject.putCommonDiPlusFields(d: DiParsData) = apply {
+        putIfPresent("fan_level", d.fanLevel)
+        putIfPresent("ac_circ", d.acCirc)
+        putIfPresent("door_fl", d.doorFL)
+        putIfPresent("door_fr", d.doorFR)
+        putIfPresent("door_rl", d.doorRL)
+        putIfPresent("door_rr", d.doorRR)
+        putIfPresent("trunk", d.trunk)
+        putIfPresent("hood", d.hood)
+        putIfPresent("seatbelt_fl", d.seatbeltFL)
+        putIfPresent("drive_mode", d.driveMode)
+        putIfPresent("work_mode", d.workMode)
+        putIfPresent("auto_park", d.autoPark)
+        putIfPresent("rain", d.rain)
+        putIfPresent("light_low", d.lightLow)
+        putIfPresent("drl", d.drl)
+    }
+
     private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
         putIfPresent("soc", socPrecise ?: soc)
         putIfPresent("gear", gear)
@@ -323,6 +351,7 @@ object CloudTelemetryPayload {
         putIfPresent("tire_press_rr_kpa", tirePressRR)
         putIfPresent("sentry_state", sentryState)
         putIfPresent("stall_sentry_mode", stallSentryMode)
+        putCommonDiPlusFields(this@toStatusJson)
     }
 
     private fun DiParsData.toJson(includePower: Boolean): JSONObject = JSONObject().apply {
@@ -368,6 +397,9 @@ object CloudTelemetryPayload {
         putIfPresent("ac_status", acStatus)
         putIfPresent("ac_temp_c", acTemp)
         putIfPresent("inside_temp_c", insideTemp)
+        putIfPresent("power_state", powerStateLabel ?: powerState)
+        putIfPresent("stall_sentry_mode", stallSentryMode)
+        putCommonDiPlusFields(this@toJson)
     }
 
     private const val MOVING_SPEED_THRESHOLD_KMH = 0.5

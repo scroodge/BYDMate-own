@@ -1,5 +1,43 @@
 # Project Notes
 
+## 2026-09-24: B-19 закрыт частично — демон не даёт себя поймать «в чистом виде» на живой машине
+
+Реализовали B-19 (общий построитель telemetry-payload вместо трёх: `CloudTelemetryPayload`
+теперь единственный, `Mode.Standard`/`Mode.AutoserviceFallback`; `CommandDaemon` строит
+`VehicleTelemetrySnapshot` напрямую, без `.from()`). По требованию владельца daemon-путь
+сознательно **сведён** к поведению app-пути: то же state-based thinning, то же округление —
+раньше демон всегда слал полный нерезаный блок. Regression-тест
+(`CloudTelemetryPayloadTest.\`app path and daemon path serialize equivalent driving state
+identically\``) строит снэпшот через `.from()` и через `CommandDaemon.buildDaemonSnapshot`
+из одних и тех же исходных данных и сравнивает итоговый JSON — делает повторный дрейф
+структурно невозможным, а не просто протестированным.
+
+- **Найдена и закрыта до коммита фикса, но после коммита реализации, реальная потеря
+  полей**: маршрутизация через существующие app-side `DiParsData.toJson()`/`toStatusJson()`
+  молча роняла 13 полей, которые демон раньше слал всегда (`power_state`, `fan_level`,
+  `ac_circ`, `door_fl/fr/rl/rr`, `trunk`, `hood`, `seatbelt_fl`, `drive_mode`, `work_mode`,
+  `auto_park`, `rain`, `light_low`, `drl`, `stall_sentry_mode`). Проверено по коду облака
+  (`EvAcChargeTimer`): `stall_sentry_mode` — не косметика, гейтит remote-command guard
+  (`vehicle-control-guards.ts:29`) и показывается живьём в `vehicle-comfort-controls.tsx`;
+  остальные фидят только `/dev/bydmate-diplus`. Восстановлено общим хелпером
+  `putCommonDiPlusFields` в обеих extension-функциях — аддитивно, безопасно по ADR-0003.
+  **Урок:** regression-тест «app-путь == daemon-путь» не ловит потерю поля, которое пропало
+  из *обоих* путей одновременно — он ловит только расхождение между ними.
+- **Демон агрессивно перезапускает приложение** (`dev.scroodge.cloudevmate not running,
+  relaunching`) при каждом обнаружении мёртвого процесса — наблюдалось 3 релонча за ~20 мин
+  на машине `way`, включая один **после** того как машина была физически заперта. Гипотеза
+  «запертая/выключенная машина не даёт демону перезапускать» **опровергнута прямым
+  наблюдением** — не подтверждена, значит не факт.
+- `adb shell pm disable-user` для `MainActivity` **запрещён** с shell-uid на этой прошивке
+  (`SecurityException: Shell cannot change component state`) — не сработает как способ
+  форсировать daemon-origin окно на этой машине.
+- **Итог верификации**: обычный post-install smoke-check (9a/9b — 0 `Polling error`, свежий
+  beacon) прошёл дважды подряд после установки; демон сам подхватил новый код
+  (`APK changed, restarting daemon for new code`) без ошибок. Строгая приёмка B-19 —
+  daemon-origin сэмпл из production с приложением, реально остановленным на время проверки
+  (целые секунды `device_time`) — **не подтверждена**, отложена до естественного длительного
+  простоя (ночная стоянка). Статус — [`BACKLOG.md`](BACKLOG.md) (B-19).
+
 ## 2026-07-22: B-08 — watchdog теперь следит и за самим приложением
 
 Планировали через `/plan` какой из оставшихся пунктов `EV_PRO_APP_ANALYSIS.md` брать

@@ -46,6 +46,24 @@
   `adb install -r` не перезапускает foreground-сервис сам, нужен ручной запуск
   `MainActivity`): 0 строк `Polling error`/`*failed` за 60 с, возраст beacon 624 мс и
   427 мс.
+- **Один общий построитель telemetry-payload вместо трёх (B-19).** `CloudTelemetryPayload`,
+  `CommandDaemon.buildTelemetryPayload` и `CommandDaemon.buildAutoserviceFallbackPayload`
+  были тремя независимыми, вручную синхронизируемыми построителями — расхождение между
+  ними уже дважды приводило к потере данных в production (autoservice gun-state,
+  дробный SOC из B-16). Теперь `CloudTelemetryPayload.build(vehicleId, snapshot, mode)` —
+  единственный построитель; `VehicleTelemetrySnapshot` — общий вход (`Mode.Standard` /
+  `Mode.AutoserviceFallback`), демон строит его напрямую без `.from()` (нет Context/DI).
+  По требованию владельца daemon-путь **сведён** к поведению app-пути — то же
+  state-based thinning и округление, раньше демон всегда слал полный нерезаный блок.
+  Regression-тест строит снэпшот через app- и daemon-путь из одних исходных данных и
+  сравнивает итоговый JSON — делает повторный дрейф структурно невозможным. По ходу
+  реализации маршрутизация через существующие `DiParsData.toJson()`/`toStatusJson()`
+  случайно уронила 13 полей, которые демон раньше слал всегда (включая
+  `stall_sentry_mode`, который гейтит remote-command guard в облаке) — найдено при
+  ревью до релиза, восстановлено аддитивно (ADR-0003-safe). **Частично верифицировано**:
+  обычный post-install smoke-check (9a/9b) чист, демон подхватил новый код без ошибок;
+  строгая приёмка B-19 (daemon-origin сэмпл из production, приложение реально остановлено)
+  не подтверждена — см. [`project-notes.md`](docs/project-notes.md) за 2026-09-24.
 
 ## [0.5.5] - 2026-09-09
 
