@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DirectionsCar
 import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Recycling
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.TrendingDown
@@ -61,12 +62,14 @@ import kotlinx.coroutines.delay
 /**
  * VoltFlow layout — 260 × 108 dp (WidgetController's drag/trash math assumes it), 3 rows.
  *
- * Row 1 (climate + link): cabin temp (🚗), outside temp (🌡), 12V (⚡), cloud link indicator.
- *   Cabin temp is dropped on DiLink 3.0 (2024 cars have no cabin sensor) — see HeadUnitModel.
- * Row 2 (main): SOC% (status color) · AI range km (28sp) · AI consumption + trend.
+ * Row 1 (climate + link): cabin temp (🚗), outside temp (🌡), battery temp (🔋), 12V (⚡),
+ *   cloud link indicator. Cabin temp is dropped on DiLink 3.0 (2024 cars have no cabin
+ *   sensor) — see HeadUnitModel.
+ * Row 2 (main): SOC% as di+ shows it (0.1 % on di+ 2.0, status color) · AI range km (28sp)
+ *   · AI consumption + trend.
  *   AI values are the car-side port of the web's AI Range formula (AiRangeEstimator),
  *   smoothed for display by AiRangeMonitor; the trend is AI consumption short vs long EMA.
- * Row 3 (trip): trip duration (⏱), trip distance (route), battery temperature (🔋).
+ * Row 3 (trip): trip duration (⏱), trip distance (route), regenerated energy (♻, TripRegenMeter).
  *
  * Icons are muted gray, values are white in service rows. Km is always white
  * regardless of SOC status (only the border + SOC % + trend text colorize).
@@ -74,11 +77,14 @@ import kotlinx.coroutines.delay
 @Composable
 fun FloatingWidgetView(
     soc: Int?,
+    /** di+ 2.0 0.1 %-resolution SOC; null on di+ 1.x, where [soc] is shown instead. */
+    socPrecise: Double?,
     aiRangeKm: Double?,
     aiConsumption: Double?,
     aiTrend: Trend,
     sessionStartedAt: Long?,
     tripDistanceKm: Double?,
+    regenKwh: Double?,
     insideTemp: Int?,
     outsideTemp: Int?,
     batTemp: Int?,
@@ -113,13 +119,26 @@ fun FloatingWidgetView(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
-            RowClimate(insideTemp = insideTemp, showCabinTemp = showCabinTemp, outsideTemp = outsideTemp, voltage12v = voltage12v, cloud = cloud)
+            RowClimate(
+                insideTemp = insideTemp,
+                showCabinTemp = showCabinTemp,
+                outsideTemp = outsideTemp,
+                batTemp = batTemp,
+                voltage12v = voltage12v,
+                cloud = cloud,
+            )
             WidgetDivider()
             // No distance gate here (unlike the old odometer trend): AiRangeSmoother keeps
             // the trend at NONE until two minutes of actual driving have fed it.
-            RowEnergy(soc = soc, rangeKm = aiRangeKm, consumption = aiConsumption, trend = aiTrend)
+            RowEnergy(
+                soc = soc,
+                socPrecise = socPrecise,
+                rangeKm = aiRangeKm,
+                consumption = aiConsumption,
+                trend = aiTrend,
+            )
             WidgetDivider()
-            RowTrip(sessionStartedAt = sessionStartedAt, tripDistanceKm = tripDistanceKm, batTemp = batTemp)
+            RowTrip(sessionStartedAt = sessionStartedAt, tripDistanceKm = tripDistanceKm, regenKwh = regenKwh)
         }
     }
 }
@@ -127,6 +146,7 @@ fun FloatingWidgetView(
 @Composable
 private fun RowEnergy(
     soc: Int?,
+    socPrecise: Double?,
     rangeKm: Double?,
     consumption: Double?,
     trend: Trend,
@@ -143,7 +163,7 @@ private fun RowEnergy(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(
-            text = soc?.let { "$it%" } ?: "—",
+            text = formatSoc(soc, socPrecise),
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
@@ -206,6 +226,7 @@ private fun RowClimate(
     insideTemp: Int?,
     showCabinTemp: Boolean,
     outsideTemp: Int?,
+    batTemp: Int?,
     voltage12v: Double?,
     cloud: CloudLinkEvents,
 ) {
@@ -220,6 +241,9 @@ private fun RowClimate(
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             IconText(icon = Icons.Outlined.Thermostat, text = formatTemp(outsideTemp))
+        }
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            IconText(icon = Icons.Outlined.Battery6Bar, text = formatTemp(batTemp))
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             IconText(icon = Icons.Outlined.Bolt, text = voltage12v?.let { "%.1f".format(it) } ?: "—")
@@ -267,7 +291,7 @@ private fun CloudLinkIndicator(cloud: CloudLinkEvents) {
 private fun RowTrip(
     sessionStartedAt: Long?,
     tripDistanceKm: Double?,
-    batTemp: Int?,
+    regenKwh: Double?,
 ) {
     val durationText by produceState(initialValue = formatDurationShort(sessionStartedAt), sessionStartedAt) {
         while (true) {
@@ -275,7 +299,7 @@ private fun RowTrip(
             delay(15_000L)
         }
     }
-    // Three equal slots so long labels ("1ч 25м", "287 км") never collide.
+    // Three equal slots so long labels ("1ч 25м", "287 км", "1.4 кВт·ч") never collide.
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -287,13 +311,14 @@ private fun RowTrip(
             IconText(icon = Icons.Outlined.Route, text = formatTripKm(tripDistanceKm))
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            IconText(icon = Icons.Outlined.Battery6Bar, text = formatTemp(batTemp))
+            IconText(icon = Icons.Outlined.Recycling, text = formatRegenKwh(regenKwh), unit = "кВт·ч")
         }
     }
 }
 
+/** Icon muted gray, value white 13sp, optional unit muted 10sp so it fits a 1/3 slot. */
 @Composable
-private fun IconText(icon: ImageVector, text: String) {
+private fun IconText(icon: ImageVector, text: String, unit: String? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = icon,
@@ -308,6 +333,10 @@ private fun IconText(icon: ImageVector, text: String) {
             fontFamily = FontFamily.Monospace,
             color = TextPrimary,
         )
+        if (unit != null) {
+            Spacer(Modifier.width(2.dp))
+            Text(text = unit, fontSize = 10.sp, color = TextMuted)
+        }
     }
 }
 
@@ -331,6 +360,16 @@ internal fun formatDurationShort(sessionStartedAt: Long?): String {
     // the top row's 1/3-width slot alongside trip distance and cabin temp.
     return if (hours > 0) "${hours}ч ${minutes}м" else "$minutes мин"
 }
+
+/** di+ 2.0 sends SOC at 0.1 % — show it the way di+'s own screen does (66.6 %, not 67 %). */
+internal fun formatSoc(soc: Int?, socPrecise: Double?): String = when {
+    socPrecise != null && socPrecise.isFinite() -> String.format(java.util.Locale.US, "%.1f", socPrecise) + "%"
+    soc != null -> "$soc%"
+    else -> "—"
+}
+
+internal fun formatRegenKwh(kwh: Double?): String =
+    kwh?.takeIf { it.isFinite() }?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "—"
 
 internal fun formatTemp(temp: Int?): String = temp?.let { if (it > 0) "+$it°" else "$it°" } ?: "—"
 

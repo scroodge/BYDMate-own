@@ -28,6 +28,7 @@ import com.bydmate.app.data.cloud.CloudLinkEvents
 import com.bydmate.app.data.cloud.CloudLinkStatus
 import com.bydmate.app.domain.calculator.AiRangeMonitor
 import com.bydmate.app.domain.calculator.AiRangeState
+import com.bydmate.app.domain.calculator.TripRegenMeter
 import com.bydmate.app.domain.calculator.Trend
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -77,6 +78,8 @@ object WidgetController {
 
     // Compose state for the widget data
     private var socState = mutableStateOf<Int?>(null)
+    private var socPreciseState = mutableStateOf<Double?>(null)
+    private var regenKwhState = mutableStateOf<Double?>(null)
     private var aiRangeState = mutableStateOf<Double?>(null)
     private var aiConsumptionState = mutableStateOf<Double?>(null)
     private var aiTrendState = mutableStateOf(Trend.NONE)
@@ -144,11 +147,13 @@ object WidgetController {
             setContent {
                 FloatingWidgetView(
                     soc = socState.value,
+                    socPrecise = socPreciseState.value,
                     aiRangeKm = aiRangeState.value,
                     aiConsumption = aiConsumptionState.value,
                     aiTrend = aiTrendState.value,
                     sessionStartedAt = sessionStartedAtState.value,
                     tripDistanceKm = tripDistanceKmState.value,
+                    regenKwh = regenKwhState.value,
                     insideTemp = insideTempState.value,
                     outsideTemp = outsideTempState.value,
                     batTemp = batTempState.value,
@@ -231,13 +236,14 @@ object WidgetController {
         val scope = CoroutineScope(Dispatchers.Main)
         dataScope = scope
         // Stock combine(...) is typed only up to 5 flows — bundle AI range +
-        // alpha + scale + cameraActive into one UiBundle so we stay under the limit.
+        // alpha + scale + cameraActive + regen into one UiBundle so we stay under the limit.
         val uiFlow = combine(
             AiRangeMonitor.state,
             prefsAlphaFlow,
             prefsScaleFlow,
             TrackingService.cameraActive,
-        ) { c, a, s, cam -> UiBundle(c, a, s, cam) }
+            TripRegenMeter.regenKwh,
+        ) { c, a, s, cam, regen -> UiBundle(c, a, s, cam, regen) }
         dataJob = scope.launch {
             combine(
                 TrackingService.lastData,
@@ -255,9 +261,12 @@ object WidgetController {
                     alpha = bundled.alpha,
                     scale = bundled.scale,
                     cameraActive = bundled.cameraActive,
+                    regenKwh = bundled.regenKwh,
                 )
             }.collect { snap ->
                 socState.value = snap.data?.soc
+                socPreciseState.value = snap.data?.socPrecise
+                regenKwhState.value = snap.regenKwh
                 aiRangeState.value = snap.ai.rangeKm
                 aiConsumptionState.value = snap.ai.consumptionKwh100km
                 aiTrendState.value = snap.ai.trend
@@ -326,6 +335,7 @@ object WidgetController {
         val alpha: Float,
         val scale: Float,
         val cameraActive: Boolean,
+        val regenKwh: Double?,
     )
 
     private data class UiBundle(
@@ -333,6 +343,7 @@ object WidgetController {
         val alpha: Float,
         val scale: Float,
         val cameraActive: Boolean,
+        val regenKwh: Double?,
     )
 
     // --- Trash zone ---

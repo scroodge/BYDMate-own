@@ -38,6 +38,7 @@ import com.bydmate.app.domain.calculator.LiveTripBuffer
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
 import com.bydmate.app.domain.calculator.RangeAvgSource
 import com.bydmate.app.domain.calculator.SocInterpolator
+import com.bydmate.app.domain.calculator.TripRegenMeter
 import com.bydmate.app.domain.calculator.RangeCalculator
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -561,6 +562,8 @@ class TrackingService : Service(), LocationListener {
                 )
                 val moving = (snapshot.speedKmh ?: 0.0) >= AI_RANGE_MOVING_KMH
                 AiRangeMonitor.update(estimate, nowMs, moving)
+                // Snapshot time, not nowMs: a re-used snapshot then adds a zero-length interval.
+                TripRegenMeter.update(_sessionStartedAt.value, snapshot.powerKw, snapshot.capturedAtMs)
                 if (nowMs - lastLogMs >= SUMMARY_LOG_INTERVAL_MS) {
                     lastLogMs = nowMs
                     val s = AiRangeMonitor.state.value
@@ -570,7 +573,8 @@ class TrackingService : Service(), LocationListener {
                         "(raw ${s.rawConsumptionKwh100km?.let { "%.1f".format(it) } ?: "—"}) kWh/100, " +
                         "trend=${s.trend}, src=${if (published != null) "snapshot" else "diplus"}, " +
                         "trip=${lastTrip?.let { "%.1f km @ %.1f".format(it.distanceKm ?: 0.0, it.avgConsumptionKwh100km ?: 0.0) } ?: "none"}, " +
-                        "cap=$capacityKwh, soh=${snapshot.sohPercent}, moving=$moving")
+                        "cap=$capacityKwh, soh=${snapshot.sohPercent}, moving=$moving, " +
+                        "regen=${TripRegenMeter.regenKwh.value?.let { "%.3f".format(it) } ?: "—"} kWh")
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
