@@ -54,6 +54,19 @@ class VehicleCommandPoller @Inject constructor(
             serverSeconds: Int,
             commandsEnabled: Boolean = true,
         ): Long = CommandPollingCadence.intervalMs(serverSeconds, commandsEnabled)
+
+        /**
+         * Car-profile capacity from the poll's `battery_capacity_kwh` (cloud
+         * vehicle-battery-capacity.ts), or null when absent (older server, unresolved car)
+         * or outside the 10–200 kWh band the web's range-estimate.ts also enforces. The app
+         * has no settings screen and di+ reports no usable capacity, so this is the only
+         * way the on-car AI Range can match the web instead of the 72.9 kWh default.
+         */
+        internal fun cloudBatteryCapacityKwh(json: JSONObject): Double? {
+            if (!json.has("battery_capacity_kwh")) return null
+            val kwh = json.optDouble("battery_capacity_kwh", Double.NaN)
+            return kwh.takeIf { it.isFinite() && it >= 10.0 && it <= 200.0 }
+        }
     }
 
     private var scope: CoroutineScope? = null
@@ -135,6 +148,7 @@ class VehicleCommandPoller @Inject constructor(
                     null
                 },
             )
+            cloudBatteryCapacityKwh(json)?.let { applyCloudBatteryCapacity(it) }
             val nextPollMs = pollIntervalMs(
                 serverSeconds = json.optInt("poll_after_seconds", 0),
                 commandsEnabled = json.optBoolean("commands_enabled", true),
@@ -163,6 +177,17 @@ class VehicleCommandPoller @Inject constructor(
             backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
             backoffMs
         }
+    }
+
+    /** Writes only on change — this runs on every poll. */
+    private suspend fun applyCloudBatteryCapacity(kwh: Double) {
+        val current = settingsRepository.getString(
+            SettingsRepository.KEY_BATTERY_CAPACITY,
+            SettingsRepository.DEFAULT_BATTERY_CAPACITY,
+        ).toDoubleOrNull()
+        if (current != null && kotlin.math.abs(current - kwh) < 0.001) return
+        settingsRepository.setString(SettingsRepository.KEY_BATTERY_CAPACITY, kwh.toString())
+        Log.i(TAG, "battery capacity from cloud car profile: $current -> $kwh kWh")
     }
 
     private suspend fun executeCommand(id: String, type: String, params: Map<String, Any?>): JSONObject {

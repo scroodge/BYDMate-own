@@ -12,9 +12,16 @@ class TripRegenIntegratorTest {
     }
 
     @Test fun `steady regen is the full trapezoid in both directions`() {
-        // The cloud formula gives 2.5 and 0.0 here — see the TripRegenMeter KDoc.
         assertEquals(4.0, intervalRegenKwh(-5.0, -3.0, 3600.0), 1e-12)
         assertEquals(4.0, intervalRegenKwh(-3.0, -5.0, 3600.0), 1e-12)
+    }
+
+    @Test fun `matches the cloud trip-energy fixture`() {
+        // trip-energy.test.mjs: 10 → 20 → −12 → −18 kW at 60 s steps → regen 0.2875 kWh.
+        val regen = intervalRegenKwh(10.0, 20.0, 60.0) +
+            intervalRegenKwh(20.0, -12.0, 60.0) +
+            intervalRegenKwh(-12.0, -18.0, 60.0)
+        assertEquals(0.2875, regen, 1e-9)
     }
 
     @Test fun `zero crossing counts only the negative triangle`() {

@@ -5,14 +5,10 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Regenerated energy for the current widget session (ignition-on → off), integrated
- * from live power like the cloud integrates a trip (EvAcChargeTimer
- * `src/lib/voltflowmate/trip-energy.ts`): trapezoids over consecutive samples, split
- * at the zero crossing, gaps longer than [MAX_GAP_MS] skipped. Negative power is regen.
- *
- * Deliberately NOT a byte-for-byte port: the cloud's `intervalEnergyKwh` has no
- * both-negative branch, so its clamped zero fraction undercounts steady regen
- * (−5→−3 kW gives half the true area, −3→−5 kW gives zero). This is the plain
- * trapezoid.
+ * from live power exactly as the cloud integrates a trip — the regen half of
+ * EvAcChargeTimer `src/lib/voltflowmate/trip-energy.ts` (`intervalEnergyKwh`,
+ * `calculateTripEnergy`): trapezoids over consecutive samples, split at the zero
+ * crossing, gaps longer than [MAX_GAP_MS] skipped. Negative power is regen.
  */
 class TripRegenIntegrator {
     private var sessionStartedAt: Long? = null
