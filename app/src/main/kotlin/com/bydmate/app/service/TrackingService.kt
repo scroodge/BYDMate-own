@@ -351,6 +351,7 @@ class TrackingService : Service(), LocationListener {
                 // Written once up front so a freshly revived daemon has creds, then re-written on
                 // every settings change for the life of the service (B-18). The collector's first
                 // emission repeats the up-front write — harmless, and leaves no gap between them.
+                settingsRepository.getOrCreateVehicleUid() // B-03: exported to the daemon too
                 val daemonConfig = DaemonConfigExport.observe(settingsRepository)
                 exportDaemonConfig(daemonConfig.first())
                 serviceScope.launch { daemonConfig.collect { exportDaemonConfig(it) } }

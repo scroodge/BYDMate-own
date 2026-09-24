@@ -6,6 +6,9 @@ import com.bydmate.app.domain.SocSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -54,6 +57,8 @@ open class SettingsRepository @Inject constructor(
         const val KEY_CLOUD_SYNC_URL = "cloud_sync_url"
         const val KEY_CLOUD_SYNC_API_KEY = "cloud_sync_api_key"
         const val KEY_CLOUD_SYNC_VEHICLE_ID = "cloud_sync_vehicle_id"
+        /** B-03: see [getOrCreateVehicleUid]. */
+        const val KEY_CLOUD_SYNC_VEHICLE_UID = "cloud_sync_vehicle_uid"
         const val KEY_CLOUD_SYNC_INTERVAL_SEC = "cloud_sync_interval_sec"
         const val KEY_CLOUD_SYNC_WIFI_ONLY = "cloud_sync_wifi_only"
         /** When true, cloud payloads send location {} even if GPS is available. */
@@ -152,6 +157,19 @@ open class SettingsRepository @Inject constructor(
 
     suspend fun setString(key: String, value: String) =
         settingsDao.set(SettingEntity(key, value))
+
+    private val vehicleUidLock = Mutex()
+
+    /**
+     * B-03: random per-install vehicle identity, sent as `X-Vehicle-Uid` next to the car name.
+     * Created on first use and never changed by a rename: the cloud binds it to the key this
+     * car's history already lives under, so [KEY_CLOUD_SYNC_VEHICLE_ID] becomes a label the
+     * owner can change without starting a new car. The lock keeps the app from minting two.
+     */
+    suspend fun getOrCreateVehicleUid(): String = vehicleUidLock.withLock {
+        settingsDao.get(KEY_CLOUD_SYNC_VEHICLE_UID)?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString().also { setString(KEY_CLOUD_SYNC_VEHICLE_UID, it) }
+    }
 
     /**
      * kWh per **100 raw-BMS SOC points** — the scale di+ 2.0 reports.

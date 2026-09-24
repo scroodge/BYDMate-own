@@ -64,6 +64,40 @@ class DaemonConfigExportTest {
     }
 
     @Test
+    fun `B-03 renaming the car keeps the install uid the daemon sends`() = runTest {
+        val repo = SettingsRepository(ObservableSettingsDao(linked))
+        val dir = tmp.newFolder()
+        val confPath = java.io.File(dir, DaemonConfigExport.FILE_NAME).path
+
+        val uid = repo.getOrCreateVehicleUid()
+        assertEquals(uid, repo.getOrCreateVehicleUid())
+        java.util.UUID.fromString(uid) // the cloud rejects anything that is not a UUID
+
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            DaemonConfigExport.observe(repo).collect { text ->
+                if (text != null) DaemonConfigExport.write(dir, text)
+            }
+        }
+        assertEquals(uid, CommandDaemon.loadConf(confPath)!!.vehicleUid)
+
+        repo.setString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "car1 renamed")
+        val conf = CommandDaemon.loadConf(confPath)!!
+        assertEquals("car1 renamed", conf.vehicleId)
+        assertEquals(uid, conf.vehicleUid)
+        assertEquals(uid, repo.getOrCreateVehicleUid())
+
+        job.cancel()
+    }
+
+    @Test
+    fun `conf from an app before B-03 has no uid and still loads`() {
+        val dir = tmp.newFolder()
+        val text = DaemonConfigExport.render("https://example.test/api/bydmate/telemetry", "k", "car1", false)!!
+        assertFalse(text.contains("vehicle_uid"))
+        assertNull(CommandDaemon.loadConf(DaemonConfigExport.write(dir, text).path)!!.vehicleUid)
+    }
+
+    @Test
     fun `rendered file carries the creds the daemon needs`() {
         val dir = tmp.newFolder()
         val text = DaemonConfigExport.render(

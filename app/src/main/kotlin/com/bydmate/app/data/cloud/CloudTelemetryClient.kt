@@ -1,5 +1,6 @@
 package com.bydmate.app.data.cloud
 
+import com.bydmate.app.data.repository.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -33,6 +34,7 @@ interface CloudTelemetryClientApi {
 @Singleton
 class CloudTelemetryClient @Inject constructor(
     baseClient: OkHttpClient,
+    private val settingsRepository: SettingsRepository,
 ) : CloudTelemetryClientApi {
     private val httpClient = baseClient.newBuilder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -52,6 +54,8 @@ class CloudTelemetryClient @Inject constructor(
                 .header("Content-Type", JSON.toString())
                 .header("X-API-Key", apiKey)
                 .header("X-Vehicle-Id", vehicleId)
+                // B-03: stable identity; the cloud stores under the key this uid is bound to.
+                .header("X-Vehicle-Uid", settingsRepository.getOrCreateVehicleUid())
                 .header("X-App", "VoltFlow-Mate")
                 .post(payloadJson.toRequestBody(JSON))
                 .build()

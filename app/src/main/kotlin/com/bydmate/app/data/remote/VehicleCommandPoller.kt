@@ -98,6 +98,7 @@ class VehicleCommandPoller @Inject constructor(
 
         val commandsUrl = commandsUrlFromTelemetry(telemetryUrl) ?: return BASE_POLL_MS
         val ackUrl = "$commandsUrl/ack"
+        val vehicleUid = settingsRepository.getOrCreateVehicleUid()
 
         return try {
             val httpUrl = commandsUrl.toHttpUrlOrNull() ?: return BASE_POLL_MS
@@ -105,6 +106,7 @@ class VehicleCommandPoller @Inject constructor(
                 .url(httpUrl)
                 .header("X-API-Key", apiKey)
                 .header("X-Vehicle-Id", vehicleId)
+                .header("X-Vehicle-Uid", vehicleUid)
                 .header("X-App", "VoltFlow-Mate")
                 .get()
                 .build()
@@ -150,7 +152,7 @@ class VehicleCommandPoller @Inject constructor(
                 acks.put(ack)
             }
 
-            postAck(ackUrl, apiKey, vehicleId, acks)
+            postAck(ackUrl, apiKey, vehicleId, vehicleUid, acks)
             nextPollMs
         } catch (e: Exception) {
             Log.e(TAG, "Poll error: ${e.message}")
@@ -195,7 +197,7 @@ class VehicleCommandPoller @Inject constructor(
         }
     }
 
-    private fun postAck(url: String, apiKey: String, vehicleId: String, acks: JSONArray) {
+    private fun postAck(url: String, apiKey: String, vehicleId: String, vehicleUid: String, acks: JSONArray) {
         try {
             val payload = JSONObject().put("acks", acks).toString()
             val request = Request.Builder()
@@ -203,6 +205,7 @@ class VehicleCommandPoller @Inject constructor(
                 .header("Content-Type", "application/json")
                 .header("X-API-Key", apiKey)
                 .header("X-Vehicle-Id", vehicleId)
+                .header("X-Vehicle-Uid", vehicleUid)
                 .header("X-App", "VoltFlow-Mate")
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()

@@ -613,7 +613,16 @@ object CommandDaemon {
         val vehicleId: String,
         /** Experimental: see [WIFI_KEEPALIVE_INTERVAL_MS] and `keep_wifi_awake` in voltflow_cmd.conf. */
         val keepWifiAwake: Boolean = false,
+        /** B-03 install identity; absent in a conf written by an app from before B-03. */
+        val vehicleUid: String? = null,
     )
+
+    /** `X-Vehicle-Id`, plus the B-03 `X-Vehicle-Uid` once the app has exported one. */
+    private fun Request.Builder.vehicleIdentity(conf: Conf): Request.Builder {
+        header("X-Vehicle-Id", conf.vehicleId)
+        conf.vehicleUid?.let { header("X-Vehicle-Uid", it) }
+        return this
+    }
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -658,6 +667,10 @@ object CommandDaemon {
         // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
         // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
         var lastWifiKeepAliveAt = 0L
+        // B-18 on-car evidence: the conf is re-read every iteration, so log each value the
+        // daemon actually adopts — a UI toggle must show up here within ~30 s (watchdog copy).
+        var lastLoggedKeepWifiAwake: Boolean? = null
+        var lastLoggedIdentity: String? = null
         // Last gear/gun state di+ actually reported. `latestData` itself is never cleared to
         // null once di+ has answered once — a failed fetch() just leaves it stale — so these
         // are captured separately at the moment of each successful fetch and read back once
@@ -684,6 +697,17 @@ object CommandDaemon {
                 if (conf == null) {
                     Thread.sleep(BASE_POLL_MS)
                     continue
+                }
+                if (conf.keepWifiAwake != lastLoggedKeepWifiAwake) {
+                    log("config: keep_wifi_awake=${if (conf.keepWifiAwake) 1 else 0}" +
+                        if (lastLoggedKeepWifiAwake == null) " (startup)" else " (changed)")
+                    lastLoggedKeepWifiAwake = conf.keepWifiAwake
+                }
+                // B-03 on-car evidence: which identity and name the daemon is pushing under.
+                val identity = "vehicle_id=${conf.vehicleId} vehicle_uid=${conf.vehicleUid ?: "-"}"
+                if (identity != lastLoggedIdentity) {
+                    log("config: $identity")
+                    lastLoggedIdentity = identity
                 }
 
                 val startedAt = System.currentTimeMillis()
@@ -939,7 +963,7 @@ object CommandDaemon {
         val request = Request.Builder()
             .url(httpUrl)
             .header("X-API-Key", conf.apiKey)
-            .header("X-Vehicle-Id", conf.vehicleId)
+            .vehicleIdentity(conf)
             .header("X-App", "VoltFlow-Mate-Daemon")
             .get()
             .build()
@@ -1009,7 +1033,7 @@ object CommandDaemon {
                 .url(conf.ackUrl)
                 .header("Content-Type", "application/json")
                 .header("X-API-Key", conf.apiKey)
-                .header("X-Vehicle-Id", conf.vehicleId)
+                .vehicleIdentity(conf)
                 .header("X-App", "VoltFlow-Mate-Daemon")
                 .post(payload.toRequestBody("application/json".toMediaType()))
                 .build()
@@ -1226,7 +1250,7 @@ object CommandDaemon {
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("X-API-Key", conf.apiKey)
-                .header("X-Vehicle-Id", conf.vehicleId)
+                .vehicleIdentity(conf)
                 .header("X-App", "VoltFlow-Mate-Daemon")
                 .post(payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
@@ -1269,7 +1293,7 @@ object CommandDaemon {
                 .url(conf.telemetryUrl)
                 .header("Content-Type", "application/json; charset=utf-8")
                 .header("X-API-Key", conf.apiKey)
-                .header("X-Vehicle-Id", conf.vehicleId)
+                .vehicleIdentity(conf)
                 .header("X-App", "VoltFlow-Mate-Daemon")
                 .post(payloadJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
@@ -1510,6 +1534,7 @@ object CommandDaemon {
             apiKey = apiKey,
             vehicleId = vehicleId,
             keepWifiAwake = props["keep_wifi_awake"] == "1",
+            vehicleUid = props["vehicle_uid"]?.takeIf { it.isNotBlank() },
         )
     }
 
