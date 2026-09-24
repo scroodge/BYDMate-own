@@ -605,7 +605,7 @@ object CommandDaemon {
         log("telemetry push skipped ($reason)")
     }
 
-    private data class Conf(
+    internal data class Conf(
         val commandsUrl: String,
         val ackUrl: String,
         val telemetryUrl: String,
@@ -1485,7 +1485,7 @@ object CommandDaemon {
      *   vehicle_id=...
      * Returns null (caller retries) if the file is missing/incomplete.
      */
-    private fun loadConf(path: String): Conf? {
+    internal fun loadConf(path: String): Conf? {
         val file = File(path)
         if (!file.isFile) return null
         val props = HashMap<String, String>()
