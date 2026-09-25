@@ -667,6 +667,8 @@ object CommandDaemon {
         // Independent of push cadence: ticks every WIFI_KEEPALIVE_INTERVAL_MS whenever
         // conf.keepWifiAwake is set, regardless of whether this iteration also pushes telemetry.
         var lastWifiKeepAliveAt = 0L
+        // App supervision (B-20 via B-22 stage 1) on its own 30 s rhythm, like the keepalive.
+        var lastAppCheckAt = 0L
         // B-18 on-car evidence: the conf is re-read every iteration, so log each value the
         // daemon actually adopts — a UI toggle must show up here within ~30 s (watchdog copy).
         var lastLoggedKeepWifiAwake: Boolean? = null
@@ -725,6 +727,10 @@ object CommandDaemon {
                         refreshWifiKeepalive()
                         lastWifiKeepAliveAt = now
                     }
+                    if (now - lastAppCheckAt >= AppSupervisor.CHECK_INTERVAL_MS) {
+                        AppSupervisor.tick(now, APP_HEARTBEAT_FILE, ::log)
+                        lastAppCheckAt = now
+                    }
 
                     // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
@@ -738,12 +744,11 @@ object CommandDaemon {
                     val diPlusFresh = latestData != null && now - latestDataAt <= DIPLUS_STALE_MS
 
                     // Push telemetry to the cloud so data keeps flowing while the app process is dead.
-                    // Two guards prevent duplicating the app's stream:
-                    //  1. App-alive beacon — if VoltFlow Mate is actively sending, stay silent.
-                    //     The daemon exists only to cover the window when BYD force-stops the app.
-                    //     Graded by what the push would write, see [shouldDeferToApp].
-                    //  2. Driving — belt-and-suspenders: never push a reduced-payload gear=1
-                    //     heartbeat mid-drive (would split the live trip).
+                    // One guard prevents duplicating the app's stream: the app-alive beacon — if
+                    // VoltFlow Mate is actively sending, stay silent. The daemon exists to cover
+                    // whenever the app is not sending, driving included (server trip gap is
+                    // 5 min, so a 60 s cadence cannot split a trip). Graded by what the push
+                    // would write, see [shouldDeferToApp].
                     // Three reasons to push, in priority order:
                     //  * the normal history cadence,
                     //  * a plug/unplug edge — the event the owner is waiting to see, and the
@@ -818,18 +823,19 @@ object CommandDaemon {
                                     logSkip(now, "app alive — VoltFlow Mate is sending")
                                     false
                                 }
-                                // NOT relaxed for live_only, unlike the app-alive guard above.
-                                // The daemon's payload has no GPS (`location = {}`) and none of the
-                                // app-only range/trip fields, and its device_time is always `now`
-                                // while the app's batched samples lag — so it would win the server's
-                                // stale-guard and blank the live map for the whole drive. The
-                                // blackout this file fixes is a *park* transition (gear=1 => PARKED),
-                                // so nothing here needs to give.
-                                state == IternioIntervalPolicy.TelemetryState.DRIVING -> {
-                                    logSkip(now, "driving — VoltFlow Mate is active")
-                                    false
-                                }
+                                // A drive reaching here means the app is NOT sending: its beacon is
+                                // written right before every enqueue, and it is past the 20 s
+                                // history threshold (a drive is never live_only). This used to skip
+                                // unconditionally, so a drive with the app process alive but
+                                // TrackingService dead (e.g. spawned only for the daemon's queue
+                                // ContentProvider after quickboot) reached the cloud as nothing at
+                                // all. A reduced 60 s sample (no GPS) beats silence, and a moving
+                                // sample arriving with a 60 s gap is exactly what the cloud-side
+                                // outage alarm keys on (ADR-0002) — skipping hid it.
                                 else -> {
+                                    if (state == IternioIntervalPolicy.TelemetryState.DRIVING) {
+                                        log("driving without app — daemon covering (beacon age ${beaconAgeMs(now)?.div(1000) ?: "none"}s)")
+                                    }
                                     if (!liveOnly) {
                                         baseSoc = data.soc
                                         baseGun = data.chargeGunState

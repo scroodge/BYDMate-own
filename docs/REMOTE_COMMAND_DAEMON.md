@@ -58,10 +58,18 @@ parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetr
   | history-writing (cadence, gun edge, forced-full) | `APP_ALIVE_FULL_TTL_MS` = **20 s** | a false "app is dead" stores a duplicate sample, so it keeps margin for a GC pause |
   | status-only (`live_only`) | `APP_ALIVE_LIVE_TTL_MS` = **5 s** | writes no history row at all — worst case is a few seconds of the daemon's reduced snapshot |
 
-- A second guard skips the push while `classifyFromDiPars == DRIVING`, belt-and-suspenders
-  against a reduced-payload `gear=1` heartbeat splitting a live trip. This one is **not** graded
-  by `live_only`: the daemon has no GPS and stamps `device_time = now`, so it would beat the
-  app's batched samples through the server's stale-guard and blank the live map mid-drive.
+- **Driving is not a skip (since 2026-09-25).** The daemon used to stay silent whenever
+  `classifyFromDiPars == DRIVING`, regardless of the beacon. On-car on 2026-09-25 the daemon's
+  own queue `content call` respawned the app process after quickboot *without* `TrackingService`
+  (`am_proc_start … content provider DaemonQueueBrokerProvider`), so a drive in that state would
+  have reached the cloud as nothing at all. A drive now gets past the beacon guard only when the
+  app is not sending (the beacon is written right before every enqueue and is older than 20 s);
+  the daemon then covers it at its 60 s cadence and logs
+  `driving without app — daemon covering (beacon age Ns)`. Accepted costs: no GPS, so the live
+  map shows no point while the app is dead (the server stores `location = excluded.location`).
+  The server's 5-minute trip gap means 60 s samples cannot split a trip, and their 60 s gaps
+  trip the [ADR-0002](adr/0002-detect-telemetry-outage-by-symptom.md) moving-gap alarm instead of
+  hiding from it. **Unverified on-car** as of 2026-09-25 (needs a drive with the service dead).
 - `TrackingService.onDestroy()` deletes the beacon so a graceful stop hands over at once. A
   power-off force-stop never runs `onDestroy`, which is why the thresholds above still matter.
 
@@ -122,7 +130,8 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 | Piece | Where | Role |
 |---|---|---|
 | `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + normal 60 s telemetry cadence (only when the app is not sending); gun-state edges are immediate and an active live-view grant adds 3 s `live_only` status pushes |
-| `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update, and (since B-08, 2026-07-22) relaunches the main app itself via `am start` if `pidof dev.scroodge.cloudevmate` comes back empty during the 30 s watcher tick — cooldown-gated (`APP_RELAUNCH_COOLDOWN_SEC=60`, state in `/data/local/tmp/voltflow_app_relaunch_ts`) so a genuinely broken app isn't hammered |
+| `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update, starts the cluster dashboard once per power cycle. Does **not** supervise the app since B-22 stage 1 (2026-09-25) — see `AppSupervisor` |
+| `AppSupervisor` | in the APK (`com.bydmate.app.daemon`), ticked by `CommandDaemon` every 30 s | relaunches the app when not running (`MainActivity`) or when the process lives but the beacon is >120 s old (`SilentStartActivity`); 60 s cooldown in `/data/local/tmp/voltflow_app_relaunch_ts`, shared with pre-B-22 watchdogs still in the field so they never double-start. Ships with the APK, unlike the script |
 | `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot |
 | `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
 | `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |

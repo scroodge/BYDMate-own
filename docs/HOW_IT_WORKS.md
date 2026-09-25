@@ -167,9 +167,10 @@ file's age in `shouldDeferToApp()` and stays quiet while the app is clearly aliv
 | history-writing (cadence, gun edge, forced-full) | **20 s** | a false "app is dead" stores a duplicate history row |
 | status-only (`live_only`) | **5 s** | writes no history row; worst case is a few stale seconds |
 
-A second guard suppresses the daemon push whenever DiPars classifies the state as
-`DRIVING` — the daemon has no GPS and stamps `device_time = now`, so it would beat
-the app's batched samples and blank the live map mid-drive.
+There is no separate `DRIVING` guard any more (removed 2026-09-25): a drive with a
+stale beacon means the app is not sending, and the daemon covers it at its 60 s
+cadence without GPS rather than leaving the cloud silent. See
+[REMOTE_COMMAND_DAEMON.md](REMOTE_COMMAND_DAEMON.md#telemetry-the-daemon-and-the-app-never-send-at-the-same-time).
 
 **Command polling is always-on in both.** Commands are idempotent and server-acked,
 so a brief double-poll is harmless and maximizes control reliability.
@@ -550,7 +551,7 @@ Every command is acked back with `{"id", "status", "result"}` where status is
 ## 7. The parked/off daemon in detail
 
 - **Launched by** `start_voltflow_cmd.sh`, a watchdog shell script. Two copies must stay byte-identical: `tools/start_voltflow_cmd.sh` (pushed manually to `/data/local/tmp/`) and `app/src/main/assets/start_voltflow_cmd.sh` (bundled in the APK, deployed by `TrackingService.deployDaemonLauncher()` to `<externalFilesDir>/`). **The app's self-revival path uses the asset, not `/data/local/tmp`** — a stale asset is a real, previously-observed failure mode (2026-06-19 incident, documented in `REMOTE_COMMAND_DAEMON.md`).
-- **Watchdog behavior:** respawns the daemon, auto-restarts it after an APK update (detects the changed package path within ~30 s), and since B-08 also relaunches the main app via `am start` if `pidof dev.scroodge.cloudevmate` comes back empty — cooldown-gated at 60 s so a genuinely broken app is not hammered.
+- **Watchdog behavior:** respawns the daemon, auto-restarts it after an APK update (detects the changed package path within ~30 s), and brings up the cluster dashboard once per power cycle. **App supervision is not the watchdog's job any more** (B-22 stage 1, 2026-09-25): `AppSupervisor` inside the daemon checks every 30 s and relaunches the app when the process is gone (`MainActivity`) or alive with a beacon older than 120 s (invisible `SilentStartActivity`), cooldown 60 s in `/data/local/tmp/voltflow_app_relaunch_ts`. It moved because a running `sh` never re-reads its script — the watchdog on `way` ran a 16-day-old copy and the B-20 fix never executed — while the daemon is respawned from every new APK. `pidof` alone is not trusted: the daemon's own queue `content call` can spawn the app process without `TrackingService`.
 - **Config:** `TrackingService.exportDaemonConfig()` writes `voltflow_cmd.conf` (url / api_key / vehicle_id / `keep_wifi_awake`) to shell-readable external storage, because the daemon runs as uid shell and cannot read app-private settings.
 - **Telemetry cadence:** normal 60 s, immediate on gun-state change, and 3 s `live_only` status while a `live_fast_seconds` grant is active. Every history-writing sample is first fsynced to the shared daemon ingress spool. A shell-only IPC call then asks the app to commit it to Room; if the app is unavailable, the `.ready` record survives process death/reboot and is imported transactionally when the app returns. The daemon's direct POST remains a best-effort live-state optimization and never substitutes for durable import. `live_only` pings remain intentionally non-durable because they create no history row.
 - **Wi-Fi keep-alive (opt-in):** DiLink drops Wi-Fi ~9 min after power-off. The documented fix is the head-unit's own "Keep network on while parked" toggle. Alternatively, enabling **Settings → Cloud Sync → "Keep Wi-Fi awake while parked"** makes the daemon run `svc wifi enable` every ~60 s itself — idempotent, cheap, no ADB round-trip (it already is shell uid). Off by default pending more real-car testing.

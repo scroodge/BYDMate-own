@@ -1,5 +1,26 @@
 # Project Notes
 
+## 2026-09-25: почему B-20 «не заработал» и почему отдельный сервис-APK не спасёт
+
+Машина `way`, versionCode 343, uptime 24 дня, всё по ADB и logcat.
+
+- **B-20 ни разу не исполнялся.** Watchdog PID 3750 работал с 2026-09-09: mksh разобрал цикл
+  при старте и крутил старую копию, хотя файл на диске уже был новым. После ручного
+  перезапуска (10:22:06) сразу `relaunch: service stale (beacon age 2526s)`, сервис поднялся,
+  маяк 1 с, `Polling error` = 0.
+- **Зомби создаёт сам демон.** 09:40:01 quickboot → `Force stopping dev.scroodge.cloudevmate`;
+  09:40:22 `Start proc … for content provider DaemonQueueBrokerProvider` — это `content call`
+  из `DaemonDurableIngress`. Процесс жив, `TrackingService` нет, старый watchdog смотрел только
+  `pidof` и молчал. На стоянке это не видно: демон видит устаревший маяк и шлёт сам. На ходу
+  демон молчал безусловно — поездка пропала бы целиком (исправлено в B-21).
+- **quickboot щадит только di+.** Из 17 сторонних пакетов остановлены 16, включая наш,
+  `com.bydmate.app`, `com.voltflow.dashboard`, Termux, Shizuku. `com.van.diplus` уцелел при
+  обычных флагах пакета — исключение по имени в прошивке. Значит, сервис в отдельном APK
+  убивается так же; переживает только shell-uid `app_process`. Отсюда B-22.
+- **Второй механизм BYD — `ssc_skip`.** В logcat: нашему uid 10099 отброшены
+  `BOOT_COMPLETED`, `USER_PRESENT`, `startServiceLocked` и `bindServiceLocked` от system
+  (JobScheduler). `Settings.Global ssc_whitelist` содержит чужие пакеты, наш — нет. Эксперимент — B-23.
+
 ## 2026-09-24: B-19 — daemon-origin окно поймано на ночной стоянке (23→24.09, 21:14–09:33)
 
 Реализовали B-19 (общий построитель telemetry-payload вместо трёх: `CloudTelemetryPayload`

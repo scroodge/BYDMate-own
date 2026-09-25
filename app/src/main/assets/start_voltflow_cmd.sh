@@ -5,12 +5,10 @@
 # daemon so it survives BYD's power-off force-stop (collectPowerOffEvent / quickboot),
 # exactly like DI+ (aps_diplus) and Overdrive (acc_sentry_daemon) do.
 #
-# Also supervises the main app process itself (dev.scroodge.cloudevmate): if it's not
-# running, the watcher loop below relaunches it via a privileged `am start`, the same
-# way competitor BYD EV Pro's ProcessExemptionController does for its own app — see
-# docs/EV_PRO_APP_ANALYSIS.md section 4 and docs/BACKLOG.md B-08. This covers a hard
-# crash/OOM kill that TrackingService's own onTaskRemoved restart and the boot
-# receiver don't reach (those cover "swiped from recents" and "full reboot" only).
+# Supervising the main app (dev.scroodge.cloudevmate) is NOT done here any more. It moved
+# into CommandDaemon (AppSupervisor.kt, B-22 stage 1): a running sh never re-reads this
+# file, so logic here only changes when someone restarts the watchdog by hand — the B-20
+# fix sat unexecuted for 16 days that way. The daemon is respawned from every new APK.
 #
 # Also brings up the VoltFlow Dashboard cluster projection (com.voltflow.dashboard) once
 # per power cycle — see dashboard_autostart_tick below for why that app cannot do it
@@ -32,36 +30,6 @@ PROCESS_NAME="voltflow_cmd_daemon"
 LOG_FILE="/data/local/tmp/voltflow_cmd_daemon.log"
 SENTINEL="/data/local/tmp/voltflow_cmd_daemon.disabled"
 LOCKFILE="/data/local/tmp/voltflow_cmd_watchdog.pid"
-# App-liveness relaunch cooldown state — last successful relaunch attempt (epoch seconds).
-APP_RELAUNCH_TS_FILE="/data/local/tmp/voltflow_app_relaunch_ts"
-APP_RELAUNCH_COOLDOWN_SEC=60
-# TrackingService writes epoch millis here at 1 Hz and deletes it on a graceful stop.
-APP_BEACON="/storage/emulated/0/Android/data/$PKG/files/voltflow_mate_heartbeat"
-# A beacon this old with the process still alive means the service is gone (B-20).
-APP_BEACON_STALE_SEC=120
-
-# BEGIN app_relaunch_reason — extracted and run by AppRelaunchDecisionTest; keep POSIX.
-# Prints why the app must be relaunched, or nothing when it is fine.
-#   $1 pidof output for the app (empty = not running)   $2 beacon file content (may be empty)
-#   $3 now, epoch seconds                                 $4 stale threshold, seconds
-# Present-but-stale beacon with a live process: TrackingService died while the process
-# survived — seen after `adb install -r` on 2026-09-24, the watchdog never noticed. An
-# absent beacon with a live process is a graceful stop (onDestroy deletes the file), so it
-# is left alone rather than restarting a gateway the owner turned off.
-app_relaunch_reason() {
-  if [ -z "$1" ]; then echo "not running"; return 0; fi
-  case "$2" in ''|*[!0-9]*) return 0 ;; esac
-  # Epoch millis are 13 digits; anything shorter is a torn or foreign write, not a beacon.
-  case "$2" in ?????????????*) ;; *) return 0 ;; esac
-  # mksh arithmetic on the head unit is 32-bit and the beacon is epoch *millis*: drop the
-  # last three digits as text instead of dividing, or the subtraction overflows.
-  ARR_BEACON_S=${2%???}
-  [ -n "$ARR_BEACON_S" ] || return 0
-  ARR_AGE=$(( $3 - ARR_BEACON_S ))
-  if [ "$ARR_AGE" -gt "$4" ]; then echo "service stale (beacon age ${ARR_AGE}s)"; fi
-  return 0
-}
-# END app_relaunch_reason
 
 # --- VoltFlow Dashboard (cluster projection) auto-start ----------------------------
 # Separate APK. It projects the gauge cluster onto the 1280x480 virtual display, and it
@@ -123,7 +91,7 @@ sleep 3
 
 # Bring the cluster dashboard up once per power cycle.
 #
-# Deliberately NOT a liveness watchdog like the $PKG relaunch below. The dashboard's
+# Deliberately NOT a liveness watchdog like the app supervision in CommandDaemon. The dashboard's
 # layout editor has EXIT and FACTORY DASHBOARD buttons, so a driver can choose the stock
 # cluster on purpose; relaunching on every absence would fight that choice every 30s.
 # One shot per power cycle restores the projection after a car start and then leaves it
@@ -210,30 +178,6 @@ while true; do
         echo "[$(date)] APK changed, restarting daemon for new code" >> "$LOG_FILE"
         kill "$DAEMON_PID" 2>/dev/null
         break
-      fi
-
-      # App-liveness check: relaunch dev.scroodge.cloudevmate if it's not running, or if its
-      # process survived but TrackingService did not (stale beacon, B-20). Covers a hard
-      # crash/OOM kill — onTaskRemoved and the boot receiver don't reach those.
-      # Cooldown-gated so a genuinely broken app isn't hammered with `am start` every 30s.
-      # TrackingService itself is not exported, so `am start-foreground-service` on it always
-      # failed ("Requires permission not exported") — only Activities can be started from here.
-      NOW_TS=$(date +%s)
-      RELAUNCH_REASON=$(app_relaunch_reason "$(pidof "$PKG" 2>/dev/null)" \
-        "$(cat "$APP_BEACON" 2>/dev/null)" "$NOW_TS" "$APP_BEACON_STALE_SEC")
-      if [ -n "$RELAUNCH_REASON" ]; then
-        LAST_TS=$(cat "$APP_RELAUNCH_TS_FILE" 2>/dev/null || echo 0)
-        if [ $((NOW_TS - LAST_TS)) -ge $APP_RELAUNCH_COOLDOWN_SEC ]; then
-          echo "[$(date)] relaunch: $RELAUNCH_REASON" >> "$LOG_FILE"
-          if [ "$RELAUNCH_REASON" = "not running" ]; then
-            am start -n "$PKG/com.bydmate.app.MainActivity" >/dev/null 2>&1
-          else
-            # The process is up, possibly mid-drive: start the service through the invisible
-            # 1x1 SilentStartActivity instead of throwing the main UI over navigation.
-            am start -n "$PKG/com.bydmate.app.SilentStartActivity" >/dev/null 2>&1
-          fi
-          echo "$NOW_TS" > "$APP_RELAUNCH_TS_FILE"
-        fi
       fi
 
       # Cluster projection: one-shot per power cycle, see dashboard_autostart_tick.
