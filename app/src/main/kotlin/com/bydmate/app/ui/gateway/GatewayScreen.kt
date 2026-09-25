@@ -241,15 +241,6 @@ fun GatewayScreen(
             }
         }
     }
-    val languageCard: @Composable () -> Unit = {
-        GatewayCard {
-            LanguageSwitcher(
-                language = state.appLanguage,
-                onLanguageChange = viewModel::updateAppLanguage,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
     val advancedCard: @Composable () -> Unit = {
         AdvancedFeaturesCard(
             adbStatus = state.adbStatus,
@@ -332,21 +323,15 @@ fun GatewayScreen(
             GatewaySection.SETTINGS ->
                 if (wide) {
                     Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        WideColumn(Modifier.weight(1f)) {
-                            cloudSwitchesCard()
-                            widgetCard()
-                        }
-                        WideColumn(Modifier.weight(1f)) {
-                            updatesCard()
-                            languageCard()
-                        }
+                        WideColumn(Modifier.weight(1f)) { cloudSwitchesCard() }
+                        WideColumn(Modifier.weight(1f)) { widgetCard() }
                     }
                 } else {
                     cloudSwitchesCard()
                     widgetCard()
-                    updatesCard()
-                    languageCard()
                 }
+            GatewaySection.UPDATES ->
+                if (wide) WideColumn(Modifier.widthIn(max = 680.dp)) { updatesCard() } else updatesCard()
             GatewaySection.DIAGNOSTICS ->
                 if (wide) {
                     Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -376,7 +361,17 @@ fun GatewayScreen(
                         .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Header(appVersion = state.appVersion, strings = strings)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) { Header(appVersion = state.appVersion, strings = strings) }
+                        LanguageSwitcher(
+                            language = state.appLanguage,
+                            onLanguageChange = viewModel::updateAppLanguage,
+                            modifier = Modifier,
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -400,6 +395,10 @@ fun GatewayScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                LanguageSwitcher(
+                    language = state.appLanguage,
+                    onLanguageChange = viewModel::updateAppLanguage,
+                )
                 Header(appVersion = state.appVersion, strings = strings)
                 SectionNav(
                     selected = section,
@@ -447,7 +446,7 @@ private fun VoltFlowBackground(content: @Composable BoxScope.() -> Unit) {
     )
 }
 
-private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS }
+private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS, UPDATES }
 
 @Composable
 private fun SectionNav(
@@ -462,6 +461,7 @@ private fun SectionNav(
         GatewaySection.LINK to strings.navLink,
         GatewaySection.SETTINGS to strings.navSettings,
         GatewaySection.DIAGNOSTICS to strings.diagnostics,
+        GatewaySection.UPDATES to strings.updates,
     )
     val button: @Composable (GatewaySection, String, Modifier) -> Unit = { target, label, mod ->
         val active = target == selected
