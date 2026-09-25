@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.BYDMate" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.BYDMate" parent="android:Theme.Material.NoActionBar">
+        <!-- The logo's navy, so the window is never Material's stock grey before Compose draws. -->
+        <item name="android:windowBackground">#FF0A1628</item>
+    </style>
 
     <!-- Translucent theme for SilentStartActivity (like DiPlus StartMainServiceActivity) -->
     <style name="Theme.App.Translucent" parent="android:Theme.Translucent.NoTitleBar">

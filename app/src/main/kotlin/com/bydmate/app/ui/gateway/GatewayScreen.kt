@@ -5,6 +5,13 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -16,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +88,7 @@ import com.bydmate.app.ui.theme.AccentOrange
 import com.bydmate.app.ui.theme.CardSurface
 import com.bydmate.app.ui.theme.CardSurfaceElevated
 import com.bydmate.app.ui.theme.NavyDark
+import com.bydmate.app.ui.theme.NavyDeep
 import com.bydmate.app.ui.theme.TextMuted
 import com.bydmate.app.ui.theme.TextPrimary
 import com.bydmate.app.ui.theme.TextSecondary
@@ -129,7 +138,7 @@ fun GatewayScreen(
         viewModel.refreshFloatingWidget()
     }
 
-    val statusCard: @Composable () -> Unit = {
+    val statusCard: @Composable (Modifier, Boolean) -> Unit = { mod, stretch ->
         StatusCard(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
@@ -140,9 +149,11 @@ fun GatewayScreen(
             onStart = { TrackingService.start(context) },
             onStop = { TrackingService.stop(context) },
             strings = strings,
+            modifier = mod,
+            stretch = stretch,
         )
     }
-    val liveDataCard: @Composable () -> Unit = {
+    val liveDataCard: @Composable (Modifier, Boolean) -> Unit = { mod, stretch ->
         LiveDataCard(
             soc = data?.soc,
             speed = data?.speed,
@@ -157,6 +168,8 @@ fun GatewayScreen(
             hasLocation = location != null,
             lastUpdateMs = lastDiPlusUpdateMs,
             strings = strings,
+            modifier = mod,
+            stretch = stretch,
         )
     }
     val widgetCard: @Composable () -> Unit = {
@@ -287,43 +300,74 @@ fun GatewayScreen(
         when (section) {
             GatewaySection.HOME ->
                 if (wide) {
+                    // Home is a dashboard, not a list: both columns fill the tablet's height.
                     Row(
                         modifier = Modifier.fillMaxSize(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        WideColumn(Modifier.weight(1f)) {
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
                             backgroundCard()
-                            statusCard()
+                            statusCard(Modifier.weight(1f), true)
                             linkPromptCard()
                             footer()
                         }
-                        WideColumn(Modifier.weight(1f)) { liveDataCard() }
+                        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                            liveDataCard(Modifier.fillMaxHeight(), true)
+                        }
                     }
                 } else {
                     backgroundCard()
-                    statusCard()
+                    statusCard(Modifier, false)
                     linkPromptCard()
-                    liveDataCard()
+                    liveDataCard(Modifier, false)
                     footer()
                 }
-            GatewaySection.LINK -> cloudLinkCard()
-            GatewaySection.SETTINGS -> {
-                cloudSwitchesCard()
-                widgetCard()
-                updatesCard()
-                languageCard()
-            }
-            GatewaySection.DIAGNOSTICS -> {
-                cloudDiagnosticsCard()
-                advancedCard()
-                logCaptureCard()
-            }
+            GatewaySection.LINK ->
+                if (wide) WideColumn(Modifier.widthIn(max = 680.dp)) { cloudLinkCard() } else cloudLinkCard()
+            // On the tablet each of these is two columns so the whole section fits the screen
+            // height; on a narrow screen they stack in the one scrolling column.
+            GatewaySection.SETTINGS ->
+                if (wide) {
+                    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        WideColumn(Modifier.weight(1f)) {
+                            cloudSwitchesCard()
+                            widgetCard()
+                        }
+                        WideColumn(Modifier.weight(1f)) {
+                            updatesCard()
+                            languageCard()
+                        }
+                    }
+                } else {
+                    cloudSwitchesCard()
+                    widgetCard()
+                    updatesCard()
+                    languageCard()
+                }
+            GatewaySection.DIAGNOSTICS ->
+                if (wide) {
+                    Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        WideColumn(Modifier.weight(1f)) {
+                            cloudDiagnosticsCard()
+                            logCaptureCard()
+                        }
+                        WideColumn(Modifier.weight(1f)) { advancedCard() }
+                    }
+                } else {
+                    cloudDiagnosticsCard()
+                    advancedCard()
+                    logCaptureCard()
+                }
         }
     }
 
     // The head unit is a wide, short landscape screen (~960x540 dp): a menu on the left and the
     // chosen section on the right. Narrow windows keep one scrolling column with the menu on top.
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    VoltFlowBackground {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
         if (maxWidth >= WIDE_LAYOUT_MIN_WIDTH) {
             CompositionLocalProvider(LocalGatewayCompact provides true) {
                 Column(
@@ -344,15 +388,7 @@ fun GatewayScreen(
                             vertical = true,
                             modifier = Modifier.width(190.dp),
                         )
-                        if (section == GatewaySection.HOME) {
-                            Box(modifier = Modifier.weight(1f)) { sectionBody(true) }
-                        } else {
-                            // Weight would override a max width on the column itself, hence the Box:
-                            // cards stay a readable width instead of parking each switch far from its label.
-                            Box(modifier = Modifier.weight(1f)) {
-                                WideColumn(Modifier.widthIn(max = 680.dp)) { sectionBody(true) }
-                            }
-                        }
+                        Box(modifier = Modifier.weight(1f)) { sectionBody(true) }
                     }
                 }
             }
@@ -377,6 +413,38 @@ fun GatewayScreen(
             }
         }
     }
+    }
+}
+
+/**
+ * The VoltFlow backdrop: the deep navy of the logo with a soft green glow behind the header and a
+ * cool blue one in the opposite corner. Drawn by the screen itself so it fills the whole tablet
+ * edge to edge regardless of what the window behind it is.
+ */
+@Composable
+private fun VoltFlowBackground(content: @Composable BoxScope.() -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(NavyDeep, NavyDark)))
+            .drawBehind {
+                drawRect(
+                    Brush.radialGradient(
+                        colors = listOf(AccentGreen.copy(alpha = 0.16f), Color.Transparent),
+                        center = Offset(size.width * 0.06f, size.height * 0.0f),
+                        radius = size.maxDimension * 0.55f,
+                    ),
+                )
+                drawRect(
+                    Brush.radialGradient(
+                        colors = listOf(AccentBlue.copy(alpha = 0.12f), Color.Transparent),
+                        center = Offset(size.width * 0.96f, size.height * 1.0f),
+                        radius = size.maxDimension * 0.6f,
+                    ),
+                )
+            },
+        content = content,
+    )
 }
 
 private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS }
@@ -820,8 +888,10 @@ private fun StatusCard(
     onStart: () -> Unit,
     onStop: () -> Unit,
     strings: GatewayStrings,
+    modifier: Modifier = Modifier,
+    stretch: Boolean = false,
 ) {
-    GatewayCard {
+    GatewayCard(modifier, stretch) {
         Text(strings.gatewayStatus, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Gap(10.dp)
         StatusRow(strings.service, if (isRunning) strings.running else strings.stopped, isRunning)
@@ -858,7 +928,7 @@ private fun StatusCard(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = onStart,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).heightIn(min = if (stretch) 60.dp else 40.dp),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
             ) {
@@ -866,7 +936,7 @@ private fun StatusCard(
             }
             Button(
                 onClick = onStop,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).heightIn(min = if (stretch) 60.dp else 40.dp),
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
             ) {
@@ -891,8 +961,10 @@ private fun LiveDataCard(
     hasLocation: Boolean,
     lastUpdateMs: Long,
     strings: GatewayStrings,
+    modifier: Modifier = Modifier,
+    stretch: Boolean = false,
 ) {
-    GatewayCard {
+    GatewayCard(modifier, stretch) {
         Text(strings.latestData, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         if (lastUpdateMs > 0L) {
             // B-1: D+ data freshness. Ticks up while D+ is quiet; past the stale
@@ -1179,16 +1251,23 @@ private fun GatewayTextField(
 }
 
 @Composable
-private fun GatewayCard(content: @Composable ColumnScope.() -> Unit) {
+private fun GatewayCard(
+    modifier: Modifier = Modifier,
+    /** Fill the height the caller gave the card, spreading the rows out instead of piling them at the top. */
+    stretch: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     val compact = LocalGatewayCompact.current
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurface),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().then(modifier),
     ) {
         Column(
-            modifier = Modifier.padding(if (compact) 10.dp else 14.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
+            modifier = Modifier
+                .padding(if (compact) 12.dp else 14.dp)
+                .then(if (stretch) Modifier.fillMaxHeight() else Modifier),
+            verticalArrangement = if (stretch) Arrangement.SpaceEvenly else Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
             content = content,
         )
     }
@@ -1196,24 +1275,27 @@ private fun GatewayCard(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun StatusRow(label: String, value: String, ok: Boolean) {
+    val size = if (LocalGatewayCompact.current) 15.sp else 13.sp
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = TextSecondary, fontSize = 13.sp)
-        Text(value, color = if (ok) AccentGreen else AccentOrange, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = TextSecondary, fontSize = size)
+        Text(value, color = if (ok) AccentGreen else AccentOrange, fontSize = size, fontWeight = FontWeight.Medium)
     }
 }
 
 @Composable
 private fun Metric(label: String, value: String, modifier: Modifier = Modifier) {
+    // Big numbers on the tablet layout: this is the part read from the driver's seat.
+    val dense = LocalGatewayCompact.current
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(label, color = TextSecondary, fontSize = 11.sp)
-        Text(value, color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = TextSecondary, fontSize = if (dense) 13.sp else 11.sp)
+        Text(value, color = TextPrimary, fontSize = if (dense) 26.sp else 17.sp, fontWeight = FontWeight.Bold)
     }
 }
 
