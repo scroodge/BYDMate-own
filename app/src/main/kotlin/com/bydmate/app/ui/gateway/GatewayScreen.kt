@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -164,39 +167,34 @@ fun GatewayScreen(
             strings = strings,
         )
     }
-    // Linked cars start collapsed: nothing here needs touching day to day. An unlinked car
-    // starts open, because that is where it gets linked. Pressing the button overrides either.
-    var syncExpandedOverride by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val syncLinked = state.cloudSyncApiKey.isNotBlank() && state.cloudSyncVehicleId.trim().isNotBlank()
-    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
-    val cloudSyncCard: @Composable () -> Unit = {
-        val expanded = syncExpandedOverride ?: !syncLinked
-        CloudSyncCard(
-            enabled = state.cloudSyncEnabled,
+    var section by rememberSaveable { mutableStateOf(GatewaySection.HOME) }
+    val cloudLinkCard: @Composable () -> Unit = {
+        CloudLinkCard(
             linkCode = state.cloudSyncLinkCode,
             linking = state.cloudSyncLinking,
             vehicleId = state.cloudSyncVehicleId,
-            linked = syncLinked,
-            expanded = expanded,
+            status = state.cloudSyncStatus,
+            statusIsError = state.cloudSyncStatusIsError,
+            onLinkCode = viewModel::updateCloudSyncLinkCode,
+            onConnect = viewModel::redeemVoltflowLinkCode,
+            onVehicleId = viewModel::updateCloudSyncVehicleId,
+            onSave = viewModel::saveCloudSyncSettings,
+            strings = strings,
+        )
+    }
+    val cloudSwitchesCard: @Composable () -> Unit = {
+        CloudSwitchesCard(
+            enabled = state.cloudSyncEnabled,
             wifiOnly = state.cloudSyncWifiOnly,
             omitGps = state.cloudSyncOmitGps,
             keepWifiAwake = state.cloudSyncKeepWifiAwake,
             socFromCar = state.cloudSocFromCar,
-            status = state.cloudSyncStatus,
-            statusIsError = state.cloudSyncStatusIsError,
             onEnabled = viewModel::toggleCloudSync,
-            // Editing pins the card open, so it cannot fold away under the user's fingers the
-            // moment the typed name makes the car count as linked. Connect and Save hand control
-            // back to the automatic rule: once the car really is linked the card folds itself.
-            onLinkCode = { syncExpandedOverride = true; viewModel.updateCloudSyncLinkCode(it) },
-            onConnect = { syncExpandedOverride = null; viewModel.redeemVoltflowLinkCode() },
-            onToggleExpanded = { syncExpandedOverride = !expanded },
-            onVehicleId = { syncExpandedOverride = true; viewModel.updateCloudSyncVehicleId(it) },
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onKeepWifiAwake = viewModel::toggleCloudSyncKeepWifiAwake,
             onSocFromCar = viewModel::toggleCloudSocFromCar,
-            onSave = { syncExpandedOverride = null; viewModel.saveCloudSyncSettings() },
             strings = strings,
         )
     }
@@ -215,6 +213,29 @@ fun GatewayScreen(
             onClearDiagnostics = viewModel::clearDiagnosticLog,
             strings = strings,
         )
+    }
+    // An unlinked car has nothing to show on Home but this: the one thing it needs to do next.
+    val linkPromptCard: @Composable () -> Unit = {
+        if (!syncLinked) {
+            GatewayCard {
+                Text(strings.notLinked, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Button(
+                    onClick = { section = GatewaySection.LINK },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+                ) { Text(strings.linkCar, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
+    val languageCard: @Composable () -> Unit = {
+        GatewayCard {
+            LanguageSwitcher(
+                language = state.appLanguage,
+                onLanguageChange = viewModel::updateAppLanguage,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
     val advancedCard: @Composable () -> Unit = {
         AdvancedFeaturesCard(
@@ -235,25 +256,6 @@ fun GatewayScreen(
         )
     }
     val logCaptureCard: @Composable () -> Unit = { LogCaptureCard(strings = strings) }
-    // One button hides every troubleshooting control; nothing in it opens unless it is pressed.
-    val diagnosticsSection: @Composable () -> Unit = {
-        Button(
-            onClick = { diagnosticsOpen = !diagnosticsOpen },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
-        ) {
-            Text(
-                if (diagnosticsOpen) strings.diagnosticsHide else strings.diagnostics,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-        if (diagnosticsOpen) {
-            cloudDiagnosticsCard()
-            advancedCard()
-            logCaptureCard()
-        }
-    }
     val updatesCard: @Composable () -> Unit = {
         UpdatesCard(
             autoCheckUpdates = autoCheckUpdates,
@@ -279,9 +281,48 @@ fun GatewayScreen(
         )
     }
 
-    // The head unit is a wide, short landscape screen (~960x540 dp): a single tall column
-    // scrolls for ages while most of the width sits empty. On wide windows lay the cards
-    // out in three side-by-side columns; narrow windows keep the original single column.
+    // Sections keep the screen calm: Home is status and data only, every switch is in Settings,
+    // everything troubleshooting-shaped is in Diagnostics. Home is always what opens first.
+    val sectionBody: @Composable (Boolean) -> Unit = { wide ->
+        when (section) {
+            GatewaySection.HOME ->
+                if (wide) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        WideColumn(Modifier.weight(1f)) {
+                            backgroundCard()
+                            statusCard()
+                            linkPromptCard()
+                            footer()
+                        }
+                        WideColumn(Modifier.weight(1f)) { liveDataCard() }
+                    }
+                } else {
+                    backgroundCard()
+                    statusCard()
+                    linkPromptCard()
+                    liveDataCard()
+                    footer()
+                }
+            GatewaySection.LINK -> cloudLinkCard()
+            GatewaySection.SETTINGS -> {
+                cloudSwitchesCard()
+                widgetCard()
+                updatesCard()
+                languageCard()
+            }
+            GatewaySection.DIAGNOSTICS -> {
+                cloudDiagnosticsCard()
+                advancedCard()
+                logCaptureCard()
+            }
+        }
+    }
+
+    // The head unit is a wide, short landscape screen (~960x540 dp): a menu on the left and the
+    // chosen section on the right. Narrow windows keep one scrolling column with the menu on top.
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         if (maxWidth >= WIDE_LAYOUT_MIN_WIDTH) {
             CompositionLocalProvider(LocalGatewayCompact provides true) {
@@ -291,36 +332,26 @@ fun GatewayScreen(
                         .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(modifier = Modifier.weight(1f)) {
-                            Header(appVersion = state.appVersion, strings = strings)
-                        }
-                        LanguageSwitcher(
-                            language = state.appLanguage,
-                            onLanguageChange = viewModel::updateAppLanguage,
-                            modifier = Modifier,
-                        )
-                    }
+                    Header(appVersion = state.appVersion, strings = strings)
                     Row(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        WideColumn(Modifier.weight(1f)) {
-                            backgroundCard()
-                            statusCard()
-                            liveDataCard()
-                            updatesCard()
-                            footer()
-                        }
-                        WideColumn(Modifier.weight(1f)) {
-                            cloudSyncCard()
-                        }
-                        WideColumn(Modifier.weight(1f)) {
-                            widgetCard()
-                            diagnosticsSection()
+                        SectionNav(
+                            selected = section,
+                            onSelect = { section = it },
+                            strings = strings,
+                            vertical = true,
+                            modifier = Modifier.width(190.dp),
+                        )
+                        if (section == GatewaySection.HOME) {
+                            Box(modifier = Modifier.weight(1f)) { sectionBody(true) }
+                        } else {
+                            // Weight would override a max width on the column itself, hence the Box:
+                            // cards stay a readable width instead of parking each switch far from its label.
+                            Box(modifier = Modifier.weight(1f)) {
+                                WideColumn(Modifier.widthIn(max = 680.dp)) { sectionBody(true) }
+                            }
                         }
                     }
                 }
@@ -333,21 +364,61 @@ fun GatewayScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                LanguageSwitcher(
-                    language = state.appLanguage,
-                    onLanguageChange = viewModel::updateAppLanguage,
-                )
                 Header(appVersion = state.appVersion, strings = strings)
-                backgroundCard()
-                statusCard()
-                liveDataCard()
-                widgetCard()
-                cloudSyncCard()
-                updatesCard()
-                diagnosticsSection()
-                footer()
+                SectionNav(
+                    selected = section,
+                    onSelect = { section = it },
+                    strings = strings,
+                    vertical = false,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                sectionBody(false)
                 Gap(8.dp)
             }
+        }
+    }
+}
+
+private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS }
+
+@Composable
+private fun SectionNav(
+    selected: GatewaySection,
+    onSelect: (GatewaySection) -> Unit,
+    strings: GatewayStrings,
+    vertical: Boolean,
+    modifier: Modifier,
+) {
+    val items = listOf(
+        GatewaySection.HOME to strings.navHome,
+        GatewaySection.LINK to strings.navLink,
+        GatewaySection.SETTINGS to strings.navSettings,
+        GatewaySection.DIAGNOSTICS to strings.diagnostics,
+    )
+    val button: @Composable (GatewaySection, String, Modifier) -> Unit = { target, label, mod ->
+        val active = target == selected
+        Button(
+            onClick = { onSelect(target) },
+            modifier = mod,
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (active) AccentGreen else CardSurfaceElevated,
+                contentColor = if (active) NavyDark else TextPrimary,
+            ),
+        ) {
+            Text(label, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium, fontSize = 15.sp)
+        }
+    }
+    if (vertical) {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items.forEach { (target, label) -> button(target, label, Modifier.fillMaxWidth().height(52.dp)) }
+        }
+    } else {
+        Row(
+            modifier = modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items.forEach { (target, label) -> button(target, label, Modifier) }
         }
     }
 }
@@ -875,31 +946,78 @@ private fun LiveDataCard(
     }
 }
 
+/** Linking only: the code, the car's name, Connect and Save. Every switch lives in Settings. */
 @Composable
-private fun CloudSyncCard(
-    enabled: Boolean,
+private fun CloudLinkCard(
     linkCode: String,
     linking: Boolean,
     vehicleId: String,
-    /** Car is already linked to the cloud: the card starts collapsed to a one-line summary. */
-    linked: Boolean,
-    expanded: Boolean,
+    status: String?,
+    statusIsError: Boolean,
+    onLinkCode: (String) -> Unit,
+    onConnect: () -> Unit,
+    onVehicleId: (String) -> Unit,
+    onSave: () -> Unit,
+    strings: GatewayStrings,
+) {
+    GatewayCard {
+        Text(strings.voltFlowSync, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Gap(10.dp)
+        val vehicleNameMissing = vehicleId.trim().isBlank()
+        GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
+        GatewayHint(strings.linkCodeHint)
+        GatewayTextField(
+            label = strings.carName,
+            value = vehicleId,
+            onValueChange = onVehicleId,
+            keyboardType = KeyboardType.Text,
+            isError = vehicleNameMissing,
+        )
+        if (vehicleNameMissing) {
+            Text(strings.carNameRequired, color = AccentOrange, fontSize = 11.sp)
+        } else {
+            GatewayHint(strings.carNameHint)
+        }
+        Button(
+            onClick = onConnect,
+            enabled = !linking && linkCode.length == 6 && !vehicleNameMissing,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+        ) {
+            Text(
+                if (linking) strings.connecting else strings.connect,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Button(
+            onClick = onSave,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+        ) {
+            Text(strings.save, fontWeight = FontWeight.Medium)
+        }
+        status?.let {
+            Gap(8.dp)
+            Text(it, color = if (statusIsError) AccentOrange else AccentGreen, fontSize = 12.sp)
+        }
+    }
+}
+
+/** Every cloud-sync switch in one card; each one persists the moment it is flipped. */
+@Composable
+private fun CloudSwitchesCard(
+    enabled: Boolean,
     wifiOnly: Boolean,
     omitGps: Boolean,
     keepWifiAwake: Boolean,
     socFromCar: Boolean,
-    status: String?,
-    statusIsError: Boolean,
     onEnabled: (Boolean) -> Unit,
-    onLinkCode: (String) -> Unit,
-    onConnect: () -> Unit,
-    onToggleExpanded: () -> Unit,
-    onVehicleId: (String) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
     onOmitGps: (Boolean) -> Unit,
     onKeepWifiAwake: (Boolean) -> Unit,
     onSocFromCar: (Boolean) -> Unit,
-    onSave: () -> Unit,
     strings: GatewayStrings,
 ) {
     GatewayCard {
@@ -914,124 +1032,26 @@ private fun CloudSyncCard(
             }
             Switch(checked = enabled, onCheckedChange = onEnabled, colors = bydSwitchColors())
         }
-        val vehicleNameMissing = vehicleId.trim().isBlank()
-        if (linked) {
-            Gap(6.dp)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(vehicleId.trim(), color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                Button(
-                    onClick = onToggleExpanded,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
-                ) {
-                    Text(if (expanded) strings.syncCollapse else strings.syncSettings, fontWeight = FontWeight.Medium)
-                }
-            }
+        Gap(10.dp)
+        SwitchRow(strings.wifiOnly, null, wifiOnly, onWifiOnly)
+        SwitchRow(strings.gpsPrivacy, null, omitGps, onOmitGps)
+        SwitchRow(strings.keepWifiAwake, strings.keepWifiAwakeHint, keepWifiAwake, onKeepWifiAwake)
+        SwitchRow(strings.socFromCar, strings.socFromCarHint, socFromCar, onSocFromCar)
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, hint: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, color = TextPrimary, fontSize = 14.sp)
+            if (hint != null) Text(hint, color = TextSecondary, fontSize = 11.sp)
         }
-        if (expanded) {
-            Gap(10.dp)
-            GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
-            GatewayHint(strings.linkCodeHint)
-            GatewayTextField(
-                label = strings.carName,
-                value = vehicleId,
-                onValueChange = onVehicleId,
-                keyboardType = KeyboardType.Text,
-                isError = vehicleNameMissing,
-            )
-            if (vehicleNameMissing) {
-                Text(strings.carNameRequired, color = AccentOrange, fontSize = 11.sp)
-            } else {
-                GatewayHint(strings.carNameHint)
-            }
-            Button(
-                onClick = onConnect,
-                enabled = !linking && linkCode.length == 6 && !vehicleNameMissing,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
-            ) {
-                Text(
-                    if (linking) strings.connecting else strings.connect,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-        Gap(6.dp)
-        val compact = LocalGatewayCompact.current
-        val wifiOnlySwitch: @Composable (Modifier) -> Unit = { mod ->
-            Row(
-                modifier = mod,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(strings.wifiOnly, color = TextPrimary, fontSize = 14.sp)
-                Switch(checked = wifiOnly, onCheckedChange = onWifiOnly, colors = bydSwitchColors())
-            }
-        }
-        val gpsPrivacySwitch: @Composable (Modifier) -> Unit = { mod ->
-            Row(
-                modifier = mod,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(strings.gpsPrivacy, color = TextPrimary, fontSize = 14.sp)
-                Switch(checked = omitGps, onCheckedChange = onOmitGps, colors = bydSwitchColors())
-            }
-        }
-        if (compact) {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-                wifiOnlySwitch(Modifier.weight(1f))
-                gpsPrivacySwitch(Modifier.weight(1f))
-            }
-        } else {
-            wifiOnlySwitch(Modifier.fillMaxWidth())
-            gpsPrivacySwitch(Modifier.fillMaxWidth())
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(strings.keepWifiAwake, color = TextPrimary, fontSize = 14.sp)
-                Text(strings.keepWifiAwakeHint, color = TextSecondary, fontSize = 11.sp)
-            }
-            Switch(checked = keepWifiAwake, onCheckedChange = onKeepWifiAwake, colors = bydSwitchColors())
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(strings.socFromCar, color = TextPrimary, fontSize = 14.sp)
-                Text(strings.socFromCarHint, color = TextSecondary, fontSize = 11.sp)
-            }
-            Switch(checked = socFromCar, onCheckedChange = onSocFromCar, colors = bydSwitchColors())
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(
-                onClick = onSave,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark)
-            ) {
-                Text(strings.save, fontWeight = FontWeight.Bold)
-            }
-        }
-        status?.let {
-            Gap(8.dp)
-            Text(
-                it,
-                color = if (statusIsError) AccentOrange else AccentGreen,
-                fontSize = 12.sp,
-            )
-        }
+        Switch(checked = checked, onCheckedChange = onChange, colors = bydSwitchColors())
     }
 }
 
@@ -1237,10 +1257,12 @@ private data class GatewayStrings(
     val keepWifiAwake: String,
     val socFromCar: String,
     val socFromCarHint: String,
-    val syncSettings: String,
-    val syncCollapse: String,
     val diagnostics: String,
-    val diagnosticsHide: String,
+    val navHome: String,
+    val navLink: String,
+    val navSettings: String,
+    val notLinked: String,
+    val linkCar: String,
     val keepWifiAwakeHint: String,
     val save: String,
     val sendTest: String,
@@ -1333,10 +1355,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Экспериментально: демон переподключает Wi-Fi каждые ~60 с, чтобы телеметрия не терялась на стоянке. Нужен on-device ADB.",
             socFromCar = "SOC от машины, а не от Di+",
             socFromCarHint = "Выкл — SOC от Di+ (точнее, шаг 0,1 %). Вкл — как на приборной панели, целые %. Второй источник — запасной.",
-            syncSettings = "Привязка",
-            syncCollapse = "Свернуть",
             diagnostics = "Диагностика",
-            diagnosticsHide = "Скрыть диагностику",
+            navHome = "Главная",
+            navLink = "Привязка",
+            navSettings = "Настройки",
+            notLinked = "Авто не привязано к VoltFlow",
+            linkCar = "Привязать авто",
             save = "Сохранить",
             sendTest = "Отправить тест",
             storageDiag = "Диагностика BYD",
@@ -1425,10 +1449,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Experimental: the daemon reconnects Wi-Fi every ~60s so telemetry doesn't drop while parked. Requires on-device ADB.",
             socFromCar = "Use the car's SOC instead of Di+",
             socFromCarHint = "Off: Di+ SOC (finer, 0.1 % steps). On: the instrument-cluster SOC, whole %. The other source is the fallback.",
-            syncSettings = "Link",
-            syncCollapse = "Collapse",
             diagnostics = "Diagnostics",
-            diagnosticsHide = "Hide diagnostics",
+            navHome = "Home",
+            navLink = "Link",
+            navSettings = "Settings",
+            notLinked = "This car is not linked to VoltFlow",
+            linkCar = "Link this car",
             save = "Save",
             sendTest = "Send test",
             storageDiag = "BYD storage check",
@@ -1517,10 +1543,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Эксперыментальна: дэман перападключае Wi-Fi кожныя ~60 с, каб тэлеметрыя не гублялася на стаянцы. Патрэбны on-device ADB.",
             socFromCar = "SOC ад машыны, а не ад Di+",
             socFromCarHint = "Выкл — SOC ад Di+ (дакладней, крок 0,1 %). Укл — як на прыборнай панэлі, цэлыя %. Другая крыніца — запасная.",
-            syncSettings = "Прывязка",
-            syncCollapse = "Згарнуць",
             diagnostics = "Дыягностыка",
-            diagnosticsHide = "Схаваць дыягностыку",
+            navHome = "Галоўная",
+            navLink = "Прывязка",
+            navSettings = "Налады",
+            notLinked = "Аўто не прывязана да VoltFlow",
+            linkCar = "Прывязаць аўто",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
             storageDiag = "Дыягностыка BYD",
