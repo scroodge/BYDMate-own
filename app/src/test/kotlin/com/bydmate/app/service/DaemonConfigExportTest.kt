@@ -4,6 +4,7 @@ import com.bydmate.app.daemon.CommandDaemon
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.SettingEntity
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.domain.CloudSocPreference
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +60,30 @@ class DaemonConfigExportTest {
 
         repo.setString(SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE, "false")
         assertFalse(CommandDaemon.loadConf(confPath)!!.keepWifiAwake)
+
+        job.cancel()
+    }
+
+    @Test
+    fun `SOC source switch reaches the daemon and defaults to Di+ when absent`() = runTest {
+        val repo = SettingsRepository(ObservableSettingsDao(linked))
+        val dir = tmp.newFolder()
+        val confPath = java.io.File(dir, DaemonConfigExport.FILE_NAME).path
+
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            DaemonConfigExport.observe(repo).collect { text ->
+                if (text != null) DaemonConfigExport.write(dir, text)
+            }
+        }
+        // Default: nothing written, the daemon parses Di+-first (same as a pre-switch conf).
+        assertFalse(java.io.File(confPath).readText().contains("soc_source"))
+        assertEquals(CloudSocPreference.DIPLUS_FIRST, CommandDaemon.loadConf(confPath)!!.socPreference)
+
+        repo.setString(SettingsRepository.KEY_CLOUD_SOC_SOURCE, "autoservice")
+        assertEquals(CloudSocPreference.AUTOSERVICE_FIRST, CommandDaemon.loadConf(confPath)!!.socPreference)
+
+        repo.setString(SettingsRepository.KEY_CLOUD_SOC_SOURCE, "diplus")
+        assertEquals(CloudSocPreference.DIPLUS_FIRST, CommandDaemon.loadConf(confPath)!!.socPreference)
 
         job.cancel()
     }

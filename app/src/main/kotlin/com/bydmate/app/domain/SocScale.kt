@@ -68,6 +68,27 @@ enum class SocSource(val wireName: String) {
 }
 
 /**
+ * Which source's SOC the cloud payload should carry — the user's choice, exported to both
+ * the in-app sender and the survival daemon (`soc_source=` in `voltflow_cmd.conf`).
+ *
+ * Either way the other source stays as a fallback, so the cloud is never left without SOC
+ * because one source is briefly silent; the payload's own `soc_source` tag says which won.
+ */
+enum class CloudSocPreference(val wireName: String) {
+    /** Di+ first, autoservice only when Di+ has no valid SOC. The behaviour before the switch. */
+    DIPLUS_FIRST("diplus"),
+
+    /** The car's own (cluster/display-scale) SOC first, Di+ only when autoservice has none. */
+    AUTOSERVICE_FIRST("autoservice");
+
+    companion object {
+        /** Unknown or absent values mean the default, so an old or hand-edited conf stays safe. */
+        fun fromWire(value: String?): CloudSocPreference =
+            entries.firstOrNull { it.wireName == value?.trim() } ?: DIPLUS_FIRST
+    }
+}
+
+/**
  * Converts an autoservice (display-scale) reading onto the raw scale so it can be
  * compared with, or substituted for, a di+ reading. Returns null for sentinels and
  * out-of-range values.

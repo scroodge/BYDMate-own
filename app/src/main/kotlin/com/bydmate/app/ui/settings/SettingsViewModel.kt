@@ -22,6 +22,7 @@ import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.repository.TripRepository
+import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.battery.BatteryStateRepository
 import com.bydmate.app.service.UpdateChecker
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -153,6 +154,8 @@ data class SettingsUiState(
     val cloudSyncWifiOnly: Boolean = false,
     val cloudSyncOmitGps: Boolean = false,
     val cloudSyncKeepWifiAwake: Boolean = false,
+    /** Cloud payload carries the car's own SOC instead of Di+'s. */
+    val cloudSocFromCar: Boolean = false,
     val cloudSyncStatus: String? = null,
     val cloudSyncStatusIsError: Boolean = false,
     val lastCloudSyncTs: Long = 0L,
@@ -268,6 +271,7 @@ class SettingsViewModel @Inject constructor(
             val cloudSyncWifiOnly = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_WIFI_ONLY, "false") == "true"
             val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncKeepWifiAwake = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE, "false") == "true"
+            val cloudSocFromCar = settingsRepository.getCloudSocPreference() == CloudSocPreference.AUTOSERVICE_FIRST
             val cloudSyncStatusPair = formatCloudSyncStatus()
             val appLanguage = settingsRepository.getString(
                 SettingsRepository.KEY_APP_LANGUAGE,
@@ -307,6 +311,7 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncWifiOnly = cloudSyncWifiOnly,
                     cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncKeepWifiAwake = cloudSyncKeepWifiAwake,
+                    cloudSocFromCar = cloudSocFromCar,
                     cloudSyncStatus = cloudSyncStatusPair?.first,
                     cloudSyncStatusIsError = cloudSyncStatusPair?.second ?: false,
                     appLanguage = appLanguage,
@@ -717,6 +722,14 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun toggleCloudSocFromCar(fromCar: Boolean) {
+        _uiState.update { it.copy(cloudSocFromCar = fromCar) }
+        viewModelScope.launch {
+            val preference = if (fromCar) CloudSocPreference.AUTOSERVICE_FIRST else CloudSocPreference.DIPLUS_FIRST
+            settingsRepository.setString(SettingsRepository.KEY_CLOUD_SOC_SOURCE, preference.wireName)
+        }
+    }
+
     fun toggleCloudSyncKeepWifiAwake(enabled: Boolean) {
         _uiState.update { it.copy(cloudSyncKeepWifiAwake = enabled) }
         viewModelScope.launch {
@@ -793,6 +806,7 @@ class SettingsViewModel @Inject constructor(
                 currentTripDistanceKm = TrackingService.tripDistanceKm.value,
                 currentTripConsumptionKwh100km = null,
                 location = if (hasFineLocationPermission()) TrackingService.lastLocation.value else null,
+                socPreference = settingsRepository.getCloudSocPreference(),
             )
             _uiState.update { it.copy(cloudSyncStatus = cloudText("Отправка теста...", "Адпраўка тэсту...", "Sending test..."), cloudSyncStatusIsError = false) }
             val result = cloudTelemetrySender?.sendTest(snapshot)

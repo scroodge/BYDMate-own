@@ -17,6 +17,7 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.remote.resolveTelemetrySoc
+import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.SocSource
 import com.bydmate.app.domain.ChargingStateClassifier
 import kotlinx.coroutines.runBlocking
@@ -615,6 +616,8 @@ object CommandDaemon {
         val keepWifiAwake: Boolean = false,
         /** B-03 install identity; absent in a conf written by an app from before B-03. */
         val vehicleUid: String? = null,
+        /** `soc_source` in the conf; absent = Di+ first, as before the app-side switch existed. */
+        val socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
     )
 
     /** `X-Vehicle-Id`, plus the B-03 `X-Vehicle-Uid` once the app has exported one. */
@@ -673,6 +676,8 @@ object CommandDaemon {
         // daemon actually adopts — a UI toggle must show up here within ~30 s (watchdog copy).
         var lastLoggedKeepWifiAwake: Boolean? = null
         var lastLoggedIdentity: String? = null
+        // Same on-car evidence for the SOC-source switch: the daemon's adopted value, not Room's.
+        var lastLoggedSocPreference: CloudSocPreference? = null
         // Last gear/gun state di+ actually reported. `latestData` itself is never cleared to
         // null once di+ has answered once — a failed fetch() just leaves it stale — so these
         // are captured separately at the moment of each successful fetch and read back once
@@ -704,6 +709,11 @@ object CommandDaemon {
                     log("config: keep_wifi_awake=${if (conf.keepWifiAwake) 1 else 0}" +
                         if (lastLoggedKeepWifiAwake == null) " (startup)" else " (changed)")
                     lastLoggedKeepWifiAwake = conf.keepWifiAwake
+                }
+                if (conf.socPreference != lastLoggedSocPreference) {
+                    log("config: soc_source=${conf.socPreference.wireName}" +
+                        if (lastLoggedSocPreference == null) " (startup)" else " (changed)")
+                    lastLoggedSocPreference = conf.socPreference
                 }
                 // B-03 on-car evidence: which identity and name the daemon is pushing under.
                 val identity = "vehicle_id=${conf.vehicleId} vehicle_uid=${conf.vehicleUid ?: "-"}"
@@ -1244,6 +1254,7 @@ object CommandDaemon {
                 autoserviceSocPercent = autoserviceSoc,
                 autoserviceGun = autoserviceGun,
                 capturedAtMs = System.currentTimeMillis(),
+                socPreference = conf.socPreference,
             )
             val payloadJson = CloudTelemetryPayload.build(
                 conf.vehicleId,
@@ -1346,8 +1357,13 @@ object CommandDaemon {
         autoserviceSocPercent: Float?,
         autoserviceGun: Int?,
         capturedAtMs: Long,
+        socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
     ): VehicleTelemetrySnapshot {
-        val resolvedSoc = resolveTelemetrySoc(d.soc, autoserviceSocPercent)
+        val resolvedSoc = resolveTelemetrySoc(
+            d.soc,
+            autoserviceSocPercent,
+            preference = socPreference,
+        )
         val gun = autoserviceGun ?: d.chargeGunState
         val isCharging = ChargingStateClassifier.isCharging(
             autoserviceGun = autoserviceGun,
@@ -1541,6 +1557,7 @@ object CommandDaemon {
             vehicleId = vehicleId,
             keepWifiAwake = props["keep_wifi_awake"] == "1",
             vehicleUid = props["vehicle_uid"]?.takeIf { it.isNotBlank() },
+            socPreference = CloudSocPreference.fromWire(props["soc_source"]),
         )
     }
 

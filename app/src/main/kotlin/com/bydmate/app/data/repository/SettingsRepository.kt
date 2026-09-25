@@ -2,6 +2,7 @@ package com.bydmate.app.data.repository
 
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.SocSource
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -71,6 +72,12 @@ open class SettingsRepository @Inject constructor(
          * (same as autoservice) since the daemon itself needs to already be running.
          */
         const val KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE = "cloud_sync_keep_wifi_awake"
+        /**
+         * Which SOC the cloud payload carries: [com.bydmate.app.domain.CloudSocPreference.wireName]
+         * ("diplus" default / "autoservice"). Read in-app by TrackingService and mirrored to the
+         * daemon as `soc_source=` in `voltflow_cmd.conf` — the daemon cannot read this table.
+         */
+        const val KEY_CLOUD_SOC_SOURCE = "cloud_soc_source"
         const val KEY_CLOUD_SYNC_LAST_OK = "cloud_sync_last_ok"
         const val KEY_CLOUD_SYNC_LAST_TS = "cloud_sync_last_ts"
         const val KEY_CLOUD_SYNC_LAST_ERROR = "cloud_sync_last_error"
@@ -181,6 +188,9 @@ open class SettingsRepository @Inject constructor(
      */
     suspend fun getBatteryCapacity(): Double =
         getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).toDoubleOrNull() ?: 72.9
+
+    suspend fun getCloudSocPreference(): CloudSocPreference =
+        CloudSocPreference.fromWire(getString(KEY_CLOUD_SOC_SOURCE, CloudSocPreference.DIPLUS_FIRST.wireName))
 
     suspend fun getHomeTariff(): Double =
         getString(KEY_HOME_TARIFF, DEFAULT_HOME_TARIFF).toDoubleOrNull() ?: 0.20

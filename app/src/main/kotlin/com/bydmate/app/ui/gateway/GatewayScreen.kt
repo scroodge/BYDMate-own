@@ -39,6 +39,7 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -163,31 +164,51 @@ fun GatewayScreen(
             strings = strings,
         )
     }
+    // Linked cars start collapsed: nothing here needs touching day to day. An unlinked car
+    // starts open, because that is where it gets linked. Pressing the button overrides either.
+    var syncExpandedOverride by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    val syncLinked = state.cloudSyncApiKey.isNotBlank() && state.cloudSyncVehicleId.trim().isNotBlank()
+    var diagnosticsOpen by rememberSaveable { mutableStateOf(false) }
     val cloudSyncCard: @Composable () -> Unit = {
+        val expanded = syncExpandedOverride ?: !syncLinked
         CloudSyncCard(
             enabled = state.cloudSyncEnabled,
-            url = state.cloudSyncUrl,
-            apiKey = state.cloudSyncApiKey,
             linkCode = state.cloudSyncLinkCode,
-            advancedOpen = state.cloudSyncAdvancedOpen,
             linking = state.cloudSyncLinking,
             vehicleId = state.cloudSyncVehicleId,
+            linked = syncLinked,
+            expanded = expanded,
             wifiOnly = state.cloudSyncWifiOnly,
             omitGps = state.cloudSyncOmitGps,
             keepWifiAwake = state.cloudSyncKeepWifiAwake,
+            socFromCar = state.cloudSocFromCar,
             status = state.cloudSyncStatus,
             statusIsError = state.cloudSyncStatusIsError,
             onEnabled = viewModel::toggleCloudSync,
-            onUrl = viewModel::updateCloudSyncUrl,
-            onLinkCode = viewModel::updateCloudSyncLinkCode,
-            onConnect = viewModel::redeemVoltflowLinkCode,
-            onToggleAdvanced = viewModel::toggleCloudSyncAdvanced,
-            onApiKey = viewModel::updateCloudSyncApiKey,
-            onVehicleId = viewModel::updateCloudSyncVehicleId,
+            // Editing pins the card open, so it cannot fold away under the user's fingers the
+            // moment the typed name makes the car count as linked. Connect and Save hand control
+            // back to the automatic rule: once the car really is linked the card folds itself.
+            onLinkCode = { syncExpandedOverride = true; viewModel.updateCloudSyncLinkCode(it) },
+            onConnect = { syncExpandedOverride = null; viewModel.redeemVoltflowLinkCode() },
+            onToggleExpanded = { syncExpandedOverride = !expanded },
+            onVehicleId = { syncExpandedOverride = true; viewModel.updateCloudSyncVehicleId(it) },
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onKeepWifiAwake = viewModel::toggleCloudSyncKeepWifiAwake,
-            onSave = viewModel::saveCloudSyncSettings,
+            onSocFromCar = viewModel::toggleCloudSocFromCar,
+            onSave = { syncExpandedOverride = null; viewModel.saveCloudSyncSettings() },
+            strings = strings,
+        )
+    }
+    val cloudDiagnosticsCard: @Composable () -> Unit = {
+        CloudDiagnosticsCard(
+            url = state.cloudSyncUrl,
+            apiKey = state.cloudSyncApiKey,
+            vehicleId = state.cloudSyncVehicleId,
+            status = state.cloudSyncStatus,
+            statusIsError = state.cloudSyncStatusIsError,
+            onUrl = viewModel::updateCloudSyncUrl,
+            onApiKey = viewModel::updateCloudSyncApiKey,
             onTest = viewModel::sendCloudTestPayload,
             diagnosticLog = state.diagnosticLog,
             onDiagnostics = viewModel::runDiagnostics,
@@ -214,6 +235,25 @@ fun GatewayScreen(
         )
     }
     val logCaptureCard: @Composable () -> Unit = { LogCaptureCard(strings = strings) }
+    // One button hides every troubleshooting control; nothing in it opens unless it is pressed.
+    val diagnosticsSection: @Composable () -> Unit = {
+        Button(
+            onClick = { diagnosticsOpen = !diagnosticsOpen },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+        ) {
+            Text(
+                if (diagnosticsOpen) strings.diagnosticsHide else strings.diagnostics,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        if (diagnosticsOpen) {
+            cloudDiagnosticsCard()
+            advancedCard()
+            logCaptureCard()
+        }
+    }
     val updatesCard: @Composable () -> Unit = {
         UpdatesCard(
             autoCheckUpdates = autoCheckUpdates,
@@ -280,8 +320,7 @@ fun GatewayScreen(
                         }
                         WideColumn(Modifier.weight(1f)) {
                             widgetCard()
-                            advancedCard()
-                            logCaptureCard()
+                            diagnosticsSection()
                         }
                     }
                 }
@@ -304,9 +343,8 @@ fun GatewayScreen(
                 liveDataCard()
                 widgetCard()
                 cloudSyncCard()
-                advancedCard()
-                logCaptureCard()
                 updatesCard()
+                diagnosticsSection()
                 footer()
                 Gap(8.dp)
             }
@@ -840,32 +878,28 @@ private fun LiveDataCard(
 @Composable
 private fun CloudSyncCard(
     enabled: Boolean,
-    url: String,
-    apiKey: String,
     linkCode: String,
-    advancedOpen: Boolean,
     linking: Boolean,
     vehicleId: String,
+    /** Car is already linked to the cloud: the card starts collapsed to a one-line summary. */
+    linked: Boolean,
+    expanded: Boolean,
     wifiOnly: Boolean,
     omitGps: Boolean,
     keepWifiAwake: Boolean,
+    socFromCar: Boolean,
     status: String?,
     statusIsError: Boolean,
     onEnabled: (Boolean) -> Unit,
-    onUrl: (String) -> Unit,
     onLinkCode: (String) -> Unit,
     onConnect: () -> Unit,
-    onToggleAdvanced: () -> Unit,
-    onApiKey: (String) -> Unit,
+    onToggleExpanded: () -> Unit,
     onVehicleId: (String) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
     onOmitGps: (Boolean) -> Unit,
     onKeepWifiAwake: (Boolean) -> Unit,
+    onSocFromCar: (Boolean) -> Unit,
     onSave: () -> Unit,
-    onTest: () -> Unit,
-    diagnosticLog: String?,
-    onDiagnostics: () -> Unit,
-    onClearDiagnostics: () -> Unit,
     strings: GatewayStrings,
 ) {
     GatewayCard {
@@ -880,72 +914,55 @@ private fun CloudSyncCard(
             }
             Switch(checked = enabled, onCheckedChange = onEnabled, colors = bydSwitchColors())
         }
-        Gap(10.dp)
         val vehicleNameMissing = vehicleId.trim().isBlank()
-        GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
-        GatewayHint(strings.linkCodeHint)
-        GatewayTextField(
-            label = strings.carName,
-            value = vehicleId,
-            onValueChange = onVehicleId,
-            keyboardType = KeyboardType.Text,
-            isError = vehicleNameMissing,
-        )
-        if (vehicleNameMissing) {
-            Text(strings.carNameRequired, color = AccentOrange, fontSize = 11.sp)
-        } else {
-            GatewayHint(strings.carNameHint)
+        if (linked) {
+            Gap(6.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(vehicleId.trim(), color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Button(
+                    onClick = onToggleExpanded,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+                ) {
+                    Text(if (expanded) strings.syncCollapse else strings.syncSettings, fontWeight = FontWeight.Medium)
+                }
+            }
         }
-        Button(
-            onClick = onConnect,
-            enabled = !linking && linkCode.length == 6 && !vehicleNameMissing,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
-        ) {
-            Text(
-                if (linking) strings.connecting else strings.connect,
-                fontWeight = FontWeight.Bold,
+        if (expanded) {
+            Gap(10.dp)
+            GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
+            GatewayHint(strings.linkCodeHint)
+            GatewayTextField(
+                label = strings.carName,
+                value = vehicleId,
+                onValueChange = onVehicleId,
+                keyboardType = KeyboardType.Text,
+                isError = vehicleNameMissing,
             )
+            if (vehicleNameMissing) {
+                Text(strings.carNameRequired, color = AccentOrange, fontSize = 11.sp)
+            } else {
+                GatewayHint(strings.carNameHint)
+            }
+            Button(
+                onClick = onConnect,
+                enabled = !linking && linkCode.length == 6 && !vehicleNameMissing,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+            ) {
+                Text(
+                    if (linking) strings.connecting else strings.connect,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
         Gap(6.dp)
         val compact = LocalGatewayCompact.current
-        val diagnosticsButton: @Composable (Modifier) -> Unit = { mod ->
-            // Storage diagnostics: works without ADB (plain File API). Lets remote
-            // users report whether their DiLink writes the BYD energydata database.
-            Button(
-                onClick = onDiagnostics,
-                modifier = mod,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
-            ) {
-                Text(strings.storageDiag)
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(
-                onClick = onToggleAdvanced,
-                modifier = if (compact) Modifier.weight(1f) else Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
-            ) {
-                Text(strings.advanced, fontWeight = FontWeight.Medium)
-            }
-            if (compact) diagnosticsButton(Modifier.weight(1f))
-        }
-        if (advancedOpen) {
-            Gap(8.dp)
-            GatewayTextField(
-                label = strings.endpointUrl,
-                value = url,
-                onValueChange = onUrl,
-                keyboardType = KeyboardType.Uri,
-                placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
-            )
-            GatewayHint(strings.endpointHint)
-            GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
-            GatewayHint(strings.apiKeyHint)
-        }
         val wifiOnlySwitch: @Composable (Modifier) -> Unit = { mod ->
             Row(
                 modifier = mod,
@@ -986,6 +1003,17 @@ private fun CloudSyncCard(
             }
             Switch(checked = keepWifiAwake, onCheckedChange = onKeepWifiAwake, colors = bydSwitchColors())
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(strings.socFromCar, color = TextPrimary, fontSize = 14.sp)
+                Text(strings.socFromCarHint, color = TextSecondary, fontSize = 11.sp)
+            }
+            Switch(checked = socFromCar, onCheckedChange = onSocFromCar, colors = bydSwitchColors())
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = onSave,
@@ -995,23 +1023,68 @@ private fun CloudSyncCard(
             ) {
                 Text(strings.save, fontWeight = FontWeight.Bold)
             }
+        }
+        status?.let {
+            Gap(8.dp)
+            Text(
+                it,
+                color = if (statusIsError) AccentOrange else AccentGreen,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+/** Everything a user only needs when something is wrong; shown only after "Диагностика" is pressed. */
+@Composable
+private fun CloudDiagnosticsCard(
+    url: String,
+    apiKey: String,
+    vehicleId: String,
+    status: String?,
+    statusIsError: Boolean,
+    onUrl: (String) -> Unit,
+    onApiKey: (String) -> Unit,
+    onTest: () -> Unit,
+    diagnosticLog: String?,
+    onDiagnostics: () -> Unit,
+    onClearDiagnostics: () -> Unit,
+    strings: GatewayStrings,
+) {
+    GatewayCard {
+        GatewayTextField(
+            label = strings.endpointUrl,
+            value = url,
+            onValueChange = onUrl,
+            keyboardType = KeyboardType.Uri,
+            placeholder = SettingsRepository.CLOUD_SYNC_ENDPOINT_PLACEHOLDER,
+        )
+        GatewayHint(strings.endpointHint)
+        GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
+        GatewayHint(strings.apiKeyHint)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = onTest,
-                enabled = !vehicleNameMissing,
+                enabled = vehicleId.trim().isNotBlank(),
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
             ) {
                 Text(strings.sendTest)
             }
-        }
-        if (!compact) {
-            Gap(6.dp)
-            diagnosticsButton(Modifier.fillMaxWidth())
+            // Storage diagnostics: works without ADB (plain File API). Lets remote
+            // users report whether their DiLink writes the BYD energydata database.
+            Button(
+                onClick = onDiagnostics,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+            ) {
+                Text(strings.storageDiag)
+            }
         }
         if (diagnosticLog != null) {
             val clipboard = LocalClipboardManager.current
-            Gap(6.dp)
             SelectionContainer {
                 Text(
                     diagnosticLog,
@@ -1038,13 +1111,9 @@ private fun CloudSyncCard(
                 }
             }
         }
+        // The sync card may be collapsed, so a test result has to be visible right here.
         status?.let {
-            Gap(8.dp)
-            Text(
-                it,
-                color = if (statusIsError) AccentOrange else AccentGreen,
-                fontSize = 12.sp,
-            )
+            Text(it, color = if (statusIsError) AccentOrange else AccentGreen, fontSize = 12.sp)
         }
     }
 }
@@ -1166,6 +1235,12 @@ private data class GatewayStrings(
     val wifiOnly: String,
     val gpsPrivacy: String,
     val keepWifiAwake: String,
+    val socFromCar: String,
+    val socFromCarHint: String,
+    val syncSettings: String,
+    val syncCollapse: String,
+    val diagnostics: String,
+    val diagnosticsHide: String,
     val keepWifiAwakeHint: String,
     val save: String,
     val sendTest: String,
@@ -1256,6 +1331,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Скрывать GPS",
             keepWifiAwake = "Держать Wi-Fi на стоянке",
             keepWifiAwakeHint = "Экспериментально: демон переподключает Wi-Fi каждые ~60 с, чтобы телеметрия не терялась на стоянке. Нужен on-device ADB.",
+            socFromCar = "SOC от машины, а не от Di+",
+            socFromCarHint = "Выкл — SOC от Di+ (точнее, шаг 0,1 %). Вкл — как на приборной панели, целые %. Второй источник — запасной.",
+            syncSettings = "Привязка",
+            syncCollapse = "Свернуть",
+            diagnostics = "Диагностика",
+            diagnosticsHide = "Скрыть диагностику",
             save = "Сохранить",
             sendTest = "Отправить тест",
             storageDiag = "Диагностика BYD",
@@ -1342,6 +1423,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Hide GPS",
             keepWifiAwake = "Keep Wi-Fi awake while parked",
             keepWifiAwakeHint = "Experimental: the daemon reconnects Wi-Fi every ~60s so telemetry doesn't drop while parked. Requires on-device ADB.",
+            socFromCar = "Use the car's SOC instead of Di+",
+            socFromCarHint = "Off: Di+ SOC (finer, 0.1 % steps). On: the instrument-cluster SOC, whole %. The other source is the fallback.",
+            syncSettings = "Link",
+            syncCollapse = "Collapse",
+            diagnostics = "Diagnostics",
+            diagnosticsHide = "Hide diagnostics",
             save = "Save",
             sendTest = "Send test",
             storageDiag = "BYD storage check",
@@ -1428,6 +1515,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             gpsPrivacy = "Хаваць GPS",
             keepWifiAwake = "Трымаць Wi-Fi на стаянцы",
             keepWifiAwakeHint = "Эксперыментальна: дэман перападключае Wi-Fi кожныя ~60 с, каб тэлеметрыя не гублялася на стаянцы. Патрэбны on-device ADB.",
+            socFromCar = "SOC ад машыны, а не ад Di+",
+            socFromCarHint = "Выкл — SOC ад Di+ (дакладней, крок 0,1 %). Укл — як на прыборнай панэлі, цэлыя %. Другая крыніца — запасная.",
+            syncSettings = "Прывязка",
+            syncCollapse = "Згарнуць",
+            diagnostics = "Дыягностыка",
+            diagnosticsHide = "Схаваць дыягностыку",
             save = "Захаваць",
             sendTest = "Адправіць тэст",
             storageDiag = "Дыягностыка BYD",

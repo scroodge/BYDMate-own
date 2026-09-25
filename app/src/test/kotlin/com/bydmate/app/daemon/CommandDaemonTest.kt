@@ -331,6 +331,8 @@ class CommandDaemonTest {
         sohPercent: Int? = null,
         autoserviceSocPercent: Float? = null,
         autoserviceGun: Int? = null,
+        socPreference: com.bydmate.app.domain.CloudSocPreference =
+            com.bydmate.app.domain.CloudSocPreference.DIPLUS_FIRST,
     ): JSONObject {
         val snapshot = CommandDaemon.buildDaemonSnapshot(
             d = d,
@@ -339,6 +341,7 @@ class CommandDaemonTest {
             autoserviceSocPercent = autoserviceSocPercent,
             autoserviceGun = autoserviceGun,
             capturedAtMs = t0,
+            socPreference = socPreference,
         )
         return JSONObject(CloudTelemetryPayload.build("way", snapshot))
     }
@@ -353,6 +356,22 @@ class CommandDaemonTest {
         val diPlusSoc = payload.getJSONObject("diplus").get("soc").toString()
         assertEquals("69.5", telemetrySoc)
         assertEquals(telemetrySoc, diPlusSoc)
+    }
+
+    @Test
+    fun `car SOC preference reaches the wire and Di+ precise does not override it`() {
+        // Di+ 2.0 sends socPrecise 69.5; the user chose the car's own 68. The wire must carry
+        // 68 tagged "autoservice" — not the 69.5 that `socPrecise ?: soc` used to leak through.
+        val payload = daemonPayload(
+            d = diPars(soc = 70, socPrecise = 69.5),
+            autoserviceSocPercent = 68f,
+            socPreference = com.bydmate.app.domain.CloudSocPreference.AUTOSERVICE_FIRST,
+        )
+        val telemetry = payload.getJSONObject("telemetry")
+        assertEquals("68", telemetry.get("soc").toString())
+        assertEquals("autoservice", telemetry.getString("soc_source"))
+        // The nested Di+ object keeps reporting Di+'s own reading.
+        assertEquals("69.5", payload.getJSONObject("diplus").get("soc").toString())
     }
 
     @Test

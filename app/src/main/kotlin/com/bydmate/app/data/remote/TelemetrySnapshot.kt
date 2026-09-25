@@ -3,6 +3,7 @@ package com.bydmate.app.data.remote
 import android.location.Location
 import com.bydmate.app.data.autoservice.BatteryReading
 import com.bydmate.app.data.autoservice.ChargingReading
+import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.SocScaleCalibration
 import com.bydmate.app.domain.SocSource
 import com.bydmate.app.domain.ChargingStateClassifier
@@ -27,8 +28,18 @@ internal fun resolveTelemetrySoc(
     diPlusSoc: Int?,
     autoserviceSocPercent: Float?,
     calibration: SocScaleCalibration = SocScaleCalibration.IDENTITY,
+    preference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
 ): ResolvedSoc {
-    diPlusSoc?.takeIf { it in 0..100 }?.let { return ResolvedSoc(it, SocSource.DIPLUS) }
+    val diPlus = diPlusSoc?.takeIf { it in 0..100 }
+    if (preference == CloudSocPreference.AUTOSERVICE_FIRST) {
+        // The user asked for the car's own number, i.e. the cluster scale — so no [calibration]
+        // here: converting to the raw scale would hand back roughly the Di+ value they opted
+        // out of. The identity map still applies the range/sentinel check and rounding.
+        SocScaleCalibration.IDENTITY.autoserviceToRawPercent(autoserviceSocPercent)
+            ?.let { return ResolvedSoc(it, SocSource.AUTOSERVICE) }
+        return ResolvedSoc(diPlus, diPlus?.let { SocSource.DIPLUS })
+    }
+    diPlus?.let { return ResolvedSoc(it, SocSource.DIPLUS) }
     val converted = calibration.autoserviceToRawPercent(autoserviceSocPercent)
     return ResolvedSoc(converted, converted?.let { SocSource.AUTOSERVICE })
 }
@@ -101,8 +112,9 @@ data class VehicleTelemetrySnapshot(
             currentTripConsumptionKwh100km: Double?,
             location: Location?,
             socCalibration: SocScaleCalibration = SocScaleCalibration.IDENTITY,
+            socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
         ): VehicleTelemetrySnapshot {
-            val resolvedSoc = resolveTelemetrySoc(data?.soc, battery?.socPercent, socCalibration)
+            val resolvedSoc = resolveTelemetrySoc(data?.soc, battery?.socPercent, socCalibration, socPreference)
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
             val powerKw = saneEnginePower ?: data?.power
             val gunState = charging?.gunConnectState ?: data?.chargeGunState

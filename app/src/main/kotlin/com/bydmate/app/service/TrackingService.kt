@@ -28,6 +28,7 @@ import com.bydmate.app.data.remote.VehicleCommandPoller
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
+import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.AiRangeEstimator
@@ -93,6 +94,8 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var cloudSyncEnabledCached: Boolean = false
     @Volatile private var autoserviceEnabledCached: Boolean = false
     @Volatile private var omitGpsCached: Boolean = false
+    // Cached like the flags above: read on every 1 Hz tick, so it must not touch Room there.
+    @Volatile private var socPreferenceCached: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST
     private var pollingJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -856,6 +859,11 @@ class TrackingService : Service(), LocationListener {
                 settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS)
                     .collect { omitGpsCached = (it ?: "false") == "true" }
             }
+            socPreferenceCached = settingsRepository.getCloudSocPreference()
+            launch {
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_CLOUD_SOC_SOURCE)
+                    .collect { socPreferenceCached = CloudSocPreference.fromWire(it) }
+            }
             // Off the poll loop on purpose: a throw in the estimator must never abort a
             // tick upstream of the cloud push and the liveness beacon (see CHANGELOG 0.5.2).
             launch { runAiRangeLoop() }
@@ -1078,6 +1086,7 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
+                                socPreference = socPreferenceCached,
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }

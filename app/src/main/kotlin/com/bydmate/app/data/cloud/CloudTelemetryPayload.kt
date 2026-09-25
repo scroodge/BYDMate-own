@@ -4,6 +4,7 @@ import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
+import com.bydmate.app.domain.SocSource
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -56,7 +57,11 @@ object CloudTelemetryPayload {
             // Prefer di+ 2.0's 0.1 %-resolution SOC; `diplus_soc` is numeric cloud-side so
             // the decimal survives. Falls back to the rounded value for di+ 1.x and for
             // the autoservice-sourced SOC, keeping the key's type stable either way.
-            putIfPresent("soc", snapshot.diPlusData?.socPrecise ?: snapshot.soc)
+            // `socPrecise` is a Di+ value: when the user picked (or fell back to) the car's own
+            // SOC it must not override it, or `soc_source` would tag a Di+ number "autoservice".
+            val diPlusPrecise = snapshot.diPlusData?.socPrecise
+                ?.takeIf { snapshot.socSource != SocSource.AUTOSERVICE }
+            putIfPresent("soc", diPlusPrecise ?: snapshot.soc)
             // Which scale `soc` is on. autoservice serves the display SOC, di+ 2.0 the raw
             // BMS SOC, and the two differ by up to ~2 pp — see SocScaleCalibration. Without
             // this tag a fallback sample is indistinguishable from a di+ one.
