@@ -6,10 +6,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,8 +32,10 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +52,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -119,26 +125,7 @@ fun GatewayScreen(
         viewModel.refreshFloatingWidget()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        LanguageSwitcher(
-            language = state.appLanguage,
-            onLanguageChange = viewModel::updateAppLanguage,
-        )
-        Header(appVersion = state.appVersion, strings = strings)
-
-        if (backgroundRestricted) {
-            BackgroundRestrictionCard(
-                onOpenSettings = { BackgroundRestriction.openBackgroundSettings(context) },
-                strings = strings,
-            )
-        }
-
+    val statusCard: @Composable () -> Unit = {
         StatusCard(
             isRunning = isRunning,
             diPlusConnected = diPlusConnected,
@@ -150,7 +137,8 @@ fun GatewayScreen(
             onStop = { TrackingService.stop(context) },
             strings = strings,
         )
-
+    }
+    val liveDataCard: @Composable () -> Unit = {
         LiveDataCard(
             soc = data?.soc,
             speed = data?.speed,
@@ -166,14 +154,16 @@ fun GatewayScreen(
             lastUpdateMs = lastDiPlusUpdateMs,
             strings = strings,
         )
-
+    }
+    val widgetCard: @Composable () -> Unit = {
         FloatingWidgetCard(
             enabled = state.floatingWidgetEnabled,
             needsPermission = state.floatingWidgetNeedsPermission,
             onEnabledChange = viewModel::setFloatingWidgetEnabled,
             strings = strings,
         )
-
+    }
+    val cloudSyncCard: @Composable () -> Unit = {
         CloudSyncCard(
             enabled = state.cloudSyncEnabled,
             url = state.cloudSyncUrl,
@@ -204,7 +194,8 @@ fun GatewayScreen(
             onClearDiagnostics = viewModel::clearDiagnosticLog,
             strings = strings,
         )
-
+    }
+    val advancedCard: @Composable () -> Unit = {
         AdvancedFeaturesCard(
             adbStatus = state.adbStatus,
             onConnectAdb = viewModel::connectAdb,
@@ -221,33 +212,142 @@ fun GatewayScreen(
             onOpenNetworkSettings = { HeadUnitSettings.openParkedNetworkSettings(context) },
             strings = strings,
         )
-
-        LogCaptureCard(strings = strings)
-
+    }
+    val logCaptureCard: @Composable () -> Unit = { LogCaptureCard(strings = strings) }
+    val updatesCard: @Composable () -> Unit = {
         UpdatesCard(
             autoCheckUpdates = autoCheckUpdates,
             onAutoCheckChange = onAutoCheckUpdatesChange,
             onCheckNow = onCheckUpdatesNow,
             strings = strings,
         )
-
+    }
+    val backgroundCard: @Composable () -> Unit = {
+        if (backgroundRestricted) {
+            BackgroundRestrictionCard(
+                onOpenSettings = { BackgroundRestriction.openBackgroundSettings(context) },
+                strings = strings,
+            )
+        }
+    }
+    val footer: @Composable () -> Unit = {
         Text(
             strings.gatewayMode,
             color = TextMuted,
             fontSize = 12.sp,
             lineHeight = 17.sp,
         )
-        Spacer(modifier = Modifier.height(8.dp))
     }
+
+    // The head unit is a wide, short landscape screen (~960x540 dp): a single tall column
+    // scrolls for ages while most of the width sits empty. On wide windows lay the cards
+    // out in three side-by-side columns; narrow windows keep the original single column.
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        if (maxWidth >= WIDE_LAYOUT_MIN_WIDTH) {
+            CompositionLocalProvider(LocalGatewayCompact provides true) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            Header(appVersion = state.appVersion, strings = strings)
+                        }
+                        LanguageSwitcher(
+                            language = state.appLanguage,
+                            onLanguageChange = viewModel::updateAppLanguage,
+                            modifier = Modifier,
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        WideColumn(Modifier.weight(1f)) {
+                            backgroundCard()
+                            statusCard()
+                            liveDataCard()
+                            updatesCard()
+                            footer()
+                        }
+                        WideColumn(Modifier.weight(1f)) {
+                            cloudSyncCard()
+                        }
+                        WideColumn(Modifier.weight(1f)) {
+                            widgetCard()
+                            advancedCard()
+                            logCaptureCard()
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                LanguageSwitcher(
+                    language = state.appLanguage,
+                    onLanguageChange = viewModel::updateAppLanguage,
+                )
+                Header(appVersion = state.appVersion, strings = strings)
+                backgroundCard()
+                statusCard()
+                liveDataCard()
+                widgetCard()
+                cloudSyncCard()
+                advancedCard()
+                logCaptureCard()
+                updatesCard()
+                footer()
+                Gap(8.dp)
+            }
+        }
+    }
+}
+
+/** Below this width the screen falls back to the single scrolling column. */
+private val WIDE_LAYOUT_MIN_WIDTH = 720.dp
+
+/** True while cards are laid out in the dense multi-column head-unit layout. */
+private val LocalGatewayCompact = compositionLocalOf { false }
+
+/**
+ * Vertical gap inside a card. Cards already space children with `spacedBy`, so in the
+ * dense layout the extra Spacer is dropped instead of doubling every gap.
+ */
+@Composable
+private fun ColumnScope.Gap(height: Dp) {
+    if (!LocalGatewayCompact.current) Spacer(modifier = Modifier.height(height))
+}
+
+@Composable
+private fun WideColumn(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
 }
 
 @Composable
 private fun LanguageSwitcher(
     language: String,
     onLanguageChange: (String) -> Unit,
+    modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier,
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -299,7 +399,7 @@ private fun FloatingWidgetCard(
 ) {
     GatewayCard {
         Text(strings.widgetTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -316,7 +416,7 @@ private fun FloatingWidgetCard(
             )
         }
         if (needsPermission) {
-            Spacer(modifier = Modifier.height(8.dp))
+            Gap(8.dp)
             Text(strings.widgetNeedsPermission, color = AccentOrange, fontSize = 12.sp, lineHeight = 17.sp)
         }
     }
@@ -331,7 +431,7 @@ private fun UpdatesCard(
 ) {
     GatewayCard {
         Text(strings.updates, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -347,7 +447,7 @@ private fun UpdatesCard(
                 colors = bydSwitchColors(),
             )
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         Button(
             onClick = onCheckNow,
             modifier = Modifier.fillMaxWidth(),
@@ -390,6 +490,9 @@ private fun LogCaptureCard(strings: GatewayStrings) {
         if (isRecording) {
             Text(strings.logRecording, color = AccentOrange, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
+        val compact = LocalGatewayCompact.current
+        val buttonModifier = if (compact) Modifier.weight(1f) else Modifier.fillMaxWidth()
+        val buttons: @Composable () -> Unit = {
         Button(
             onClick = {
                 if (isRecording) {
@@ -398,7 +501,7 @@ private fun LogCaptureCard(strings: GatewayStrings) {
                     Toast.makeText(context, strings.logStartFailed, Toast.LENGTH_LONG).show()
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = buttonModifier,
             shape = RoundedCornerShape(8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = if (isRecording) AccentOrange else AccentGreen,
@@ -424,7 +527,7 @@ private fun LogCaptureCard(strings: GatewayStrings) {
                 }
             },
             enabled = hasLog,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = buttonModifier,
             shape = RoundedCornerShape(8.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = CardSurfaceElevated,
@@ -435,12 +538,19 @@ private fun LogCaptureCard(strings: GatewayStrings) {
         ) {
             Text(strings.logSave, fontWeight = FontWeight.Medium)
         }
+        }
+        if (compact) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) { buttons() }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { buttons() }
+        }
     }
 }
 
 @Composable
 private fun Header(appVersion: String, strings: GatewayStrings) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    val compact = LocalGatewayCompact.current
+    Column(verticalArrangement = Arrangement.spacedBy(if (compact) 0.dp else 4.dp)) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -448,19 +558,19 @@ private fun Header(appVersion: String, strings: GatewayStrings) {
             Image(
                 painter = painterResource(id = R.drawable.voltflow_cloud_release),
                 contentDescription = null,
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.size(if (compact) 32.dp else 40.dp),
             )
             Text(
                 "VoltFlow Mate",
                 color = TextPrimary,
-                fontSize = 28.sp,
+                fontSize = if (compact) 22.sp else 28.sp,
                 fontWeight = FontWeight.Bold,
             )
         }
         Text(
             "${strings.bridge} • v$appVersion",
             color = TextSecondary,
-            fontSize = 14.sp,
+            fontSize = if (compact) 12.sp else 14.sp,
         )
     }
 }
@@ -557,7 +667,7 @@ private fun AdvancedFeaturesCard(
                 ) { Text(strings.adbGuideAction, fontWeight = FontWeight.Medium) }
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
+        Gap(6.dp)
         val daemonStatusText = when (daemonStatus) {
             DaemonStatus.RUNNING -> strings.daemonStatusRunning
             DaemonStatus.RUNNING_NO_WATCHDOG -> strings.daemonStatusPartial
@@ -604,11 +714,11 @@ private fun StatusCard(
 ) {
     GatewayCard {
         Text(strings.gatewayStatus, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         StatusRow(strings.service, if (isRunning) strings.running else strings.stopped, isRunning)
         StatusRow("DiPlus", if (diPlusConnected) strings.connected else strings.waiting, diPlusConnected)
         cloudSyncStatus?.let {
-            Spacer(modifier = Modifier.height(6.dp))
+            Gap(6.dp)
             Text(it, color = if (cloudSyncStatusIsError) AccentOrange else TextSecondary, fontSize = 12.sp)
         }
         if (lastSyncTs > 0L) {
@@ -628,14 +738,14 @@ private fun StatusCard(
                 ageSec < 3600 -> "${ageSec / 60}m"
                 else -> "${ageSec / 3600}h"
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            Gap(4.dp)
             Text(
                 "⟳ $ageText ${if (lastSyncOk) "✓" else "✗"}",
                 color = if (lastSyncOk) TextSecondary else AccentOrange,
                 fontSize = 12.sp,
             )
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Button(
                 onClick = onStart,
@@ -693,26 +803,26 @@ private fun LiveDataCard(
                 ageSec < 3600 -> "${ageSec / 60}m"
                 else -> "${ageSec / 3600}h"
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            Gap(4.dp)
             Text(
                 "⟳ $ageText" + if (stale) " ⚠" else "",
                 color = if (stale) AccentOrange else TextSecondary,
                 fontSize = 12.sp,
             )
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric("SOC", fmt(soc?.toDouble(), 0, "%"), Modifier.weight(1f))
             Metric(strings.speed, fmt(speed?.toDouble(), 0, " km/h"), Modifier.weight(1f))
             Metric(strings.power, fmt(power, 1, " kW"), Modifier.weight(1f))
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Gap(8.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric(strings.range, fmt(rangeKm, 0, " km"), Modifier.weight(1f))
             Metric(strings.trip, fmt(tripDistanceKm, 1, " km"), Modifier.weight(1f))
             Metric("12V", fmt(auxVoltage, 1, " V"), Modifier.weight(1f))
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Gap(8.dp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             Metric(strings.battery, fmtTemp(batteryTemp), Modifier.weight(1f))
             // DiLink 3.0 (2024 cars) has no cabin temperature sensor — hide rather than show "—".
@@ -721,7 +831,7 @@ private fun LiveDataCard(
             }
             Metric(strings.outside, fmtTemp(outsideTemp), Modifier.weight(1f))
         }
-        Spacer(modifier = Modifier.height(8.dp))
+        Gap(8.dp)
         StatusRow(strings.odometer, fmt(odometer, 1, " km"), odometer != null)
         StatusRow("GPS", if (hasLocation) strings.available else strings.noPermissionData, hasLocation)
     }
@@ -770,7 +880,7 @@ private fun CloudSyncCard(
             }
             Switch(checked = enabled, onCheckedChange = onEnabled, colors = bydSwitchColors())
         }
-        Spacer(modifier = Modifier.height(10.dp))
+        Gap(10.dp)
         val vehicleNameMissing = vehicleId.trim().isBlank()
         GatewayTextField(strings.linkCode, linkCode, onLinkCode, KeyboardType.Number)
         GatewayHint(strings.linkCodeHint)
@@ -798,17 +908,33 @@ private fun CloudSyncCard(
                 fontWeight = FontWeight.Bold,
             )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Button(
-            onClick = onToggleAdvanced,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
-        ) {
-            Text(strings.advanced, fontWeight = FontWeight.Medium)
+        Gap(6.dp)
+        val compact = LocalGatewayCompact.current
+        val diagnosticsButton: @Composable (Modifier) -> Unit = { mod ->
+            // Storage diagnostics: works without ADB (plain File API). Lets remote
+            // users report whether their DiLink writes the BYD energydata database.
+            Button(
+                onClick = onDiagnostics,
+                modifier = mod,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
+            ) {
+                Text(strings.storageDiag)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = onToggleAdvanced,
+                modifier = if (compact) Modifier.weight(1f) else Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+            ) {
+                Text(strings.advanced, fontWeight = FontWeight.Medium)
+            }
+            if (compact) diagnosticsButton(Modifier.weight(1f))
         }
         if (advancedOpen) {
-            Spacer(modifier = Modifier.height(8.dp))
+            Gap(8.dp)
             GatewayTextField(
                 label = strings.endpointUrl,
                 value = url,
@@ -820,21 +946,34 @@ private fun CloudSyncCard(
             GatewayTextField("API Key", apiKey, onApiKey, KeyboardType.Password, password = true)
             GatewayHint(strings.apiKeyHint)
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(strings.wifiOnly, color = TextPrimary, fontSize = 14.sp)
-            Switch(checked = wifiOnly, onCheckedChange = onWifiOnly, colors = bydSwitchColors())
+        val wifiOnlySwitch: @Composable (Modifier) -> Unit = { mod ->
+            Row(
+                modifier = mod,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(strings.wifiOnly, color = TextPrimary, fontSize = 14.sp)
+                Switch(checked = wifiOnly, onCheckedChange = onWifiOnly, colors = bydSwitchColors())
+            }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(strings.gpsPrivacy, color = TextPrimary, fontSize = 14.sp)
-            Switch(checked = omitGps, onCheckedChange = onOmitGps, colors = bydSwitchColors())
+        val gpsPrivacySwitch: @Composable (Modifier) -> Unit = { mod ->
+            Row(
+                modifier = mod,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(strings.gpsPrivacy, color = TextPrimary, fontSize = 14.sp)
+                Switch(checked = omitGps, onCheckedChange = onOmitGps, colors = bydSwitchColors())
+            }
+        }
+        if (compact) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                wifiOnlySwitch(Modifier.weight(1f))
+                gpsPrivacySwitch(Modifier.weight(1f))
+            }
+        } else {
+            wifiOnlySwitch(Modifier.fillMaxWidth())
+            gpsPrivacySwitch(Modifier.fillMaxWidth())
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -866,20 +1005,13 @@ private fun CloudSyncCard(
                 Text(strings.sendTest)
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        // Storage diagnostics: works without ADB (plain File API). Lets remote
-        // users report whether their DiLink writes the BYD energydata database.
-        Button(
-            onClick = onDiagnostics,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary)
-        ) {
-            Text(strings.storageDiag)
+        if (!compact) {
+            Gap(6.dp)
+            diagnosticsButton(Modifier.fillMaxWidth())
         }
         if (diagnosticLog != null) {
             val clipboard = LocalClipboardManager.current
-            Spacer(modifier = Modifier.height(6.dp))
+            Gap(6.dp)
             SelectionContainer {
                 Text(
                     diagnosticLog,
@@ -907,7 +1039,7 @@ private fun CloudSyncCard(
             }
         }
         status?.let {
-            Spacer(modifier = Modifier.height(8.dp))
+            Gap(8.dp)
             Text(
                 it,
                 color = if (statusIsError) AccentOrange else AccentGreen,
@@ -959,14 +1091,15 @@ private fun GatewayTextField(
 
 @Composable
 private fun GatewayCard(content: @Composable ColumnScope.() -> Unit) {
+    val compact = LocalGatewayCompact.current
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurface),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(if (compact) 10.dp else 14.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
             content = content,
         )
     }

@@ -449,6 +449,7 @@ class CloudTelemetrySender @Inject constructor(
                 // someone opened the live view now that the command poll idles at 60s.
                 onLiveFastGranted(ack.liveFastSeconds)
                 onOfflineBufferCapGranted(ack.offlineBufferCapBytes)
+                ack.batteryCapacityKwh?.let { CloudBatteryCapacity.apply(settingsRepository, it, "telemetry ack") }
                 if (ack.isFullyAcknowledged()) {
                     items.forEach { queueDao.markFinished(it.id, null, now) }
                     // Guarded by sampleCount: if a sample folded into the hour while this

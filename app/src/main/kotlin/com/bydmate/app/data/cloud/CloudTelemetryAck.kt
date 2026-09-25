@@ -21,6 +21,8 @@ data class CloudTelemetryAck(
     val liveFastSeconds: Int = 0,
     /** Persisted server rollout ceiling; null means an older server made no policy decision. */
     val offlineBufferCapBytes: Long? = null,
+    /** Car-profile capacity (see CloudBatteryCapacity); null from older servers. */
+    val batteryCapacityKwh: Double? = null,
 ) {
     fun isFullyAcknowledged(): Boolean =
         parseError == null &&
@@ -80,6 +82,7 @@ object CloudTelemetryAckParser {
                 } else {
                     null
                 },
+                batteryCapacityKwh = CloudBatteryCapacity.fromJson(json),
             )
         } catch (e: Exception) {
             CloudTelemetryAck(
