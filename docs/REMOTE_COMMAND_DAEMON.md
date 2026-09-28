@@ -53,14 +53,14 @@ parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetr
 - `CommandDaemon.shouldDeferToApp()` grades that age by what the push would actually write
   (`"telemetry push skipped (app alive …)"`, throttled to one line per minute):
 
-  | Push kind | Threshold | Why |
-  | --- | --- | --- |
-  | history-writing (cadence, gun edge, forced-full) | `APP_ALIVE_FULL_TTL_MS` = **20 s** | a false "app is dead" stores a duplicate sample, so it keeps margin for a GC pause |
-  | status-only (`live_only`) | `APP_ALIVE_LIVE_TTL_MS` = **5 s** | writes no history row at all — worst case is a few seconds of the daemon's reduced snapshot |
+  | Push kind                                        | Threshold                          | Why                                                                                         |
+  | ------------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------- |
+  | history-writing (cadence, gun edge, forced-full) | `APP_ALIVE_FULL_TTL_MS` = **20 s** | a false "app is dead" stores a duplicate sample, so it keeps margin for a GC pause          |
+  | status-only (`live_only`)                        | `APP_ALIVE_LIVE_TTL_MS` = **5 s**  | writes no history row at all — worst case is a few seconds of the daemon's reduced snapshot |
 
 - **Driving is not a skip (since 2026-09-25).** The daemon used to stay silent whenever
   `classifyFromDiPars == DRIVING`, regardless of the beacon. On-car on 2026-09-25 the daemon's
-  own queue `content call` respawned the app process after quickboot *without* `TrackingService`
+  own queue `content call` respawned the app process after quickboot _without_ `TrackingService`
   (`am_proc_start … content provider DaemonQueueBrokerProvider`), so a drive in that state would
   have reached the cloud as nothing at all. A drive now gets past the beacon guard only when the
   app is not sending (the beacon is written right before every enqueue and is older than 20 s);
@@ -74,7 +74,7 @@ parking maneuvers. Since **v0.3.9.5** the two are mutually exclusive on telemetr
   power-off force-stop never runs `onDestroy`, which is why the thresholds above still matter.
 
 **Operational impact (2026-07-22).** These thresholds replaced a single flat 120 s TTL, and the
-push timers now advance only when a push actually went out — previously a *skipped* push still
+push timers now advance only when a push actually went out — previously a _skipped_ push still
 reset the 60 s history cadence, so after the beacon finally aged out the daemon had just
 restarted its own clock. Together those two produced a measured **124-236 s** of stale live
 status after every park (14 prod transitions on `way`, 2026-07-21/22). Expected now: **~13 s**
@@ -115,6 +115,7 @@ the server stores it in `bydmate_live_snapshots.mate_version` so the APK version
 head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-contract-ru.md).
 
 **Proven behavior** (Yuan Up 2024, DiLink 3.0, 2026-06-10):
+
 - Car off (`PWR=0`), app force-stopped by BYD `collectPowerOffEvent`
 - Daemon (uid shell) survived; DiPlus still accessible at `127.0.0.1:8988`
 - `bydmate_live_snapshots` updated at the normal ~60 s cadence (`SOC=32, PWR=0, GUN=1, V12=13.7`)
@@ -127,15 +128,15 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 
 ## Components
 
-| Piece | Where | Role |
-|---|---|---|
-| `CommandDaemon` | in the APK (`com.bydmate.app.daemon`) | poll→guard→actuate→ack loop + normal 60 s telemetry cadence (only when the app is not sending); gun-state edges are immediate and an active live-view grant adds 3 s `live_only` status pushes |
-| `start_voltflow_cmd.sh` | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh)) | watchdog: launches & respawns the daemon, auto-restarts it after an APK update, starts the cluster dashboard once per power cycle. Does **not** supervise the app since B-22 stage 1 (2026-09-25) — see `AppSupervisor` |
-| `AppSupervisor` | in the APK (`com.bydmate.app.daemon`), ticked by `CommandDaemon` every 30 s | relaunches the app when not running (`MainActivity`) or when the process lives but the beacon is >120 s old (`SilentStartActivity`); 60 s cooldown in `/data/local/tmp/voltflow_app_relaunch_ts`, shared with pre-B-22 watchdogs still in the field so they never double-start. Ships with the APK, unlike the script |
-| `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot |
-| `voltflow_cmd.conf` | `/data/local/tmp/` | cloud creds (url / api_key / vehicle_id) |
-| `exportDaemonConfig()` | `TrackingService` | app writes the conf to external storage so the shell daemon can read it |
-| `voltflow_mate_heartbeat` | `<externalFilesDir>/` | app-alive beacon (epoch millis, rewritten at 1 Hz); daemon reads its age to suppress its telemetry push while the app is sending — 20 s for history-writing pushes, 5 s for `live_only` status |
+| Piece                          | Where                                                                                                      | Role                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CommandDaemon`                | in the APK (`com.bydmate.app.daemon`)                                                                      | poll→guard→actuate→ack loop + normal 60 s telemetry cadence (only when the app is not sending); gun-state edges are immediate and an active live-view grant adds 3 s `live_only` status pushes                                                                                                                        |
+| `start_voltflow_cmd.sh`        | `/data/local/tmp/` (from [`tools/`](../tools/start_voltflow_cmd.sh))                                       | watchdog: launches & respawns the daemon, auto-restarts it after an APK update, starts the cluster dashboard once per power cycle. Does **not** supervise the app since B-22 stage 1 (2026-09-25) — see `AppSupervisor`                                                                                               |
+| `AppSupervisor`                | in the APK (`com.bydmate.app.daemon`), ticked by `CommandDaemon` every 30 s                                | relaunches the app when not running (`MainActivity`) or when the process lives but the beacon is >120 s old (`SilentStartActivity`); 60 s cooldown in `/data/local/tmp/voltflow_app_relaunch_ts`, shared with pre-B-22 watchdogs still in the field so they never double-start. Ships with the APK, unlike the script |
+| `assets/start_voltflow_cmd.sh` | APK asset copied to `<externalFilesDir>/start_voltflow_cmd.sh` by `TrackingService.deployDaemonLauncher()` | automatic app-side launcher used when the app revives the daemon after boot/quickboot                                                                                                                                                                                                                                 |
+| `voltflow_cmd.conf`            | `/data/local/tmp/`                                                                                         | cloud creds (url / api_key / vehicle_id)                                                                                                                                                                                                                                                                              |
+| `exportDaemonConfig()`         | `TrackingService`                                                                                          | app writes the conf to external storage so the shell daemon can read it                                                                                                                                                                                                                                               |
+| `voltflow_mate_heartbeat`      | `<externalFilesDir>/`                                                                                      | app-alive beacon (epoch millis, rewritten at 1 Hz); daemon reads its age to suppress its telemetry push while the app is sending — 20 s for history-writing pushes, 5 s for `live_only` status                                                                                                                        |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
 
@@ -252,7 +253,7 @@ cross-checked.
 ## Prerequisites (one time)
 
 - **Wireless ADB enabled** on the head unit, or **Termux** (the daemon must be started by a
-  *shell-uid* context — a normal app cannot launch it; there is no Shizuku and
+  _shell-uid_ context — a normal app cannot launch it; there is no Shizuku and
   `AdbOnDeviceClient` is intentionally write-barriered).
 - Cloud Sync configured in the app (Settings → Cloud Sync: URL, API key, Vehicle ID) — the app
   exports these to the conf automatically on `TrackingService` start.
@@ -263,8 +264,10 @@ cross-checked.
 HOST=192.168.43.71:5555          # head unit adb address (adjust)
 adb connect $HOST
 
-# 1. Install the APK (see "Building" below) and open the app once so it exports the conf.
+# 1. Install the APK (see docs/guides/build-apk-ru.md for the build command) and open the app once so it exports the conf.
 adb -s $HOST install -r app/build/outputs/apk/debug/VoltFlow-Mate-v*.apk
+#or
+pv "app/build/outputs/apk/debug/VoltFlow-Mate-v*.apk" | adb -s 192.168.43.71:5555 shell pm install -r -S $(stat -f%z "app/build/outputs/apk/debug/VoltFlow-Mate-v*.apk")
 adb -s $HOST shell monkey -p dev.scroodge.cloudevmate -c android.intent.category.LAUNCHER 1
 #    -> verify: /storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_cmd.conf exists
 
@@ -441,16 +444,16 @@ adb -s $HOST shell "pkill -f voltflow_cmd_daemon"                          # kil
 
 ## Troubleshooting
 
-| Symptom | Check |
-|---|---|
-| Daemon not running | `ps -A | grep voltflow_cmd_daemon`; read `voltflow_cmd_daemon.log` |
-| `CommandDaemon` config blank | conf missing/incomplete — open the app (Cloud Sync must be enabled) so `exportDaemonConfig` runs; confirm `/data/local/tmp/voltflow_cmd.conf` |
-| Commands stay `pending` | daemon can't reach the cloud — check head-unit WiFi/`curl` to the URL; check api_key/vehicle_id |
-| Commands `rejected` `vehicle_moving`/`gear_not_park` | safety guard — car must be parked (speed 0, gear P) |
-| Old code still running after APK update | watchdog restarts within ~30 s; or `pkill -f voltflow_cmd_daemon` to force immediate respawn |
-| Daemon starts after car wakes but disappears during sleep | check for stale launcher asset, stale watchdog PID, missing watchdog shell, and whether `ensureCommandDaemonRunning()` only saw an already-running daemon |
-| `/data/local/tmp/start_voltflow_cmd.sh` fixed but app relaunch still old | `app/src/main/assets/start_voltflow_cmd.sh` is stale; sync the asset and rebuild APK |
-| Nothing after reboot | boot persistence not set up — see above |
+| Symptom                                                                  | Check                                                                                                                                                     |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Daemon not running                                                       | `ps -A                                                                                                                                                    | grep voltflow_cmd_daemon`; read `voltflow_cmd_daemon.log` |
+| `CommandDaemon` config blank                                             | conf missing/incomplete — open the app (Cloud Sync must be enabled) so `exportDaemonConfig` runs; confirm `/data/local/tmp/voltflow_cmd.conf`             |
+| Commands stay `pending`                                                  | daemon can't reach the cloud — check head-unit WiFi/`curl` to the URL; check api_key/vehicle_id                                                           |
+| Commands `rejected` `vehicle_moving`/`gear_not_park`                     | safety guard — car must be parked (speed 0, gear P)                                                                                                       |
+| Old code still running after APK update                                  | watchdog restarts within ~30 s; or `pkill -f voltflow_cmd_daemon` to force immediate respawn                                                              |
+| Daemon starts after car wakes but disappears during sleep                | check for stale launcher asset, stale watchdog PID, missing watchdog shell, and whether `ensureCommandDaemonRunning()` only saw an already-running daemon |
+| `/data/local/tmp/start_voltflow_cmd.sh` fixed but app relaunch still old | `app/src/main/assets/start_voltflow_cmd.sh` is stale; sync the asset and rebuild APK                                                                      |
+| Nothing after reboot                                                     | boot persistence not set up — see above                                                                                                                   |
 
 ## Safety
 
