@@ -246,7 +246,10 @@ object WidgetController {
         ) { c, a, s, cam, regen -> UiBundle(c, a, s, cam, regen) }
         dataJob = scope.launch {
             combine(
-                TrackingService.lastData,
+                // Follows the "SOC from the car" switch: the car's whole-% SOC replaces Di+'s.
+                TrackingService.lastData.combine(TrackingService.carSoc) { d, car ->
+                    if (d != null && car != null) d.copy(soc = car, socPrecise = null) else d
+                },
                 CloudLinkStatus.events,
                 TrackingService.sessionStartedAt,
                 TrackingService.tripDistanceKm,

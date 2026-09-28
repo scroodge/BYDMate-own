@@ -29,6 +29,7 @@ import com.bydmate.app.data.remote.DiParsData
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.repository.ChargeRepository
 import com.bydmate.app.domain.CloudSocPreference
+import com.bydmate.app.data.remote.resolveTelemetrySoc
 import com.bydmate.app.domain.tracker.TripState
 import com.bydmate.app.domain.tracker.TripTracker
 import com.bydmate.app.domain.calculator.AiRangeEstimator
@@ -162,6 +163,9 @@ class TrackingService : Service(), LocationListener {
     private val flushInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pendingCloudFlush = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var lastSohBatteryReadMs: Long = 0L
+    @Volatile private var carSocPercent: Float? = null
+    @Volatile private var carSocReadMs: Long = 0L
+    @Volatile private var carSocOkMs: Long = 0L
     // Persisted independently from the per-tick in-memory telemetry state. See
     // LastKnownSocPersistencePolicy: an offline-charge baseline must survive an abrupt stop,
     // but does not need two SQLite writes every second while SOC is unchanged.
@@ -192,6 +196,9 @@ class TrackingService : Service(), LocationListener {
         // covers the DiLink wind-down after ignition-off.
         private const val SESSION_IDLE_CLOSE_MS = 10_000L
         private const val SOH_BATTERY_READ_INTERVAL_MS = 15L * 60_000L
+        /** How often the car's SOC is polled while the user prefers it; a held value ages out after the stale bound. */
+        private const val CAR_SOC_READ_INTERVAL_MS = 5_000L
+        private const val CAR_SOC_STALE_MS = 15_000L
         // Throttle for the periodic INFO summary so logcat doesn't get flooded.
         private const val SUMMARY_LOG_INTERVAL_MS = 60_000L
         private const val AI_RANGE_INPUT_REFRESH_MS = 60_000L
@@ -202,6 +209,13 @@ class TrackingService : Service(), LocationListener {
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
+
+        /**
+         * The car's own (display-scale, whole %) SOC while the user prefers it over Di+, else
+         * null. The widget substitutes it for the Di+ SOC so the switch is visible there too.
+         */
+        private val _carSoc = MutableStateFlow<Int?>(null)
+        val carSoc: StateFlow<Int?> = _carSoc
 
         private val _lastRangeKm = MutableStateFlow<Double?>(null)
         val lastRangeKm: StateFlow<Double?> = _lastRangeKm
@@ -825,6 +839,49 @@ class TrackingService : Service(), LocationListener {
             "provider=${location.provider}")
     }
 
+    /**
+     * Keeps the car's display-scale SOC fresh while the user prefers it over Di+. Without this
+     * the autoservice battery is only read while charging / Di+ has no SOC / every 15 min, so
+     * the preference would silently fall back to Di+ on almost every tick.
+     */
+    private suspend fun refreshCarSoc(nowMs: Long, diPlusSoc: Int?) {
+        if (socPreferenceCached != CloudSocPreference.AUTOSERVICE_FIRST || !autoserviceEnabledCached) {
+            carSocPercent = null
+            carSocReadMs = 0L
+            _carSoc.value = null
+            return
+        }
+        if (nowMs - carSocReadMs >= CAR_SOC_READ_INTERVAL_MS) {
+            carSocReadMs = nowMs
+            val read = kotlinx.coroutines.withTimeoutOrNull(900L) {
+                autoserviceClient.getFloat(
+                    com.bydmate.app.data.autoservice.FidRegistry.DEV_STATISTIC,
+                    com.bydmate.app.data.autoservice.FidRegistry.FID_SOC,
+                )
+            }
+            // A failed read keeps the last value until it goes stale rather than flickering to Di+.
+            if (read != null) {
+                carSocPercent = read
+                carSocOkMs = nowMs
+            } else if (nowMs - carSocOkMs > CAR_SOC_STALE_MS) {
+                carSocPercent = null
+            }
+        }
+        val resolved = resolveTelemetrySoc(diPlusSoc, carSocPercent, preference = CloudSocPreference.AUTOSERVICE_FIRST)
+        _carSoc.value = resolved.percent.takeIf { resolved.source == com.bydmate.app.domain.SocSource.AUTOSERVICE }
+    }
+
+    /** The held car SOC as a battery reading, so the cloud snapshot can honour the preference between full reads. */
+    private fun carSocOnlyReading(nowMs: Long): com.bydmate.app.data.autoservice.BatteryReading? =
+        carSocPercent
+            ?.takeIf { nowMs - carSocOkMs <= CAR_SOC_STALE_MS }
+            ?.let {
+                com.bydmate.app.data.autoservice.BatteryReading(
+                    sohPercent = null, socPercent = it, lifetimeKwh = null,
+                    lifetimeMileageKm = null, voltage12v = null, readAtMs = carSocOkMs,
+                )
+            }
+
     /** [runIsolated] bound to this service's TAG/Log.w — see its doc for why. */
     private suspend fun <T> isolated(label: String, block: suspend () -> T): T? =
         runIsolated(label, onError = { l, e -> Log.w(TAG, "$l failed: ${e.message}", e) }, block)
@@ -1030,6 +1087,7 @@ class TrackingService : Service(), LocationListener {
                         isolated("updateNotification") { updateNotification(data) }
                         maybeLogSessionSummary(nowMs, data, sessionId)
                         isolated("renewWakeLockIfNeeded") { renewWakeLockIfNeeded() }
+                        isolated("refreshCarSoc") { refreshCarSoc(nowMs, data.soc) }
                         val cloudEnabled = cloudSyncEnabledCached
                         if (cloudEnabled) {
                             var autoserviceOn = autoserviceEnabledCached
@@ -1078,7 +1136,7 @@ class TrackingService : Service(), LocationListener {
                             }
                             val telemetrySnapshot = VehicleTelemetrySnapshot.from(
                                 data = data,
-                                battery = telemetryBattery,
+                                battery = telemetryBattery ?: carSocOnlyReading(nowMs),
                                 charging = telemetryCharging,
                                 enginePowerKw = telemetryEnginePowerKw,
                                 capturedAtMs = nowMs,
