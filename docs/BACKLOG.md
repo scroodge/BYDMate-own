@@ -5,7 +5,7 @@ Actionable, prioritized task list. Milestone-level view lives in
 термины — в [`CONTEXT.md`](../CONTEXT.md); решения — в [`adr/`](adr/);
 инженерные заметки в [`project-notes.md`](project-notes.md).
 
-- **Обновлено:** 2026-09-28 · база: `main` @ `0.6.0` (`versionCode 343`, тег `v0.6.0`).
+- **Обновлено:** 2026-09-28 · база: `main` @ `0.6.0` (`versionCode 343`, тег `v0.6.0` → `b183f9c`).
 - Приоритет: **P0** блокер · **P1** скоро · **P2** когда дойдут руки.
 - Статус: `todo` · `in-progress` · `blocked` · `shipped` (выпущено, но критерий
   приёмки ещё не подтверждён) · `done`.
