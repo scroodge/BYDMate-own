@@ -146,6 +146,8 @@ data class SettingsUiState(
     val floatingWidgetEnabled: Boolean = false,
     /** Enabled, but the overlay permission is still missing — the widget cannot draw. */
     val floatingWidgetNeedsPermission: Boolean = false,
+    /** Proportional widget size, 0.7–2.0 (see WidgetPreferences.SCALE_MIN/MAX). */
+    val floatingWidgetScale: Float = 1.0f,
     val daemonStatus: DaemonStatus = DaemonStatus.UNKNOWN,
     val cloudSyncEnabled: Boolean = true,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
@@ -362,9 +364,25 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun refreshFloatingWidget() {
-        val enabled = com.bydmate.app.ui.widget.WidgetPreferences(appContext).isEnabled()
+        val prefs = com.bydmate.app.ui.widget.WidgetPreferences(appContext)
+        val enabled = prefs.isEnabled()
         val canDraw = android.provider.Settings.canDrawOverlays(appContext)
-        _uiState.update { it.copy(floatingWidgetEnabled = enabled, floatingWidgetNeedsPermission = enabled && !canDraw) }
+        _uiState.update {
+            it.copy(
+                floatingWidgetEnabled = enabled,
+                floatingWidgetNeedsPermission = enabled && !canDraw,
+                floatingWidgetScale = prefs.getScale(),
+            )
+        }
+    }
+
+    /** Called live as the user drags the size slider in Settings — see FloatingWidgetCard. */
+    fun setFloatingWidgetScale(scale: Float) {
+        com.bydmate.app.ui.widget.WidgetPreferences(appContext).setScale(scale)
+        _uiState.update { it.copy(floatingWidgetScale = scale.coerceIn(
+            com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MIN,
+            com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MAX,
+        )) }
     }
 
     /**

@@ -40,6 +40,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -176,7 +178,9 @@ fun GatewayScreen(
         FloatingWidgetCard(
             enabled = state.floatingWidgetEnabled,
             needsPermission = state.floatingWidgetNeedsPermission,
+            scale = state.floatingWidgetScale,
             onEnabledChange = viewModel::setFloatingWidgetEnabled,
+            onScaleChange = viewModel::setFloatingWidgetScale,
             strings = strings,
         )
     }
@@ -571,9 +575,20 @@ private fun LanguageButton(
 private fun FloatingWidgetCard(
     enabled: Boolean,
     needsPermission: Boolean,
+    scale: Float,
     onEnabledChange: (Boolean) -> Unit,
+    onScaleChange: (Float) -> Unit,
     strings: GatewayStrings,
 ) {
+    val context = LocalContext.current
+    // Live preview: while this card is on screen and the widget is enabled, pop the
+    // overlay over Settings so dragging the slider shows the resize immediately —
+    // see WidgetController.setPreviewMode. Stops on nav-away (Compose disposes this
+    // card when `section` switches away from SETTINGS).
+    DisposableEffect(enabled) {
+        if (enabled) com.bydmate.app.ui.widget.WidgetController.setPreviewMode(context, true)
+        onDispose { com.bydmate.app.ui.widget.WidgetController.setPreviewMode(context, false) }
+    }
     GatewayCard {
         Text(strings.widgetTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         Gap(10.dp)
@@ -595,6 +610,31 @@ private fun FloatingWidgetCard(
         if (needsPermission) {
             Gap(8.dp)
             Text(strings.widgetNeedsPermission, color = AccentOrange, fontSize = 12.sp, lineHeight = 17.sp)
+        }
+        if (enabled) {
+            Gap(14.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(strings.widgetScaleLabel, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    text = "${(scale * 100).toInt()}%",
+                    color = TextSecondary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            Slider(
+                value = scale,
+                onValueChange = onScaleChange,
+                valueRange = com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MIN..
+                    com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MAX,
+                colors = SliderDefaults.colors(
+                    thumbColor = AccentGreen,
+                    activeTrackColor = AccentGreen,
+                ),
+            )
         }
     }
 }
@@ -1392,6 +1432,7 @@ private data class GatewayStrings(
     val widgetToggle: String,
     val widgetHint: String,
     val widgetNeedsPermission: String,
+    val widgetScaleLabel: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -1489,6 +1530,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetToggle = "Показывать поверх других приложений",
             widgetHint = "AI запас хода, AI расход с трендом, температуры, 12V и связь с облаком. Появляется, когда VoltFlow Mate свёрнут.",
             widgetNeedsPermission = "Нет разрешения на показ поверх окон. Подключите ADB в «Расширенных функциях» и включите виджет ещё раз.",
+            widgetScaleLabel = "Размер виджета",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -1583,6 +1625,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetToggle = "Show over other apps",
             widgetHint = "AI range, AI consumption with trend, temperatures, 12V and cloud link. Appears while VoltFlow Mate is in the background.",
             widgetNeedsPermission = "No permission to draw over other apps. Connect ADB under Advanced features, then turn the widget on again.",
+            widgetScaleLabel = "Widget size",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -1677,6 +1720,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetToggle = "Паказваць паверх іншых праграм",
             widgetHint = "AI запас ходу, AI расход з трэндам, тэмпературы, 12V і сувязь з воблакам. З'яўляецца, калі VoltFlow Mate згорнуты.",
             widgetNeedsPermission = "Няма дазволу паказваць паверх вокнаў. Падключыце ADB у «Пашыраных функцыях» і ўключыце віджэт яшчэ раз.",
+            widgetScaleLabel = "Памер віджэта",
         )
     }
 
