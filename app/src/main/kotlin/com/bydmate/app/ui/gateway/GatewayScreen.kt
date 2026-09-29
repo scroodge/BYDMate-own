@@ -112,6 +112,8 @@ fun GatewayScreen(
     val data by TrackingService.lastData.collectAsStateWithLifecycle()
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
+    val chargingPowerKw by TrackingService.chargingPowerKw.collectAsStateWithLifecycle()
+    val chargingTimeToFullMin by TrackingService.chargingTimeToFullMin.collectAsStateWithLifecycle()
     val location by TrackingService.lastLocation.collectAsStateWithLifecycle()
     val lastDiPlusUpdateMs by TrackingService.lastDiPlusUpdateMs.collectAsStateWithLifecycle()
     val strings = gatewayStrings(state.appLanguage)
@@ -167,6 +169,8 @@ fun GatewayScreen(
             odometer = data?.mileage,
             rangeKm = rangeKm,
             tripDistanceKm = tripDistanceKm,
+            chargingPowerKw = chargingPowerKw,
+            chargingTimeToFullMin = chargingTimeToFullMin,
             hasLocation = location != null,
             lastUpdateMs = lastDiPlusUpdateMs,
             strings = strings,
@@ -998,6 +1002,8 @@ private fun LiveDataCard(
     odometer: Double?,
     rangeKm: Double?,
     tripDistanceKm: Double?,
+    chargingPowerKw: Double?,
+    chargingTimeToFullMin: Double?,
     hasLocation: Boolean,
     lastUpdateMs: Long,
     strings: GatewayStrings,
@@ -1051,6 +1057,16 @@ private fun LiveDataCard(
                 Metric(strings.cabin, fmtTemp(cabinTemp), Modifier.weight(1f))
             }
             Metric(strings.outside, fmtTemp(outsideTemp), Modifier.weight(1f))
+        }
+        // Only while actively charging — chargingPowerKw is null the rest of the time
+        // (see TrackingService.updateChargingPower), so this row would otherwise show
+        // a permanent pair of dashes.
+        if (chargingPowerKw != null) {
+            Gap(8.dp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Metric(strings.chargingPower, fmt(chargingPowerKw, 1, " kW"), Modifier.weight(1f))
+                Metric(strings.timeToFull, fmtEtaMinutes(chargingTimeToFullMin), Modifier.weight(1f))
+            }
         }
         Gap(8.dp)
         StatusRow(strings.odometer, fmt(odometer, 1, " km"), odometer != null)
@@ -1353,6 +1369,8 @@ private data class GatewayStrings(
     val latestData: String,
     val speed: String,
     val power: String,
+    val chargingPower: String,
+    val timeToFull: String,
     val range: String,
     val trip: String,
     val battery: String,
@@ -1451,6 +1469,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             latestData = "Последние данные авто",
             speed = "Скорость",
             power = "Мощность",
+            chargingPower = "Мощность зарядки",
+            timeToFull = "До полной зарядки",
             range = "Запас",
             trip = "Поездка",
             battery = "Батарея",
@@ -1546,6 +1566,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             latestData = "Latest vehicle data",
             speed = "Speed",
             power = "Power",
+            chargingPower = "Charging power",
+            timeToFull = "Time to full",
             range = "Range",
             trip = "Trip",
             battery = "Battery",
@@ -1641,6 +1663,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             latestData = "Апошнія даныя аўто",
             speed = "Хуткасць",
             power = "Магутнасць",
+            chargingPower = "Магутнасць зарадкі",
+            timeToFull = "Да поўнай зарадкі",
             range = "Запас",
             trip = "Паездка",
             battery = "Батарэя",
@@ -1729,3 +1753,11 @@ private fun fmt(value: Double?, digits: Int, suffix: String): String =
 
 private fun fmtTemp(value: Int?): String =
     if (value != null && value in -50..90) "$value °C" else "--"
+
+private fun fmtEtaMinutes(value: Double?): String {
+    if (value == null || !value.isFinite() || value < 0.0) return "--"
+    val totalMin = (value + 0.5).toInt()
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}

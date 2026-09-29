@@ -152,6 +152,14 @@ class TrackingService : Service(), LocationListener {
     // meaningfully blocked.
     private val powerLock = Any()
     private var observedChargingPowerKwAbs: Double = 0.0
+    // Instantaneous charging power, derived as Δ(chargingCapacityKwh)/Δt between
+    // consecutive autoservice charging snapshots and EMA-smoothed. We don't have a
+    // validated charge-current FID (unlike engine power / battery voltage), so this
+    // per-tick counter derivative is the only source for a live kW readout. See
+    // updateChargingPower() for the derivation and CHARGING_POWER_EMA_TAU_MS for why.
+    private var lastChargingCapacityKwh: Float? = null
+    private var lastChargingCapacityAtMs: Long? = null
+    private var smoothedChargingPowerKw: Double? = null
     private var pollTickCount: Long = 0
     // Prevents two pollGunStateForEdge coroutines from running concurrently.
     // Without this guard a slow autoservice read could overlap with the next
@@ -205,6 +213,15 @@ class TrackingService : Service(), LocationListener {
         private const val AI_RANGE_SNAPSHOT_FRESH_MS = 10_000L
         private const val AI_RANGE_MOVING_KMH = 5.0
         private const val DAEMON_SPOOL_IMPORT_INTERVAL_MS = 30_000L
+        // Smoothing window for the Δ(chargingCapacityKwh)/Δt charging-power derivative.
+        // The BMS session-energy counter appears to quantize in ~0.01 kWh steps, which
+        // at a 1 s poll is tens of kW of tick-to-tick noise — long enough tau to average
+        // that out while still tracking a real ramp/taper within a lap or two.
+        private const val CHARGING_POWER_EMA_TAU_MS = 30_000L
+        // If the gap between two chargingCapacityKwh samples exceeds this (app backgrounded,
+        // ADB hiccup, autoservice reads paused between charge sessions), the delta would
+        // silently average real charge time with idle time — re-anchor instead of computing.
+        private const val MAX_CHARGING_SAMPLE_GAP_MS = 15_000L
         private val CHARGING_GUN_STATES = setOf(2, 3, 4, 5)
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
@@ -219,6 +236,18 @@ class TrackingService : Service(), LocationListener {
 
         private val _lastRangeKm = MutableStateFlow<Double?>(null)
         val lastRangeKm: StateFlow<Double?> = _lastRangeKm
+
+        /**
+         * Live charging power in kW, derived from Δ(chargingCapacityKwh)/Δt and
+         * EMA-smoothed (see [updateChargingPower]). Null when not charging, or when
+         * autoservice/cloud sync is unavailable (same gating as the charging snapshot read).
+         */
+        private val _chargingPowerKw = MutableStateFlow<Double?>(null)
+        val chargingPowerKw: StateFlow<Double?> = _chargingPowerKw
+
+        /** Estimated minutes to 100% SOC at the current [chargingPowerKw]. Null when not charging. */
+        private val _chargingTimeToFullMin = MutableStateFlow<Double?>(null)
+        val chargingTimeToFullMin: StateFlow<Double?> = _chargingTimeToFullMin
 
         /** Live trip distance (current odometer - session-start odometer). Null when idle or data unready. */
         private val _tripDistanceKm = MutableStateFlow<Double?>(null)
@@ -886,6 +915,68 @@ class TrackingService : Service(), LocationListener {
     private suspend fun <T> isolated(label: String, block: suspend () -> T): T? =
         runIsolated(label, onError = { l, e -> Log.w(TAG, "$l failed: ${e.message}", e) }, block)
 
+    /**
+     * Updates [_chargingPowerKw] / [_chargingTimeToFullMin] from the latest autoservice
+     * charging snapshot. `chargingCapacityKwh` is a per-session energy counter, not a
+     * power/current signal — we derive power as the EMA-smoothed slope between
+     * consecutive readings (see CHARGING_POWER_EMA_TAU_MS) because this app has no
+     * validated charge-current FID to read directly.
+     */
+    private suspend fun updateChargingPower(
+        reading: com.bydmate.app.data.autoservice.ChargingReading?,
+        soc: Int?,
+    ) {
+        val capKwh = reading?.chargingCapacityKwh
+        if (capKwh == null) {
+            // Not charging (or snapshot unavailable this tick) — drop the baseline so a
+            // stale power/ETA doesn't linger once charging actually stops.
+            lastChargingCapacityKwh = null
+            lastChargingCapacityAtMs = null
+            smoothedChargingPowerKw = null
+            _chargingPowerKw.value = null
+            _chargingTimeToFullMin.value = null
+            return
+        }
+        val ts = reading.readAtMs
+        val prevKwh = lastChargingCapacityKwh
+        val prevTs = lastChargingCapacityAtMs
+        if (prevKwh != null && prevTs != null && ts > prevTs) {
+            val dtMs = ts - prevTs
+            if (dtMs > MAX_CHARGING_SAMPLE_GAP_MS) {
+                // Gap too large to trust — averaging real charge time with idle time
+                // would understate power. Re-anchor on this sample instead.
+                smoothedChargingPowerKw = null
+            } else {
+                val dKwh = capKwh - prevKwh
+                // Negative delta = session counter reset (gun replugged mid-read) — skip
+                // this sample rather than feed a negative "power" into the EMA.
+                if (dKwh >= 0.0) {
+                    val rawPowerKw = dKwh / (dtMs / 3_600_000.0)
+                    smoothedChargingPowerKw = ema(smoothedChargingPowerKw, rawPowerKw, dtMs, CHARGING_POWER_EMA_TAU_MS)
+                }
+            }
+        }
+        lastChargingCapacityKwh = capKwh
+        lastChargingCapacityAtMs = ts
+
+        val powerKw = smoothedChargingPowerKw
+        _chargingPowerKw.value = powerKw
+
+        _chargingTimeToFullMin.value = if (powerKw != null && powerKw > 0.05 && soc != null && soc in 0..100) {
+            val cap = settingsRepository.getBatteryCapacity()
+            if (cap > 0.0) ((100 - soc) / 100.0) * cap / powerKw * 60.0 else null
+        } else {
+            null
+        }
+    }
+
+    private fun ema(previous: Double?, sample: Double, dtMs: Long, tauMs: Long): Double {
+        if (previous == null) return sample
+        if (dtMs <= 0) return previous
+        val alpha = 1.0 - kotlin.math.exp(-dtMs.toDouble() / tauMs)
+        return previous + alpha * (sample - previous)
+    }
+
     private fun startPolling() {
         Log.i(TAG, "Starting polling with interval=${POLL_INTERVAL_MS}ms")
         pollingJob = serviceScope.launch {
@@ -1120,6 +1211,12 @@ class TrackingService : Service(), LocationListener {
                             val telemetryCharging = if (readSnapshots) {
                                 runCatching { autoserviceClient.readChargingSnapshot() }.getOrNull()
                             } else null
+                            // Δ(kWh)/Δt charging-power estimate. Isolated per the same rule as
+                            // odometerBuffer/automationEngine above: this must never abort the
+                            // tick ahead of maybeSendCloudTelemetry (CHANGELOG 0.5.2).
+                            isolated("chargingPowerCalc") {
+                                updateChargingPower(telemetryCharging, data.soc)
+                            }
                             val telemetryEnginePowerKw: Int? = if (autoserviceOn) {
                                 runCatching {
                                     kotlinx.coroutines.withTimeoutOrNull(900L) {
