@@ -567,6 +567,78 @@ i.e. **65.4 kW**, against `发动机功率` reporting `-65` at the same moment.
 So the practical ceiling is now **~20 s resolution fractional power**, not "session-average
 only". Consuming it is 2.0-only (`versionCode >= 158`) and is part of **B-14**.
 
+### Live pack voltage and current exist in `/api/historyStatus` (decompile, 2026-09-30)
+
+**This supersedes "no single live float-power parameter" above.** Decompiling
+`diplus.2.0.0-beta8-3.apk` (`versionCode 168`, sha256 `f9fe9b35…56ed`) shows the
+`/api/historyStatus` handler (`com/van/diplus/host/persistent/d1.java`) building its reply
+from a live `VehicleDetailSnapshot` (`com/van/logic/telemetry/vehicle/`), not from segment
+aggregates. Among the keys it emits:
+
+| Key | Type | Note |
+|---|---|---|
+| `batteryPackVoltage` | double, V | validity bit `VALID_BATTERY_PACK_VOLTAGE = 256` |
+| `batteryPackCurrent` | double, A | validity bit `VALID_BATTERY_PACK_CURRENT = 512`; **negative while charging** |
+| `batteryPower` | double, kW | `max(0, −V × I / 1000)` when both are finite, else non-finite |
+| `rawChargingPower`, `rawChargingCapacity` | double | raw charging-module values |
+| `rawChargingGunState`, `rawChargingWorkState`, `rawChargingBatteryState` | int | |
+| `soc`, `socPrecise` | double, bool | already used for the raw-SOC scale (see above) |
+
+`VehicleSegmentStateMachine` (L273-276) uses the same `(−V) × I / 1000`, so the segment
+`batteryPowerMax` and this live value share one formula.
+
+- **Present in 2.0.0b1 too:** the strings `batteryPackCurrent`, `batteryPackVoltage`,
+  `rawChargingPower`, `socPrecise` and `batteryPower` occur in both the beta1 and beta8-3
+  dex. No di+ upgrade is needed on a car already on 2.0.
+- **2.0 only.** Cars still on di+ 1.x have no `/api/historyStatus` (see the SOC split
+  above) and need a fallback.
+- **New in beta8-3 (not needed for power):** `/api/chargingDiagnosticSeries`,
+  `/api/tripElevationSeries`, `/api/hostUiMode`, a `ChargingDiagnosticSummary` table with
+  per-session cell-voltage spread and temperature extremes, and `BATTERY_POWER_INTEGRAL` /
+  `CHARGED_ENERGY_PER_SOC` metrics.
+- **Measured on car `way` (di+ `2.0.0b8-2`, `versionCode 167`), 2026-09-30, idle:**
+  - `GET http://127.0.0.1:8988/api/historyStatus` needs **no auth header**: HTTP 200, 30
+    sequential calls at 1 Hz took **106–170 ms** each *including* `adb shell` + `curl`
+    start-up, so the endpoint itself is cheaper than that. Di+ CPU cost was not measured.
+  - Values are **fractional**, not integer: `batteryPackVoltage 317.0`,
+    `batteryPackCurrent 0.3000183`, `batteryPower 0.0`, `soc 99.6`, `socPermille 996`.
+    The car was plugged in on AC (`rawChargingGunState 2`, `rawChargingWorkState 1`) but
+    **not charging** (`rawChargingPower 0.0`), so `batteryPackCurrent` stayed at
+    `0.3000183` for all 30 samples. The capture under load is the next bullet.
+  - **Under load, AC, 2026-10-01** (same car, `soc 62.4 → 62.6`, `rawChargingGunState 2`),
+    60 samples at ~1 Hz, every one valid:
+    - `batteryPackCurrent` is **negative while charging**: `−17.8 … −18.0 A` (mean
+      `−17.888`), resolution **0.1 A**. `batteryPackVoltage` was a constant `316.0` (1 V
+      resolution).
+    - `batteryPower` equalled `|V × I| / 1000` to the last digit (max difference
+      `0.0000 kW`), `5.625 … 5.688 kW`, mean `5.653 kW`.
+    - The integer engine-power parameter (`发动机功率`, `getVal`) read **`-5` in all 60
+      samples** while the real battery power was ≈ 5.65 kW: the integer reading is
+      truncated and under-reports by ≈ 0.65 kW (≈ 11 %) here. `rawChargingPower` stayed
+      `0.0`.
+    - **Refresh rate is not resolved:** the current changed in only 2 of 59 consecutive
+      pairs (three distinct values) because AC charging is steady, so a stable value does
+      not show how often di+ refreshes it. A DC capture (current moves) or a ramp is needed.
+    - **Cost:** `aps_diplus` (PID `3100`) used 563 and 582 CPU ticks per 20 s idle
+      (≈ 28–29 % of one core, `CLK_TCK 100`) and 714 ticks per 20 s while
+      `historyStatus` was polled at ~5 Hz (≈ 36 %). That is ≈ +7.5 pp for 5 Hz, roughly
+      **+1.5 pp of one core per 1 Hz**, assuming linear scaling (one run, extrapolated;
+      `dumpsys cpuinfo` and `top` could not show it). Idle noise between runs was ≈ 1 pp.
+  - `rawChargingPower` / `maxChargingPower` read `0.0` on the last **AC** session too
+    (session `9640`), so the charging-module power field is not usable on AC; the
+    pack-side `batteryPower` (V × I) is the one that carries the value.
+  - Session `9640` (AC, `chargeStartSoc 67.5 → 100.0`, `plugSoc 67.5`): `chargedEnergy =
+    batteryEnergyKwh 14.874 kWh` with `energySource = BATTERY_POWER_INTEGRAL` over
+    `11 663 s` ⇒ **≈ 4.59 kW mean**, `maxBatteryPower 4.772 kW`, pack voltage
+    `310–344 V`. That is di+ itself integrating the V × I power — the same quantity we
+    want to send. `estimatedUsableCapacityKwh 45.77` (`capacityConfidence MEDIUM`) is
+    derived from that energy, so it is not an independent cross-check.
+  - `/api/chargingDiagnosticSeries?sessionId=<id>` (beta8-3) returns only SOC-permille,
+    cell voltages and temperature points (`sourceIntervalMs 10000`, `resolutionMs 60000`,
+    52 KB for a 3 h session) — **no pack current**, so it cannot replace the live read.
+  - `/api/chargingSessions` returned `[]` with no parameters and with `limit=3`; its
+    query parameters are not documented. `/api/chargingSessionDetail?sessionId=<id>` works.
+
 ### B-14 verdict — negative for trips, measured on closed intervals (2026-09-09)
 
 **The fractional energy above lives only while the interval is open. It is not persisted

@@ -95,6 +95,11 @@ data class VehicleTelemetrySnapshot(
     val autoserviceDoorRR: Int? = null,
     val autoserviceTrunk: Int? = null,
     val autoserviceHood: Int? = null,
+    /**
+     * Pack current in amps from di+ 2.0 `/api/historyStatus` (negative while charging), set only
+     * while charging and only from a fresh [PackReading]. Null when di+ 1.x / no measurement.
+     */
+    val chargeCurrentA: Double? = null,
 ) {
     companion object {
         private const val POWER_MIN_KW = -300
@@ -113,6 +118,7 @@ data class VehicleTelemetrySnapshot(
             location: Location?,
             socCalibration: SocScaleCalibration = SocScaleCalibration.IDENTITY,
             socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
+            pack: PackReading? = null,
         ): VehicleTelemetrySnapshot {
             val resolvedSoc = resolveTelemetrySoc(data?.soc, battery?.socPercent, socCalibration, socPreference)
             val saneEnginePower = enginePowerKw?.takeIf { it in POWER_MIN_KW..POWER_MAX_KW }?.toDouble()
@@ -123,10 +129,13 @@ data class VehicleTelemetrySnapshot(
                 diPlusGun = data?.chargeGunState,
                 chargingStatus = data?.chargingStatus,
             )
-            val chargePower = if (isCharging == true) {
-                powerKw?.takeIf { it < 0.0 }?.let { -it } ?: 0.0
-            } else {
-                0.0
+            // A measured pack V × I beats di+'s integer engine-power parameter; with no pack
+            // reading (di+ 1.x, stale, invalid) the previous behavior is kept unchanged.
+            val packPowerKw = if (isCharging == true) HistoryStatusClient.chargePowerKw(pack) else null
+            val chargePower = when {
+                isCharging != true -> 0.0
+                packPowerKw != null -> packPowerKw
+                else -> powerKw?.takeIf { it < 0.0 }?.let { -it } ?: 0.0
             }
             return VehicleTelemetrySnapshot(
                 capturedAtMs = capturedAtMs,
@@ -183,6 +192,7 @@ data class VehicleTelemetrySnapshot(
                 autoserviceBatteryType = charging?.batteryType,
                 autoserviceLifetimeMileageKm = battery?.lifetimeMileageKm,
                 autoserviceLifetimeKwh = battery?.lifetimeKwh,
+                chargeCurrentA = if (isCharging == true) pack?.currentA else null,
             )
         }
     }

@@ -75,6 +75,7 @@ object CloudTelemetryPayload {
             }
             if (charging) {
                 putIfPresent("charge_power_kw", snapshot.chargePowerKw)
+                putRounded("charge_current_a", snapshot.chargeCurrentA, CHARGE_CURRENT_DECIMALS)
                 putIfPresent("charge_type", snapshot.chargeType)
                 putRounded("kwh_charged", snapshot.kwhCharged, KWH_CHARGED_DECIMALS)
             }
@@ -412,4 +413,6 @@ object CloudTelemetryPayload {
     private const val MAX_GPS_ACCURACY_M = 30.0
     private const val CELL_VOLTAGE_DECIMALS = 4
     private const val KWH_CHARGED_DECIMALS = 3
+    // di+ resolves the pack current to 0.1 A; the server rounds to the same step.
+    private const val CHARGE_CURRENT_DECIMALS = 1
 }

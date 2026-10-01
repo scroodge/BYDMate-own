@@ -64,6 +64,7 @@ import javax.inject.Inject
 class TrackingService : Service(), LocationListener {
 
     @Inject lateinit var diParsClient: DiParsClient
+    @Inject lateinit var historyStatusClient: com.bydmate.app.data.remote.HistoryStatusClient
     @Inject lateinit var tripTracker: TripTracker
     @Inject lateinit var chargeRepository: ChargeRepository
     @Inject lateinit var tripRepository: com.bydmate.app.data.repository.TripRepository
@@ -1224,6 +1225,18 @@ class TrackingService : Service(), LocationListener {
                                     }
                                 }.getOrNull()
                             } else null
+                            // di+ 2.0 pack V × I for charge power. Only asked while a gun is
+                            // connected (the reply is not free, ~+1.5 pp CPU per 1 Hz) and
+                            // rate-limited inside the client; null falls back to engine power.
+                            val telemetryPack = if (
+                                com.bydmate.app.domain.ChargingStateClassifier.isCharging(
+                                    autoserviceGun = telemetryCharging?.gunConnectState,
+                                    diPlusGun = data.chargeGunState,
+                                    chargingStatus = data.chargingStatus,
+                                ) == true
+                            ) {
+                                runCatching { historyStatusClient.readCached(nowMs) }.getOrNull()
+                            } else null
                             val resolvedSoh = sohResolver.resolveSohPercent(telemetryBattery)
                             val omitGps = omitGpsCached
                             val locationForCloud = when {
@@ -1242,6 +1255,7 @@ class TrackingService : Service(), LocationListener {
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
                                 socPreference = socPreferenceCached,
+                                pack = telemetryPack,
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }

@@ -14,6 +14,8 @@ import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
+import com.bydmate.app.data.remote.HistoryStatusClient
+import com.bydmate.app.data.remote.PackReading
 import com.bydmate.app.data.remote.IternioIntervalPolicy
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
 import com.bydmate.app.data.remote.resolveTelemetrySoc
@@ -138,6 +140,10 @@ object CommandDaemon {
      */
     @Volatile private var latestData: DiParsData? = null
     @Volatile private var latestDataAt = 0L
+
+    // Built lazily from the daemon's own OkHttpClient on the first charging push; it caches the
+    // last di+ pack reading, so one instance must live across pushes.
+    @Volatile private var historyStatus: HistoryStatusClient? = null
 
     /**
      * Why this iteration is pushing, and what that implies. Extracted from the loop so the
@@ -1247,6 +1253,19 @@ object CommandDaemon {
                     "tires_kpa(fl/fr/rl/rr)=$tirePressures " +
                     "(diplus=${data.tirePressFL}/${data.tirePressFR}/${data.tirePressRL}/${data.tirePressRR})"
             )
+            // di+ 2.0 pack V × I, only while a gun is connected (the endpoint is not free) and
+            // rate-limited inside the client. Blocking is fine: this function already blocks on
+            // autoservice shell reads. Any failure leaves `pack` null → previous behavior.
+            val pack: PackReading? = if (
+                ChargingStateClassifier.isCharging(
+                    autoserviceGun = autoserviceGun,
+                    diPlusGun = data.chargeGunState,
+                    chargingStatus = data.chargingStatus,
+                ) == true
+            ) {
+                val client = historyStatus ?: HistoryStatusClient(ok).also { historyStatus = it }
+                runCatching { runBlocking { client.readCached() } }.getOrNull()
+            } else null
             val snapshot = buildDaemonSnapshot(
                 d = data,
                 kwhCharged = kwhCharged,
@@ -1255,6 +1274,7 @@ object CommandDaemon {
                 autoserviceGun = autoserviceGun,
                 capturedAtMs = System.currentTimeMillis(),
                 socPreference = conf.socPreference,
+                pack = pack,
             )
             val payloadJson = CloudTelemetryPayload.build(
                 conf.vehicleId,
@@ -1358,6 +1378,7 @@ object CommandDaemon {
         autoserviceGun: Int?,
         capturedAtMs: Long,
         socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
+        pack: PackReading? = null,
     ): VehicleTelemetrySnapshot {
         val resolvedSoc = resolveTelemetrySoc(
             d.soc,
@@ -1394,7 +1415,12 @@ object CommandDaemon {
             odometerKm = d.mileage,
             sohPercent = sohPercent?.toDouble(),
             isCharging = isCharging,
-            chargePowerKw = if (isCharging) d.power?.let { kotlin.math.abs(it) } else null,
+            // Measured pack V × I wins; without a pack reading (di+ 1.x, stale, invalid) the
+            // previous integer engine-power value is used unchanged, null stays null.
+            chargePowerKw = if (isCharging) {
+                HistoryStatusClient.chargePowerKw(pack) ?: d.power?.let { kotlin.math.abs(it) }
+            } else null,
+            chargeCurrentA = if (isCharging) pack?.currentA else null,
             chargeType = if (isCharging) when (gun) { 2 -> "AC"; in 3..5 -> "DC"; else -> null } else null,
             kwhCharged = kwhCharged?.toDouble(),
             rangeEstKm = null,

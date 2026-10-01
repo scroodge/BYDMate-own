@@ -575,6 +575,74 @@ class CloudTelemetryPayloadTest {
         assertEquals(false, payload.getJSONObject("telemetry").getBoolean("is_parked"))
     }
 
+    // --- pack V × I charge power (di+ 2.0 /api/historyStatus) ---
+    //
+    // Car `way`, AC, 2026-10-01: di+'s integer engine power read -5 for a real 316 V × 17.9 A
+    // = 5.656 kW charge. A fresh pack reading replaces it; without one nothing changes.
+
+    private fun chargingSnapshot(
+        gun: Int? = 2,
+        enginePowerKw: Int? = -5,
+        pack: com.bydmate.app.data.remote.PackReading? = null,
+    ) = VehicleTelemetrySnapshot.from(
+        data = diPlusData(maxCellVoltage = null, minCellVoltage = null, chargeGunState = gun),
+        battery = null,
+        charging = null,
+        enginePowerKw = enginePowerKw,
+        capturedAtMs = 1_700_000_000_000L,
+        rangeEstKm = null,
+        currentTripDistanceKm = null,
+        currentTripConsumptionKwh100km = null,
+        location = null,
+        pack = pack,
+    )
+
+    private val acPack = com.bydmate.app.data.remote.PackReading(316.0, -17.899994, 1_700_000_000_000L)
+
+    @Test
+    fun `charging with a pack reading reports measured V x I power and the current`() {
+        val snapshot = chargingSnapshot(pack = acPack)
+
+        assertEquals(5.656, snapshot.chargePowerKw!!, 1e-9)
+        assertEquals(-17.899994, snapshot.chargeCurrentA!!, 1e-9)
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("telemetry")
+        assertEquals(5.656, telemetry.getDouble("charge_power_kw"), 1e-9)
+        assertEquals(-17.9, telemetry.getDouble("charge_current_a"), 1e-9)
+    }
+
+    @Test
+    fun `charging without a pack reading keeps the integer engine power fallback`() {
+        val snapshot = chargingSnapshot(pack = null)
+
+        assertEquals(5.0, snapshot.chargePowerKw!!, 0.0)
+        assertEquals(null, snapshot.chargeCurrentA)
+
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("telemetry")
+        assertEquals(5.0, telemetry.getDouble("charge_power_kw"), 0.0)
+        assertEquals(false, telemetry.has("charge_current_a"))
+    }
+
+    @Test
+    fun `gun connected but an idle positive current is zero power and never a false start`() {
+        // Plugged in at 100 %: di+ reads +0.3 A at 317 V. Engine power may still say -5 from a
+        // stale value; the measured pack is authoritative and says nothing is flowing in.
+        val idle = com.bydmate.app.data.remote.PackReading(317.0, 0.3000183, 1_700_000_000_000L)
+        val snapshot = chargingSnapshot(pack = idle)
+
+        assertEquals(0.0, snapshot.chargePowerKw!!, 0.0)
+    }
+
+    @Test
+    fun `no gun means no charge power and no current even with a pack reading`() {
+        val snapshot = chargingSnapshot(gun = 1, pack = acPack)
+
+        assertEquals(0.0, snapshot.chargePowerKw!!, 0.0)
+        assertEquals(null, snapshot.chargeCurrentA)
+        val telemetry = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("telemetry")
+        assertEquals(false, telemetry.has("charge_current_a"))
+    }
+
     private fun sampleSnapshot() = VehicleTelemetrySnapshot.from(
         data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
         battery = null,

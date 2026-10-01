@@ -333,6 +333,7 @@ class CommandDaemonTest {
         autoserviceGun: Int? = null,
         socPreference: com.bydmate.app.domain.CloudSocPreference =
             com.bydmate.app.domain.CloudSocPreference.DIPLUS_FIRST,
+        pack: com.bydmate.app.data.remote.PackReading? = null,
     ): JSONObject {
         val snapshot = CommandDaemon.buildDaemonSnapshot(
             d = d,
@@ -342,8 +343,34 @@ class CommandDaemonTest {
             autoserviceGun = autoserviceGun,
             capturedAtMs = t0,
             socPreference = socPreference,
+            pack = pack,
         )
         return JSONObject(CloudTelemetryPayload.build("way", snapshot))
+    }
+
+    @Test
+    fun `daemon charging push carries measured V x I power and the pack current`() {
+        // The daemon builds its own payload, so the pack reading has to be wired here too.
+        val pack = com.bydmate.app.data.remote.PackReading(316.0, -17.899994, t0)
+        val telemetry = daemonPayload(
+            d = diPars(soc = 62, power = -5.0, chargeGunState = 2),
+            autoserviceGun = 2,
+            pack = pack,
+        ).getJSONObject("telemetry")
+
+        assertEquals(5.656, telemetry.getDouble("charge_power_kw"), 1e-9)
+        assertEquals(-17.9, telemetry.getDouble("charge_current_a"), 1e-9)
+    }
+
+    @Test
+    fun `daemon charging push without a pack reading keeps the engine power fallback`() {
+        val telemetry = daemonPayload(
+            d = diPars(soc = 62, power = -5.0, chargeGunState = 2),
+            autoserviceGun = 2,
+        ).getJSONObject("telemetry")
+
+        assertEquals(5.0, telemetry.getDouble("charge_power_kw"), 0.0)
+        assertFalse(telemetry.has("charge_current_a"))
     }
 
     @Test
