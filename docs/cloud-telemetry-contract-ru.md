@@ -62,7 +62,7 @@ APK сохраняет `api_key` в `cloud_sync_api_key` и `endpoint_url` в `c
 
 Ошибки: `401` неверный/истёкший код; `429` слишком много попыток (rate limit на сервере).
 
-Полный контракт: `supabase/BYDMATE_APK_API.md` в репозитории VoltFlow (EvAcChargeTimer).
+Полный контракт: `supabase/VOLTFLOW_MATE_API.md` в репозитории VoltFlow (EvAcChargeTimer).
 
 ## Transport
 
@@ -80,10 +80,13 @@ Headers:
 Content-Type: application/json; charset=utf-8
 X-API-Key: <cloud_sync_api_key>
 X-Vehicle-Id: <cloud_sync_vehicle_id>
+X-Vehicle-Uid: <vehicle_uid>
 X-App: VoltFlow-Mate
 ```
 
-`vehicle_id` также дублируется в JSON body.
+- `X-Vehicle-Id`: имя/идентификатор автомобиля из настроек APK (дублируется в JSON body).
+- `X-Vehicle-Uid`: стабильный синтетический UUID установки APK (B-03, `SettingsRepository.getOrCreateVehicleUid()`), отправляемый как приложением, так и демоном (`voltflow_cmd.conf`). Облако при первом контакте привязывает `vehicle_uid` к ключу `vehicle_id` в таблице `bydmate_vehicle_identity`. При переименовании автомобиля телеметрия продолжает писаться под исходный привязанный ключ без потери непрерывности истории.
+- `X-App`: идентификатор клиента (`VoltFlow-Mate`).
 
 ## Response Handling
 
@@ -121,9 +124,17 @@ HTTP `5xx`, другие коды и сетевые исключения — ret
   "inserted_count": 12,
   "duplicate_count": 3,
   "skipped_stale_count": 0,
-  "sample_count": 15
+  "sample_count": 15,
+  "live_fast_seconds": 0,
+  "offline_buffer_cap_bytes": 10485760,
+  "battery_capacity_kwh": 60.48
 }
 ```
+
+Дополнительные поля ответа:
+- `live_fast_seconds`: грант ускоренного опроса live-статуса (раз в 3 с), когда в веб-интерфейсе открыт монитор автомобиля.
+- `offline_buffer_cap_bytes`: динамический лимит размера оффлайн-буфера (rollout cap для `OfflineBufferPolicy`).
+- `battery_capacity_kwh`: ёмкость батареи из профиля автомобиля в облаке (кэшируется APK для расчётов).
 
 Диагностика в настройках: `cloud_sync_last_ack` (например `15 sent, 12 ins, 3 dup, 0 skip`).
 
@@ -144,7 +155,7 @@ APK может отправить один telemetry sample:
   "vehicle_id": "way",
   "device_time": "2026-05-25T12:34:56Z",
   "source": "BYDMate",
-  "mate_version": "0.4.10",
+  "mate_version": "0.6.1",
   "telemetry": {
     "soc": 73,
     "speed_kmh": 0.0,
@@ -261,8 +272,8 @@ Backend должен принимать оба варианта: одиночн�
 | `source` | string | yes | Сейчас всегда `BYDMate`. |
 | `live_only` | boolean | no | `true` — парковочный heartbeat, в котором ничего существенного не изменилось. Сервер обновляет **только** `bydmate_live_snapshots` (плюс его `diplus_*` / `autoservice_*` колонки) и пропускает запись в `bydmate_telemetry_samples`, hourly-rollup и логику поездок. Поле **опускается**, когда `false`, — обычный sample не меняет форму на проводе. Старые версии APK его не шлют, и такие payload'ы идут полным путём. |
 | `client_hourly` | boolean | no | `true` означает, что sample уже folded в APK-owned cumulative `hourly` block. Сервер пропускает свой per-sample hourly path, чтобы не считать час дважды. Поле опускается, когда `false`. |
-| `trip_id` + `client_trip` | string + boolean | no | APK помечает driving sample UUID текущей client-owned поездки и прикладывает её cumulative block в `trips`. Это additive Phase 4: пока cloud-side RPC не введена, ingest должен принимать и игнорировать эти поля, продолжая прежнюю server-side trip-логику. |
-| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, сейчас `0.4.10`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. |
+| `trip_id` + `client_trip` | string + boolean | no | APK помечает driving sample UUID текущей client-owned поездки и прикладывает её cumulative block в массиве `trips`. Облачная RPC `bydmate_apply_client_trip` атомарно применяет клиентские агрегаты поездки. |
+| `mate_version` | string | no | Версия APK (`BuildConfig.VERSION_NAME`, сейчас `0.6.1`), которую шлёт и приложение, и демон. Сервер сохраняет её в `bydmate_live_snapshots.mate_version` — видно, какая версия стоит на каждом авто. |
 | `telemetry` | object | yes | Нормализованный набор основных метрик. |
 | `diplus` | object/null | no | Сырые/расширенные данные DiPlus после парсинга APK. Может быть `null` или отсутствовать, когда Di+ недоступен. |
 | `autoservice` | object | no | BMS-direct поля, доступные только при ADB/autoservice Binder; отсутствие блока нормально. |
@@ -287,7 +298,8 @@ Backend не должен отклонять sample только из-за `null
 
 | Field | Type | Unit/Values | Source/Meaning |
 | --- | --- | --- | --- |
-| `soc` | number/null | percent | State of charge из DiPlus. |
+| `soc` | number/null | percent | State of charge из DiPlus или autoservice (согласно `soc_source`). |
+| `soc_source` | string/null | `diplus`/`autoservice` | Источник значения `soc`: шкала приборной панели Di+ или прямая шкала BMS из autoservice. |
 | `speed_kmh` | number/null | km/h | Скорость автомобиля. |
 | `power_kw` | number/null | kW | Мощность. При зарядке обычно отрицательная в исходных данных. |
 | `battery_temp_c` | number/null | deg C | Средняя температура батареи. |
@@ -305,6 +317,7 @@ Backend не должен отклонять sample только из-за `null
 | `soh_percent` | number/null | percent | Battery SOH (BMS `FID_SOH`), если доступен из autoservice и в диапазоне `0..100`. Может приходить и в **idle/parked** payload как кэшированное последнее известное значение. |
 | `is_charging` | boolean/null | `true/false` | Определяется по состоянию зарядного порта. |
 | `charge_power_kw` | number/null | kW | Положительная мощность зарядки. Если не заряжается, APK ставит `0.0`. |
+| `charge_current_a` | number/null | A | Ток заряда батареи (отрицательный при зарядке по соглашению BMS, либо положительный). Опрашивается через `/api/historyStatus` di+ 2.0 (B-28). Округляется до 1 знака. |
 | `charge_type` | string/null | `AC`/`DC` | `AC` для gun state `2`, `DC` для `3..5`. |
 | `kwh_charged` | number/null | kWh | Сколько энергии добавлено за текущую зарядку, если доступно. |
 | `range_est_km` | number/null | km | Расчетный запас хода из APK. |
@@ -457,8 +470,11 @@ app-очередь.
 
 ## vehicle_id — неизменяемый идентификатор сессии
 
-`vehicle_id` — это не «имя машины для отображения», а **первичный ключ потока телеметрии**
-в базе данных VoltFlow. Его изменение имеет необратимые последствия.
+`vehicle_id` — это первичный ключ потока телеметрии в базе данных VoltFlow.
+
+> [!NOTE]
+> **Идентичность авто (B-03)**:
+> Начиная с версии `0.6.0`, клиент передаёт постоянный синтетический идентификатор в заголовке `X-Vehicle-Uid` (`SettingsRepository.getOrCreateVehicleUid()`), который генерируется один раз при установке и не меняется при изменении имени машины. Облако связывает этот UID с первичным ключом телеметрии в таблице `bydmate_vehicle_identity`. При переименовании авто в APK сервер регистрирует событие `renamed`, а телеметрия автоматически продолжает привязываться к исходному ключу, предотвращая разрыв истории. Для клиентов без UID сохраняется полная обратная совместимость (fallback на `vehicle_id`).
 
 ### Что происходит при смене vehicle_id в настройках APK
 

@@ -85,7 +85,7 @@ di+ шлюз не отправит в облако ничего.
 | VoltFlow Mate (DiLink) | **Код из VoltFlow** → **Подключить** → имя авто → **Send test** → **Save** |
 | Уже настроенные установки | Старый вставленный API key продолжает работать; переподключение нужно только после **Generate key** в VoltFlow или очистки данных приложения |
 
-Контракт API: [VoltFlow `supabase/BYDMATE_APK_API.md`](https://github.com/scroodge/VoltFlow/blob/main/supabase/BYDMATE_APK_API.md) (или ваш fork EvAcChargeTimer). Детали wire format: [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md).
+Контракт API: [VoltFlow `supabase/VOLTFLOW_MATE_API.md`](https://github.com/scroodge/VoltFlow/blob/main/supabase/VOLTFLOW_MATE_API.md) (или ваш fork EvAcChargeTimer). Детали wire format: [docs/cloud-telemetry-contract-ru.md](docs/cloud-telemetry-contract-ru.md).
 
 ### Расширенные функции (опционально) — всё без компьютера
 
