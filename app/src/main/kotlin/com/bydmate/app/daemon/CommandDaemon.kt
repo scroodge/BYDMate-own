@@ -747,6 +747,8 @@ object CommandDaemon {
                         AppSupervisor.tick(now, APP_HEARTBEAT_FILE, ::log)
                         lastAppCheckAt = now
                     }
+                    // «Отправить диагностику»: one cheap exists() per wake unless the app asked.
+                    if (DiagnosticsHandoff.serve(nowMs = now)) log("diagnostics: daemon log handed to app")
 
                     // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {

@@ -8,6 +8,8 @@ import android.os.Environment
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bydmate.app.diagnostics.DiagnosticsBundle
+import com.bydmate.app.diagnostics.DiagnosticsReporter
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.cloud.CloudTelemetryAckParser
 import com.bydmate.app.data.cloud.CloudTelemetrySender
@@ -183,7 +185,24 @@ class SettingsViewModel @Inject constructor(
     private val batteryStateRepository: BatteryStateRepository,
     private val cloudTelemetrySender: CloudTelemetrySender? = null,
     private val voltflowLinkClient: VoltflowLinkClient,
+    private val diagnosticsReporter: DiagnosticsReporter? = null,
 ) : ViewModel() {
+
+    private val _diagnosticsSending = MutableStateFlow(false)
+    /** True while «Отправить диагностику» is collecting/uploading (up to ~20 s waiting on the daemon). */
+    val diagnosticsSending: StateFlow<Boolean> = _diagnosticsSending.asStateFlow()
+
+    fun sendDiagnostics(comment: String, onResult: (DiagnosticsBundle.Outcome) -> Unit) {
+        val reporter = diagnosticsReporter ?: return onResult(DiagnosticsBundle.Outcome.FAILED)
+        if (!_diagnosticsSending.compareAndSet(expect = false, update = true)) return
+        viewModelScope.launch {
+            try {
+                onResult(reporter.send(comment))
+            } finally {
+                _diagnosticsSending.value = false
+            }
+        }
+    }
 
     private val _uiState = MutableStateFlow(SettingsUiState(
         appVersion = getVersion(),

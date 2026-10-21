@@ -74,6 +74,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bydmate.app.diagnostics.DiagnosticsBundle
 import com.bydmate.app.R
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
@@ -267,7 +268,15 @@ fun GatewayScreen(
             strings = strings,
         )
     }
-    val logCaptureCard: @Composable () -> Unit = { LogCaptureCard(strings = strings) }
+    val diagnosticsSending by viewModel.diagnosticsSending.collectAsStateWithLifecycle()
+    val logCaptureCard: @Composable () -> Unit = {
+        LogCaptureCard(strings = strings)
+        SendDiagnosticsCard(
+            strings = strings,
+            sending = diagnosticsSending,
+            onSend = { comment, onDone -> viewModel.sendDiagnostics(comment, onDone) },
+        )
+    }
     val updatesCard: @Composable () -> Unit = {
         UpdatesCard(
             autoCheckUpdates = autoCheckUpdates,
@@ -676,6 +685,52 @@ private fun UpdatesCard(
             colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
         ) {
             Text(strings.checkUpdatesNow, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun SendDiagnosticsCard(
+    strings: GatewayStrings,
+    sending: Boolean,
+    onSend: (comment: String, onDone: (DiagnosticsBundle.Outcome) -> Unit) -> Unit,
+) {
+    val context = LocalContext.current
+    var comment by rememberSaveable { mutableStateOf("") }
+    GatewayCard {
+        Text(strings.diagTitle, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(strings.diagSubtitle, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+        GatewayTextField(
+            label = strings.diagComment,
+            value = comment,
+            onValueChange = { comment = it.take(DiagnosticsBundle.MAX_COMMENT_CHARS) },
+            keyboardType = KeyboardType.Text,
+        )
+        Button(
+            onClick = {
+                onSend(comment) { outcome ->
+                    val message = when (outcome) {
+                        DiagnosticsBundle.Outcome.SENT -> strings.diagSent
+                        DiagnosticsBundle.Outcome.NOT_LINKED -> strings.diagNotLinked
+                        DiagnosticsBundle.Outcome.TOO_MANY -> strings.diagTooMany
+                        DiagnosticsBundle.Outcome.TOO_BIG -> strings.diagTooBig
+                        DiagnosticsBundle.Outcome.NOT_CONFIGURED -> strings.diagNotConfigured
+                        DiagnosticsBundle.Outcome.FAILED -> strings.diagFailed
+                    }
+                    if (outcome == DiagnosticsBundle.Outcome.SENT) comment = ""
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
+            },
+            enabled = !sending,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AccentGreen,
+                contentColor = NavyDark,
+                disabledContainerColor = CardSurfaceElevated,
+                disabledContentColor = TextMuted,
+            ),
+        ) {
+            Text(if (sending) strings.diagSending else strings.diagSend, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1445,6 +1500,17 @@ private data class GatewayStrings(
     val logSave: String,
     val logSaved: String,
     val logSaveFailed: String,
+    val diagTitle: String,
+    val diagSubtitle: String,
+    val diagComment: String,
+    val diagSend: String,
+    val diagSending: String,
+    val diagSent: String,
+    val diagNotLinked: String,
+    val diagTooMany: String,
+    val diagTooBig: String,
+    val diagNotConfigured: String,
+    val diagFailed: String,
     val logStartFailed: String,
     val widgetTitle: String,
     val widgetToggle: String,
@@ -1545,6 +1611,17 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSave = "Сохранить лог в файл…",
             logSaved = "Лог сохранён.",
             logSaveFailed = "Не удалось сохранить лог.",
+            diagTitle = "Отправить диагностику разработчику",
+            diagSubtitle = "Соберёт состояние сервиса, очереди отправки и логи (без GPS, ключей и e-mail) и отправит разработчику VoltFlow. Займёт до 30 секунд.",
+            diagComment = "Что случилось? (необязательно)",
+            diagSend = "Отправить диагностику",
+            diagSending = "Собираю и отправляю…",
+            diagSent = "Диагностика отправлена разработчику. Спасибо!",
+            diagNotLinked = "Машина не привязана к VoltFlow — сначала подключите её.",
+            diagTooMany = "Слишком часто. Попробуйте позже (не больше 3 раз в час).",
+            diagTooBig = "Диагностика слишком большая для отправки.",
+            diagNotConfigured = "Сервер VoltFlow пока не принимает диагностику.",
+            diagFailed = "Не удалось отправить. Проверьте интернет и попробуйте ещё раз.",
             logStartFailed = "Не удалось запустить запись лога на этом устройстве.",
             widgetTitle = "Плавающий виджет",
             widgetToggle = "Показывать поверх других приложений",
@@ -1642,6 +1719,17 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSave = "Save log to file…",
             logSaved = "Log saved.",
             logSaveFailed = "Could not save the log.",
+            diagTitle = "Send diagnostics to the developer",
+            diagSubtitle = "Collects service, upload-queue and log state (no GPS, keys or e-mail) and sends it to the VoltFlow developer. Takes up to 30 seconds.",
+            diagComment = "What happened? (optional)",
+            diagSend = "Send diagnostics",
+            diagSending = "Collecting and sending…",
+            diagSent = "Diagnostics sent to the developer. Thank you!",
+            diagNotLinked = "This car is not linked to VoltFlow — link it first.",
+            diagTooMany = "Too often. Try again later (at most 3 per hour).",
+            diagTooBig = "The diagnostics are too large to send.",
+            diagNotConfigured = "The VoltFlow server does not accept diagnostics yet.",
+            diagFailed = "Could not send. Check the connection and try again.",
             logStartFailed = "Could not start log recording on this device.",
             widgetTitle = "Floating widget",
             widgetToggle = "Show over other apps",
@@ -1739,6 +1827,17 @@ private fun gatewayStrings(language: String): GatewayStrings =
             logSave = "Захаваць лог у файл…",
             logSaved = "Лог захаваны.",
             logSaveFailed = "Не ўдалося захаваць лог.",
+            diagTitle = "Адправіць дыягностыку распрацоўшчыку",
+            diagSubtitle = "Збярэ стан сэрвісу, чаргі адпраўкі і логі (без GPS, ключоў і e-mail) і адправіць распрацоўшчыку VoltFlow. Зойме да 30 секунд.",
+            diagComment = "Што здарылася? (неабавязкова)",
+            diagSend = "Адправіць дыягностыку",
+            diagSending = "Збіраю і адпраўляю…",
+            diagSent = "Дыягностыка адпраўлена распрацоўшчыку. Дзякуй!",
+            diagNotLinked = "Машына не прывязана да VoltFlow — спачатку падключыце яе.",
+            diagTooMany = "Занадта часта. Паспрабуйце пазней (не больш за 3 разы на гадзіну).",
+            diagTooBig = "Дыягностыка занадта вялікая для адпраўкі.",
+            diagNotConfigured = "Сервер VoltFlow пакуль не прымае дыягностыку.",
+            diagFailed = "Не ўдалося адправіць. Праверце інтэрнэт і паспрабуйце яшчэ раз.",
             logStartFailed = "Не ўдалося запусціць запіс лога на гэтай прыладзе.",
             widgetTitle = "Плавальны віджэт",
             widgetToggle = "Паказваць паверх іншых праграм",

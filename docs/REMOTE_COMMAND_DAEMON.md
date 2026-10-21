@@ -139,6 +139,17 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 | `voltflow_mate_heartbeat`      | `<externalFilesDir>/`                                                                                      | app-alive beacon (epoch millis, rewritten at 1 Hz); daemon reads its age to suppress its telemetry push while the app is sending — 20 s for history-writing pushes, 5 s for `live_only` status                                                                                                                        |
 
 The daemon runs as `--nice-name=voltflow_cmd_daemon`; its log is `/data/local/tmp/voltflow_cmd_daemon.log`.
+The previous generation is kept as `voltflow_cmd_daemon.log.1`: a watchdog start and the 5 MB size
+check **rotate** the log instead of truncating it, so a restart no longer erases the lines that
+explain it. A running watchdog keeps the old script until it next starts.
+
+**Diagnostics hand-off.** The app cannot rely on reading `/data/local/tmp` (shell uid). For
+«Отправить диагностику» it writes `files/diagnostics/daemon_log.request` in its external files dir;
+on its next status-loop wake (≤ ~6 s) the daemon writes `daemon_log.txt` there — relaunch stamp,
+the tail of `.log.1` (≤ 500 KB) and of `.log` (≤ 1.5 MB) — and removes the request
+(`DiagnosticsHandoff`, tests in `DiagnosticsHandoffTest`). The app waits up to 20 s and sends
+without the section if nobody answers, noting it in the bundle. Field log line:
+`diagnostics: daemon log handed to app`.
 
 ### Suspend-blocker capability report
 

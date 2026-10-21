@@ -1614,17 +1614,7 @@ class TrackingService : Service(), LocationListener {
             .build()
     }
 
-    private fun appendChainLog(entry: String) {
-        try {
-            val sdf = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-            val ts = sdf.format(java.util.Date())
-            val prefs = getSharedPreferences(BootReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-            val existing = prefs.getString(BootReceiver.KEY_CHAIN_LOG, "") ?: ""
-            val lines = existing.lines().takeLast(19)
-            val updated = (lines + "$ts $entry").joinToString("\n")
-            prefs.edit().putString(BootReceiver.KEY_CHAIN_LOG, updated).apply()
-        } catch (_: Exception) {}
-    }
+    private fun appendChainLog(entry: String) = ChainLog.append(this, entry)
 
     private fun updateNotification(data: DiParsData) {
         val parts = mutableListOf<String>()

@@ -120,18 +120,5 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     /** Append timestamped entry to chain log (persists in SharedPreferences, survives logcat rollover) */
-    fun appendChainLog(context: Context, entry: String) {
-        try {
-            val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            val ts = sdf.format(Date())
-            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val existing = prefs.getString(KEY_CHAIN_LOG, "") ?: ""
-            // Keep last 20 entries max
-            val lines = existing.lines().takeLast(19)
-            val updated = (lines + "$ts $entry").joinToString("\n")
-            prefs.edit().putString(KEY_CHAIN_LOG, updated).apply()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to append chain log: ${e.message}")
-        }
-    }
+    fun appendChainLog(context: Context, entry: String) = ChainLog.append(context, entry)
 }

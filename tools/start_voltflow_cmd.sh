@@ -78,6 +78,9 @@ trap 'rm -f "$LOCKFILE" 2>/dev/null' EXIT
 # Android 12+ kills "phantom" (app-spawned) processes; lift the cap so app_process daemons persist.
 /system/bin/device_config put activity_manager max_phantom_processes 2147483647 >/dev/null 2>&1
 
+# Keep the previous run's log as .1 instead of truncating it: a watchdog restart must not
+# erase what happened before it. «Отправить диагностику» bundles read both files.
+[ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
 echo "=== VoltFlow cmd watchdog started $(date) ===" > "$LOG_FILE"
 
 # Wait for boot so pm/package paths resolve.
@@ -158,9 +161,9 @@ while true; do
     sleep 10; continue
   fi
 
-  # Rotate log if large (>5MB).
+  # Rotate log if large (>5MB) — to .1, never truncate (the daemon is not running here).
   LOG_SZ=$(stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
-  [ "$LOG_SZ" -gt 5242880 ] && : > "$LOG_FILE"
+  [ "$LOG_SZ" -gt 5242880 ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
 
   echo "[$(date)] launching $PROCESS_NAME (apk=$APK_PATH)" >> "$LOG_FILE"
   CLASSPATH="$APK_PATH" app_process /system/bin --nice-name="$PROCESS_NAME" "$CLS" "$CONF" >> "$LOG_FILE" 2>&1 &
