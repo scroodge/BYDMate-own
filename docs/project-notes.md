@@ -322,7 +322,7 @@ identically\``) строит снэпшот через `.from()` и через `
 ### VoltFlow (cloud)
 
 Pairing (2026-05-31): `bydmate_link_codes`, `link-code` / `redeem` API — see
-EvAcChargeTimer `supabase/BYDMATE_APK_API.md` and `supabase/TELEMETRY.md`.
+EvAcChargeTimer `supabase/VOLTFLOW_MATE_API.md` and `supabase/TELEMETRY.md`.
 
 Applied migrations and app features — full reference in EvAcChargeTimer
 `supabase/TELEMETRY.md`:
