@@ -101,6 +101,25 @@ gh release create v<version> \
   e.g. `Debug build — VoltFlow-Mate-v<version>.apk. Full suite green
   (testDebugUnitTest assembleDebug).`
 
+## 7b. VoltFlow cloud release catalog
+
+Upsert the release into `mate_app_releases` (VoltFlow Supabase). The cloud app reads
+GitHub first, but the admin attention queue reads **only** this table, and users fall
+back to it when GitHub fails. It was skipped from 0.4.8 to 0.6.1 because this step was
+not in the checklist, so the admin queue compared every car against 0.4.8.
+
+```bash
+( set -a; . ../EvAcChargeTimer/.env.local >/dev/null 2>&1; set +a
+  export SUPABASE_URL="${SUPABASE_URL:-$NEXT_PUBLIC_SUPABASE_URL}"
+  bash tools/publish-mate-release.sh "<one-line Russian summary>" 2>&1 | grep -v -i "key\|bearer" )
+```
+
+- Expect `OK (201): v<version> published.` Verify from `EvAcChargeTimer`:
+  `scripts/prod-sql.sh "select version, version_code from mate_app_releases order by version_code desc limit 1;"`
+- The in-app "latest version" can lag the GitHub release by up to ~15 min
+  (`/api/bydmate/latest-release` CDN `s-maxage=300, stale-while-revalidate=600`).
+  That is cache, not a failed step.
+
 ## 8. Install
 
 - Car head unit (network ADB, not USB): `adb connect 192.168.43.71:5555` then
