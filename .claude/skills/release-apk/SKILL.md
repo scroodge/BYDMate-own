@@ -98,8 +98,11 @@ gh release create v<version> \
 ```
 
 - Notes in **English**, summarizing the CHANGELOG entry. End with the build line,
-  e.g. `Debug build — VoltFlow-Mate-v<version>.apk. Full suite green
+  e.g. `Debug build — VoltFlow-Mate-v<version>.apk (versionCode <N>). Full suite green
   (testDebugUnitTest assembleDebug).`
+- `(versionCode <N>)` is **required**: VoltFlow cloud parses `versionCode N` from the release
+  body to sync `mate_app_releases` on its own (`syncMateReleaseCatalog`); without it the
+  release is not added to the catalog and only step 7b covers it.
 
 ## 7b. VoltFlow cloud release catalog
 
