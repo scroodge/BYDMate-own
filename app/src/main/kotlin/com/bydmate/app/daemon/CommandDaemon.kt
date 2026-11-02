@@ -8,6 +8,7 @@ import com.bydmate.app.BuildConfig
 import com.bydmate.app.data.cloud.CloudTelemetryPayload
 import com.bydmate.app.data.cloud.DaemonDurableIngress
 import com.bydmate.app.data.cloud.DaemonTelemetrySpool
+import com.bydmate.app.data.cloud.ShellCameraSnapshotIpc
 import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.CommandPollingCadence
@@ -1031,6 +1032,12 @@ object CommandDaemon {
         type: String,
         params: Map<String, Any?>,
     ): JSONObject {
+        if (type == CAMERA_SNAPSHOT_COMMAND_TYPE) {
+            CommandAllowlist.auxVoltageBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
+            val snapshot = ShellCameraSnapshotIpc().capture(id)
+                ?: return ack(id, "failed", mapOf("error" to "camera_capture_bridge_failed"))
+            return ack(id, snapshot.status, snapshot.result)
+        }
         CommandAllowlist.movementBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
         CommandAllowlist.auxVoltageBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
 
@@ -1073,6 +1080,8 @@ object CommandDaemon {
             put("status", status)
             put("result", JSONObject(result))
         }
+
+    private const val CAMERA_SNAPSHOT_COMMAND_TYPE = "camera_snapshot"
 
     /**
      * Read FID_CHARGING_CAPACITY (dev=1009, fid=666894360) from the autoservice Binder

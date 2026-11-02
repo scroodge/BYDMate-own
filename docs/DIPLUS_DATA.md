@@ -511,6 +511,17 @@ Verified by decompiling di+ (`com.van.diplus` base.apk, dex string table, 2026-0
   below.
 - `充电功率`/`电池功率`/`电机功率` do not exist either.
 
+> **Superseded for di+ 2.0.0b8+ (decompile of `research/diplus.2.0.0-beta8-3.apk`, 2026-11-02;
+> live on car `way`, di+ `2.0.0b9`).** The `getDiPars` catalog gained (0 hits in beta1):
+> #116 `电池管理状态` (BYD `getBatteryManagementDeviceState()`, raw enum — same as autoservice
+> `bms_state`; live `15` parked), #117 `充电功率` (`getChargingPower()` = `rawChargingPower`, which
+> reads `0.0` through AC charges — diagnostic only), #118 `本次充电量` (`getChargingCapacity()`, the
+> cell-only counter), #120/#121 `动力电池总电压`/`总电流` (pack V/I), #122 SOH, #123 cell count,
+> #124–#126 available / max allowed charge / max allowed discharge power (live `144` / `73.3` /
+> `195.3`). Still **no AC / grid / OBC voltage** anywhere. An unknown placeholder is echoed back
+> verbatim (`Bogus:{…}`) and the rest of the template still resolves. Mate 0.6.3 sends #116/#117/#125
+> as `diplus.bms_state` / `charge_power_raw_kw` / `max_charge_power_kw`.
+
 ### Confirmed below di+, at the raw BYD `autoservice` layer (2026-06-30)
 
 di+ itself reads vehicle data from BYD's `autoservice` Binder (native `libdprs.so`,

@@ -28,6 +28,7 @@ import kotlin.math.min
 @Singleton
 class VehicleCommandPoller @Inject constructor(
     private val controlClient: DiParsControlClient,
+    private val cameraSnapshotService: CameraSnapshotService,
     private val settingsRepository: SettingsRepository,
     private val cloudTelemetrySender: CloudTelemetrySender,
 ) {
@@ -171,6 +172,13 @@ class VehicleCommandPoller @Inject constructor(
 
     private suspend fun executeCommand(id: String, type: String, params: Map<String, Any?>): JSONObject {
         val data = latestData
+        if (type == CAMERA_SNAPSHOT_COMMAND_TYPE) {
+            CommandAllowlist.auxVoltageBlockReason(data)?.let { reason ->
+                return ack(id, "rejected", mapOf("error" to reason))
+            }
+            val snapshot = cameraSnapshotService.captureAndUpload(id)
+            return ack(id, snapshot.status, snapshot.result)
+        }
         movementBlock(data)?.let { reason ->
             return ack(id, "rejected", mapOf("error" to reason))
         }
@@ -244,5 +252,9 @@ class VehicleCommandPoller @Inject constructor(
                 trimmed.substringBeforeLast('/') + "/commands"
             else -> null
         }
+    }
+
+    private companion object {
+        const val CAMERA_SNAPSHOT_COMMAND_TYPE = "camera_snapshot"
     }
 }

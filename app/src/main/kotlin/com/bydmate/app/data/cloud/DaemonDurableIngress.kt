@@ -49,3 +49,32 @@ class ShellContentQueueIpc : DaemonQueueIpc {
         private const val IPC_TIMEOUT_SECONDS = 10L
     }
 }
+
+data class ShellCameraSnapshotResult(val status: String, val result: Map<String, Any?>)
+
+/** Shell daemon bridge for a UI-backed local FLV capture in the app process. */
+class ShellCameraSnapshotIpc {
+    fun capture(commandId: String): ShellCameraSnapshotResult? {
+        val process = ProcessBuilder(
+            "content",
+            "call",
+            "--uri", "content://${DaemonQueueBrokerProvider.AUTHORITY}",
+            "--method", DaemonQueueBrokerProvider.METHOD_CAMERA_SNAPSHOT,
+            "--extra", "${DaemonQueueBrokerProvider.EXTRA_COMMAND_ID}:s:$commandId",
+        ).redirectErrorStream(true).start()
+        if (!process.waitFor(35, TimeUnit.SECONDS)) {
+            process.destroy()
+            return null
+        }
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        if (process.exitValue() != 0) return null
+        val status = Regex("status=([^,}]+)").find(output)?.groupValues?.get(1) ?: return null
+        val result = buildMap<String, Any?> {
+            Regex("error=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("error", it) }
+            Regex("storage_path=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("storage_path", it) }
+            Regex("captured_at=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("captured_at", it) }
+            if (status == "done") put("view", "pano")
+        }
+        return ShellCameraSnapshotResult(status, result)
+    }
+}
