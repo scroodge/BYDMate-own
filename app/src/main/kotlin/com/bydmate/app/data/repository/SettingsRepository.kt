@@ -19,6 +19,8 @@ open class SettingsRepository @Inject constructor(
 ) {
     companion object {
         const val KEY_BATTERY_CAPACITY = "battery_capacity_kwh"
+        /** cars.range_reserve_soc_percent from the cloud car profile (see CloudRangeReserve). */
+        const val KEY_RANGE_RESERVE_SOC = "range_reserve_soc_percent"
         const val KEY_HOME_TARIFF = "home_tariff"
         const val KEY_DC_TARIFF = "dc_tariff"
         const val KEY_UNITS = "units" // "km" or "miles"
@@ -188,6 +190,10 @@ open class SettingsRepository @Inject constructor(
      */
     suspend fun getBatteryCapacity(): Double =
         getString(KEY_BATTERY_CAPACITY, DEFAULT_BATTERY_CAPACITY).toDoubleOrNull() ?: 72.9
+
+    /** Range reserve in SOC percent; 0 until the cloud sends one (same default as the web). */
+    suspend fun getRangeReserveSoc(): Double =
+        getString(KEY_RANGE_RESERVE_SOC, "0").toDoubleOrNull()?.coerceIn(0.0, 100.0) ?: 0.0
 
     suspend fun getCloudSocPreference(): CloudSocPreference =
         CloudSocPreference.fromWire(getString(KEY_CLOUD_SOC_SOURCE, CloudSocPreference.DIPLUS_FIRST.wireName))

@@ -22,6 +22,7 @@ import com.bydmate.app.MainActivity
 import com.bydmate.app.data.automation.AutomationEngine
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.cloud.DaemonSpoolImporter
+import com.bydmate.app.data.cloud.TripRollupAccumulator
 import com.bydmate.app.data.remote.AlicePollingManager
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.VehicleCommandPoller
@@ -36,12 +37,8 @@ import com.bydmate.app.domain.calculator.AiRangeEstimator
 import com.bydmate.app.domain.calculator.AiRangeMonitor
 import com.bydmate.app.domain.calculator.BigNumberCalculator
 import com.bydmate.app.domain.calculator.ConsumptionAggregator
-import com.bydmate.app.domain.calculator.LiveTripBuffer
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
-import com.bydmate.app.domain.calculator.RangeAvgSource
-import com.bydmate.app.domain.calculator.SocInterpolator
 import com.bydmate.app.domain.calculator.TripRegenMeter
-import com.bydmate.app.domain.calculator.RangeCalculator
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -76,9 +73,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var alicePollingManager: AlicePollingManager
     @Inject lateinit var vehicleCommandPoller: VehicleCommandPoller
     @Inject lateinit var odometerBuffer: OdometerConsumptionBuffer
-    @Inject lateinit var liveTripBuffer: LiveTripBuffer
-    @Inject lateinit var socInterpolator: SocInterpolator
-    @Inject lateinit var rangeCalculator: RangeCalculator
+    @Inject lateinit var tripRollupDao: com.bydmate.app.data.local.dao.TripRollupDao
     @Inject lateinit var autoserviceDetector: com.bydmate.app.data.charging.AutoserviceChargingDetector
     @Inject lateinit var autoserviceClient: com.bydmate.app.data.autoservice.AutoserviceClient
     @Inject lateinit var cameraStateMonitor: com.bydmate.app.data.camera.CameraStateMonitor
@@ -213,6 +208,8 @@ class TrackingService : Service(), LocationListener {
         private const val AI_RANGE_INPUT_REFRESH_MS = 60_000L
         private const val AI_RANGE_SNAPSHOT_FRESH_MS = 10_000L
         private const val AI_RANGE_MOVING_KMH = 5.0
+        /** Upper bound on trips read per refresh; the ~50 km window usually needs far fewer. */
+        private const val AI_RANGE_TRIP_FETCH_LIMIT = 50
         private const val DAEMON_SPOOL_IMPORT_INTERVAL_MS = 30_000L
         // Smoothing window for the Δ(chargingCapacityKwh)/Δt charging-power derivative.
         // The BMS session-energy counter appears to quantize in ~0.01 kWh steps, which
@@ -548,7 +545,6 @@ class TrackingService : Service(), LocationListener {
         lastSummaryLogTs = now
         val status = odometerBuffer.status()
         val state = ConsumptionAggregator.state.value
-        val carry = socInterpolator.carryOver(data.totalElecConsumption, data.soc)
         Log.i(TAG, "Widget session: id=$sessionId, " +
             "bufferRows=${status.rowCount}, " +
             "newestKm=${status.newestMileageKm?.let { "%.1f".format(it) } ?: "—"}, " +
@@ -556,25 +552,22 @@ class TrackingService : Service(), LocationListener {
             "shortAvg=${status.shortAvg?.let { "%.2f".format(it) } ?: "—"}, " +
             "display=${state.displayValue?.let { "%.1f".format(it) } ?: "—"}, " +
             "trend=${state.trend}, " +
-            "socCarry=${"%.3f".format(carry)} kWh, " +
             "powerState=${data.powerState}")
-
-        val liveAvg = liveTripBuffer.avgOverLastKm(RangeAvgSource.LIVE_WINDOW_KM)
-        val liveSessionKm = liveTripBuffer.sessionKm()
-        Log.i(TAG, "Range live: sessionKm=${"%.1f".format(liveSessionKm)}, " +
-            "liveAvg=${liveAvg?.let { "%.1f".format(it) } ?: "—"} kWh/100, " +
-            "samples=${liveTripBuffer.sampleCount()}")
     }
 
     /**
-     * AI range / AI consumption for the widget — the web's range-estimate.ts formula,
-     * run on the car (AiRangeEstimator). One tick per di+ sample. Inputs are the cloud
-     * snapshot when it is fresh, else an equivalent snapshot built from di+ alone (cloud
-     * sync off). Like the web, it sees only the single latest completed trip.
+     * AI range / AI consumption for the widget, the main screen and the cloud `range_est_km` —
+     * the web's range-estimate.ts formula, run on the car (AiRangeEstimator). One tick per di+
+     * sample. Inputs are the cloud snapshot when it is fresh, else an equivalent snapshot built
+     * from di+ alone (cloud sync off). Like every web surface, it blends the trips covering the
+     * last ~50 km (hero-drive-metrics.ts `selectTripsWithinDistanceWindow`) and subtracts the
+     * car profile's range reserve.
      */
     private suspend fun runAiRangeLoop() {
-        var lastTrip: AiRangeEstimator.TripInput? = null
+        var recentTrips: List<AiRangeEstimator.TripInput> = emptyList()
+        var tripSource = "none"
         var capacityKwh: Double? = null
+        var reserveSoc = 0.0
         var inputsRefreshedMs = 0L
         var lastLogMs = 0L
         _lastData.collect { data ->
@@ -583,11 +576,24 @@ class TrackingService : Service(), LocationListener {
                 val nowMs = System.currentTimeMillis()
                 if (nowMs - inputsRefreshedMs >= AI_RANGE_INPUT_REFRESH_MS) {
                     inputsRefreshedMs = nowMs
-                    lastTrip = tripRepository.getRecentTrips(3)
-                        .first()
-                        .firstOrNull { it.endTs != null }
-                        ?.let { AiRangeEstimator.TripInput.from(it) }
+                    // The rollups are the exact client-trip blocks the server stores, so the
+                    // estimator sees the same trip rows as the web. Local TripEntity rows are
+                    // only the fallback for a car that never synced to the cloud.
+                    val rollups = tripRollupDao.getRecent(AI_RANGE_TRIP_FETCH_LIMIT)
+                    val candidates = if (rollups.isNotEmpty()) {
+                        tripSource = "cloud-rollup"
+                        rollups.map {
+                            AiRangeEstimator.TripInput.fromCloudTripJson(TripRollupAccumulator.toJson(it))
+                        }
+                    } else {
+                        tripSource = "local"
+                        tripRepository.getRecentTrips(AI_RANGE_TRIP_FETCH_LIMIT)
+                            .first()
+                            .map { AiRangeEstimator.TripInput.from(it) }
+                    }
+                    recentTrips = AiRangeEstimator.selectTripsWithinDistanceWindow(candidates)
                     capacityKwh = settingsRepository.getBatteryCapacity()
+                    reserveSoc = settingsRepository.getRangeReserveSoc()
                 }
                 val published = _lastTelemetrySnapshot.value
                     ?.takeIf { nowMs - it.capturedAtMs <= AI_RANGE_SNAPSHOT_FRESH_MS }
@@ -604,11 +610,14 @@ class TrackingService : Service(), LocationListener {
                 )
                 val estimate = AiRangeEstimator.estimate(
                     AiRangeEstimator.Inputs.from(snapshot),
-                    listOfNotNull(lastTrip),
+                    recentTrips,
                     capacityKwh,
+                    reserveSoc,
                 )
                 val moving = (snapshot.speedKmh ?: 0.0) >= AI_RANGE_MOVING_KMH
                 AiRangeMonitor.update(estimate, nowMs, moving)
+                // Main screen + notification show the same smoothed number as the widget.
+                _lastRangeKm.value = AiRangeMonitor.state.value.rangeKm
                 // Snapshot time, not nowMs: a re-used snapshot then adds a zero-length interval.
                 TripRegenMeter.update(_sessionStartedAt.value, snapshot.powerKw, snapshot.capturedAtMs)
                 if (nowMs - lastLogMs >= SUMMARY_LOG_INTERVAL_MS) {
@@ -619,8 +628,9 @@ class TrackingService : Service(), LocationListener {
                         "cons=${s.consumptionKwh100km?.let { "%.1f".format(it) } ?: "—"} " +
                         "(raw ${s.rawConsumptionKwh100km?.let { "%.1f".format(it) } ?: "—"}) kWh/100, " +
                         "trend=${s.trend}, src=${if (published != null) "snapshot" else "diplus"}, " +
-                        "trip=${lastTrip?.let { "%.1f km @ %.1f".format(it.distanceKm ?: 0.0, it.avgConsumptionKwh100km ?: 0.0) } ?: "none"}, " +
-                        "cap=$capacityKwh, soh=${snapshot.sohPercent}, moving=$moving, " +
+                        "trips=${recentTrips.size}/$tripSource " +
+                        "(${"%.1f".format(recentTrips.sumOf { t -> t.distanceKm?.takeIf { it > 0 } ?: 0.0 })} km), " +
+                        "cap=$capacityKwh, reserve=$reserveSoc, soh=${snapshot.sohPercent}, moving=$moving, " +
                         "regen=${TripRegenMeter.regenKwh.value?.let { "%.3f".format(it) } ?: "—"} kWh")
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1110,16 +1120,6 @@ class TrackingService : Service(), LocationListener {
                                 sessionId = sessionId,
                             )
                         }
-                        liveTripBuffer.onSample(
-                            mileage = data.mileage,
-                            totalElec = data.totalElecConsumption,
-                            sessionId = sessionId,
-                        )
-                        socInterpolator.onSample(
-                            soc = data.soc,
-                            totalElecKwh = data.totalElecConsumption,
-                            sessionId = sessionId,
-                        )
 
                         val recentAvg = odometerBuffer.recentAvgConsumption()
                         val shortAvg = odometerBuffer.shortAvgConsumption()
@@ -1156,8 +1156,9 @@ class TrackingService : Service(), LocationListener {
                             shortAvg = shortAvg,
                         )
 
-                        val rangeKm = rangeCalculator.estimate(soc = data.soc, totalElecKwh = data.totalElecConsumption)
-                        _lastRangeKm.value = rangeKm
+                        // Cloud `range_est_km`: the unsmoothed AI Range — the web's own formula
+                        // (range-estimate.ts), computed on the car by runAiRangeLoop.
+                        val rangeKm = AiRangeMonitor.state.value.rawRangeKm
 
                         _tripDistanceKm.value = tripDistance
 

@@ -25,11 +25,6 @@ import com.bydmate.app.data.local.dao.TripRollupDao
 import com.bydmate.app.data.local.database.AppDatabase
 import com.bydmate.app.data.local.QueueStorageSchema
 import com.bydmate.app.domain.calculator.OdometerConsumptionBuffer
-import com.bydmate.app.domain.calculator.RangeAvgSource
-import com.bydmate.app.domain.calculator.RangeCalculator
-import com.bydmate.app.domain.calculator.SocInterpolator
-import com.bydmate.app.domain.calculator.SocInterpolatorPrefs
-import com.bydmate.app.domain.calculator.SocInterpolatorPrefsImpl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -406,28 +401,6 @@ object AppModule {
         fallbackEmaProvider = { tripRepository.getEmaConsumption() },
     )
 
-    @Provides
-    @Singleton
-    fun provideSocInterpolatorPrefs(@ApplicationContext ctx: Context): SocInterpolatorPrefs =
-        SocInterpolatorPrefsImpl(ctx)
-
-    @Provides
-    @Singleton
-    fun provideSocInterpolator(
-        prefs: SocInterpolatorPrefs,
-    ): SocInterpolator = SocInterpolator(persistence = prefs)
-
-    @Provides
-    @Singleton
-    fun provideRangeCalculator(
-        rangeAvgSource: RangeAvgSource,
-        settingsRepository: com.bydmate.app.data.repository.SettingsRepository,
-        socInterpolator: SocInterpolator,
-    ): RangeCalculator = RangeCalculator(
-        buffer = rangeAvgSource,
-        capacityProvider = { settingsRepository.getBatteryCapacity() },
-        socInterpolator = socInterpolator,
-    )
 
     @Provides
     @Singleton

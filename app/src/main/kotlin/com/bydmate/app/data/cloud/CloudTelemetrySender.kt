@@ -450,6 +450,7 @@ class CloudTelemetrySender @Inject constructor(
                 onLiveFastGranted(ack.liveFastSeconds)
                 onOfflineBufferCapGranted(ack.offlineBufferCapBytes)
                 ack.batteryCapacityKwh?.let { CloudBatteryCapacity.apply(settingsRepository, it, "telemetry ack") }
+                ack.rangeReserveSocPercent?.let { CloudRangeReserve.apply(settingsRepository, it, "telemetry ack") }
                 if (ack.isFullyAcknowledged()) {
                     items.forEach { queueDao.markFinished(it.id, null, now) }
                     // Guarded by sampleCount: if a sample folded into the hour while this
@@ -886,8 +887,12 @@ class CloudTelemetrySender @Inject constructor(
         const val HOURLY_RETENTION_MS = 24 * 60 * 60 * 1000L
         /** At most one open trip per vehicle plus maybe one just-closed trip still settling. */
         const val MAX_TRIP_BLOCKS = 4
-        /** How long a settled trip is kept for debugging before it is pruned. */
-        const val TRIP_RETENTION_MS = 24 * 60 * 60 * 1000L
+        /**
+         * How long a settled trip is kept before it is pruned. Long enough that the on-car AI
+         * Range still finds its ~50 km trip window (TripRollupDao.getRecent) after a few days
+         * parked — the web reads the same trips from `bydmate_trips`, which never prunes.
+         */
+        const val TRIP_RETENTION_MS = 14 * 24 * 60 * 60 * 1000L
         /** Same guard the server's `v_is_gear_p` uses, so a coast-through-P at speed doesn't close. */
         const val TRIP_CLOSE_GEAR_P_SPEED_THRESHOLD_KMH = 5.0
         /**

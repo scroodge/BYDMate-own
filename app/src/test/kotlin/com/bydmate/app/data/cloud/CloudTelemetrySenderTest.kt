@@ -948,6 +948,9 @@ class CloudTelemetrySenderTest {
             if (index >= 0) items[index] = items[index].copy(dirty = false)
         }
 
+        override suspend fun getRecent(limit: Int): List<TripRollupEntity> =
+            items.sortedByDescending { it.startedAt }.take(limit)
+
         override suspend fun pruneCleanBefore(updatedAt: Long) {
             items.removeAll { !it.dirty && it.endedAt != null && it.updatedAt < updatedAt }
         }

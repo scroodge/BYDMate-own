@@ -2,21 +2,26 @@ package com.bydmate.app.domain.calculator
 
 import com.bydmate.app.data.local.entity.TripEntity
 import com.bydmate.app.data.remote.VehicleTelemetrySnapshot
+import org.json.JSONObject
 
 /**
  * Kotlin port of the cloud "AI Range" estimate —
  * EvAcChargeTimer `src/lib/voltflowmate/range-estimate.ts` (`estimateVehicleRangeKm`,
- * `estimateConsumptionKwh100Km`, `environmentConsumptionFactor`).
+ * `estimateConsumptionKwh100Km`, `environmentConsumptionFactor`), plus the trip window
+ * from `hero-drive-metrics.ts` (`selectTripsWithinDistanceWindow`) and the distance
+ * sanitizer from `trip-distance-plausibility.ts`.
  *
- * The car computes the number itself and (later) pushes it to the cloud, so the
- * web and the widget must agree. Keep the weights, thresholds and clamps below
- * in step with the TypeScript; AiRangeEstimatorTest mirrors the web's
- * range-estimate.test.mjs fixtures to catch drift.
+ * FORMULA PARITY RULE (see CLAUDE.md "Formula parity with the cloud"): the cloud is the
+ * source of truth. Any change to a weight, threshold, clamp, input or trip window lands in
+ * both repos in the same change, together with docs/WEB_INTERFACE_FORMULAS.md.
+ * AiRangeEstimatorTest mirrors the web's range-estimate.test.mjs fixtures to catch drift.
  *
- * Deliberate input substitutions (local TripEntity lacks the cloud trip columns):
- *  - cloud `sample_count >= 3`          → local `source == "live"`
- *  - cloud `traction − regen` net kWh   → local `kwh_consumed` (already net)
- *  - the web feeds exactly ONE latest trip; callers must do the same.
+ * Trip inputs: [TripInput.fromCloudTripJson] reads the exact block the app sends the
+ * server for a client trip (TripRollupAccumulator.toJson), so `sample_count`,
+ * `traction − regen` and the rounding are the cloud's own values. [TripInput.from] on a
+ * local TripEntity is only the fallback for a car with cloud sync off (no rollups), and
+ * keeps two substitutions: `sample_count >= 3` → `source == "live"`, and
+ * `traction − regen` → `kwh_consumed`.
  */
 object AiRangeEstimator {
 
@@ -26,6 +31,10 @@ object AiRangeEstimator {
     private const val MIN_PLAUSIBLE_BATTERY_KWH = 10.0
     private const val MAX_PLAUSIBLE_BATTERY_KWH = 200.0
     private const val MIN_TRIP_DISTANCE_KM = 1.0
+    /** hero-drive-metrics.ts MATH_RANGE_WINDOW_KM — the trip window every web surface uses. */
+    const val TRIP_WINDOW_KM = 50.0
+    /** trip-distance-plausibility.ts MAX_PLAUSIBLE_TRIP_KM. */
+    const val MAX_PLAUSIBLE_TRIP_KM = 1500.0
 
     data class Inputs(
         /** Same SOC the telemetry payload sends: di+ `socPrecise`, else the rounded SOC. */
@@ -72,6 +81,35 @@ object AiRangeEstimator {
         val wellSampled: Boolean = true,
     ) {
         companion object {
+            /**
+             * A client-trip block as sent to `bydmate_apply_client_trip`. Mirrors the cloud row:
+             * `avg_consumption_kwh_100km`, `distance_km` (null when implausible, as
+             * `sanitizeTripDistances` does), net = trip-metrics.ts `tripNetConsumptionKwh100`
+             * (traction, else `distance × avg / 100`, minus regen), `sample_count >= 3`.
+             */
+            fun fromCloudTripJson(json: JSONObject): TripInput {
+                val rawDistance = json.optFiniteDouble("distance_km")
+                val distance = rawDistance?.takeIf { it <= MAX_PLAUSIBLE_TRIP_KM }
+                val avg = json.optFiniteDouble("avg_consumption_kwh_100km")
+                val regen = json.optFiniteDouble("regen_energy_kwh")
+                val traction = json.optFiniteDouble("traction_energy_kwh")
+                    ?: if (distance != null && distance > 0 && avg != null) distance * avg / 100.0 else null
+                val net = if (traction != null && regen != null && distance != null && distance > 0) {
+                    (traction - regen) / distance * 100.0
+                } else {
+                    null
+                }
+                return TripInput(
+                    avgConsumptionKwh100km = avg,
+                    distanceKm = distance,
+                    netConsumptionKwh100km = net,
+                    wellSampled = json.optInt("sample_count", 0) >= 3,
+                )
+            }
+
+            private fun JSONObject.optFiniteDouble(name: String): Double? =
+                if (has(name) && !isNull(name)) optDouble(name, Double.NaN).takeIf { it.isFinite() } else null
+
             fun from(trip: TripEntity): TripInput {
                 val distance = trip.distanceKm
                 val kwh = trip.kwhConsumed
@@ -92,14 +130,43 @@ object AiRangeEstimator {
         }
     }
 
-    fun estimate(inputs: Inputs, recentTrips: List<TripInput>, batteryCapacityKwh: Double?): Estimate {
+    /**
+     * @param reserveSocPercent cars.range_reserve_soc_percent from the cloud car profile;
+     *   energy below it is excluded, exactly as `validReserveSoc` in range-estimate.ts.
+     */
+    fun estimate(
+        inputs: Inputs,
+        recentTrips: List<TripInput>,
+        batteryCapacityKwh: Double?,
+        reserveSocPercent: Double? = null,
+    ): Estimate {
         val soc = valid(inputs.soc) ?: return Estimate.NONE
         val usableBatteryKwh = resolveUsableBatteryKwh(batteryCapacityKwh, inputs.sohPercent)
         if (usableBatteryKwh == null || usableBatteryKwh <= 0) return Estimate.NONE
-        val usableEnergyKwh = usableBatteryKwh * (soc.coerceIn(0.0, 100.0) / 100.0)
+        val reserve = valid(reserveSocPercent)?.coerceIn(0.0, 100.0) ?: 0.0
+        val usableEnergyKwh = usableBatteryKwh * (maxOf(0.0, soc.coerceIn(0.0, 100.0) - reserve) / 100.0)
         val consumption = estimateConsumption(inputs, recentTrips)
         if (consumption <= 0) return Estimate.NONE
         return Estimate(rangeKm = usableEnergyKwh / consumption * 100.0, consumptionKwh100km = consumption)
+    }
+
+    /**
+     * hero-drive-metrics.ts `selectTripsWithinDistanceWindow`: trips newest first, taken until
+     * their positive distances reach [windowKm]; a trip without distance still rides along.
+     */
+    fun selectTripsWithinDistanceWindow(
+        tripsNewestFirst: List<TripInput>,
+        windowKm: Double = TRIP_WINDOW_KM,
+    ): List<TripInput> {
+        val selected = mutableListOf<TripInput>()
+        var total = 0.0
+        for (trip in tripsNewestFirst) {
+            if (total >= windowKm) break
+            selected += trip
+            val distance = valid(trip.distanceKm)
+            if (distance != null && distance > 0) total += distance
+        }
+        return selected
     }
 
     fun resolveUsableBatteryKwh(batteryCapacityKwh: Double?, sohPercent: Double?): Double? {

@@ -2,6 +2,7 @@ package com.bydmate.app.data.remote
 
 import android.util.Log
 import com.bydmate.app.data.cloud.CloudBatteryCapacity
+import com.bydmate.app.data.cloud.CloudRangeReserve
 import com.bydmate.app.data.cloud.CloudLinkStatus
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.repository.SettingsRepository
@@ -137,6 +138,7 @@ class VehicleCommandPoller @Inject constructor(
                 },
             )
             CloudBatteryCapacity.fromJson(json)?.let { CloudBatteryCapacity.apply(settingsRepository, it, "command poll") }
+            CloudRangeReserve.fromJson(json)?.let { CloudRangeReserve.apply(settingsRepository, it, "command poll") }
             val nextPollMs = pollIntervalMs(
                 serverSeconds = json.optInt("poll_after_seconds", 0),
                 commandsEnabled = json.optBoolean("commands_enabled", true),

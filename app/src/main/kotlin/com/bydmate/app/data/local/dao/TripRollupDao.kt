@@ -38,7 +38,14 @@ interface TripRollupDao {
     )
     suspend fun markClean(tripId: String, sampleCount: Int)
 
-    /** Settled trips are dead weight once the server has them; keep a short window for debugging. */
+    /**
+     * Newest trips first, the open one included — the same list the web feeds AI Range
+     * (`bydmate_trips` ordered by started_at desc), before the ~50 km window is applied.
+     */
+    @Query("SELECT * FROM cloud_trip_rollup ORDER BY startedAt DESC LIMIT :limit")
+    suspend fun getRecent(limit: Int): List<TripRollupEntity>
+
+    /** Settled trips are pruned after a retention window that still covers AI Range's trip window. */
     @Query("DELETE FROM cloud_trip_rollup WHERE dirty = 0 AND endedAt IS NOT NULL AND updatedAt < :updatedAt")
     suspend fun pruneCleanBefore(updatedAt: Long)
 }

@@ -23,6 +23,8 @@ data class CloudTelemetryAck(
     val offlineBufferCapBytes: Long? = null,
     /** Car-profile capacity (see CloudBatteryCapacity); null from older servers. */
     val batteryCapacityKwh: Double? = null,
+    /** Car-profile range reserve (see CloudRangeReserve); null from older servers. */
+    val rangeReserveSocPercent: Double? = null,
 ) {
     fun isFullyAcknowledged(): Boolean =
         parseError == null &&
@@ -83,6 +85,7 @@ object CloudTelemetryAckParser {
                     null
                 },
                 batteryCapacityKwh = CloudBatteryCapacity.fromJson(json),
+                rangeReserveSocPercent = CloudRangeReserve.fromJson(json),
             )
         } catch (e: Exception) {
             CloudTelemetryAck(
