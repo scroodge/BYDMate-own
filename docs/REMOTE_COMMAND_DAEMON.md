@@ -457,7 +457,8 @@ service-start work, then uses the app's authorised on-device ADB connection to p
 shell action in order:
 
 1. create `/data/local/tmp/voltflow_cmd_daemon.disabled`;
-2. terminate `voltflow_cmd_daemon` and its `start_voltflow_cmd.sh` watchdog;
+2. terminate `voltflow_cmd_daemon` by its process name and its `start_voltflow_cmd.sh`
+   watchdog by the PID in its lock file;
 3. remove the stale watchdog PID file.
 
 The sentinel is first, so a race with the watchdog cannot recreate the daemon. The app service
@@ -480,7 +481,7 @@ alone: the sentinel is the persistent proof that a later car-off/quickboot canno
 
 ```sh
 adb -s $HOST shell "touch /data/local/tmp/voltflow_cmd_daemon.disabled"   # watchdog exits next loop
-adb -s $HOST shell "pkill -f voltflow_cmd_daemon; pkill -f start_voltflow_cmd.sh"  # stop both now
+adb -s $HOST shell 'touch /data/local/tmp/voltflow_cmd_daemon.disabled; for pid in $(pidof voltflow_cmd_daemon); do kill "$pid"; done; watchdog=$(cat /data/local/tmp/voltflow_cmd_watchdog.pid 2>/dev/null); [ -n "$watchdog" ] && kill "$watchdog"; rm -f /data/local/tmp/voltflow_cmd_watchdog.pid' # stop both now
 # re-enable: rm the .disabled sentinel, then relaunch the launcher (install step 3).
 ```
 

@@ -335,10 +335,13 @@ class AdbOnDeviceClientImpl @Inject constructor(
         private const val COMMAND_DAEMON_CONTROL_OK = "voltflow_cmd_control_ok"
         // Fixed commands only: no user input reaches this shell boundary. Touch the sentinel
         // first so a concurrently waking watchdog observes it before its processes are killed.
+        // Do not use `pkill -f`: on some Android shells it matches this very adb-shell command
+        // line and can terminate the control command before it removes the stale lock / replies.
         private const val DISABLE_COMMAND_DAEMON_CMD =
             "touch $COMMAND_DAEMON_SENTINEL; " +
-                "pkill -f voltflow_cmd_daemon; " +
-                "pkill -f start_voltflow_cmd.sh; " +
+                "for pid in \$(pidof voltflow_cmd_daemon 2>/dev/null); do kill \"\$pid\"; done; " +
+                "watchdog=\$(cat /data/local/tmp/voltflow_cmd_watchdog.pid 2>/dev/null); " +
+                "if [ -n \"\$watchdog\" ]; then kill \"\$watchdog\"; fi; " +
                 "rm -f /data/local/tmp/voltflow_cmd_watchdog.pid; " +
                 "echo $COMMAND_DAEMON_CONTROL_OK"
         private const val ENABLE_COMMAND_DAEMON_CMD =

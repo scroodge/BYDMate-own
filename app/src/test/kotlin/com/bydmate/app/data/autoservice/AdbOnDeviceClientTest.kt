@@ -170,8 +170,9 @@ class AdbOnDeviceClientTest {
 
         val command = fake.execCalls.single()
         assertTrue(command.contains("touch /data/local/tmp/voltflow_cmd_daemon.disabled"))
-        assertTrue(command.indexOf("touch /data/local/tmp/voltflow_cmd_daemon.disabled") < command.indexOf("pkill -f voltflow_cmd_daemon"))
-        assertTrue(command.contains("pkill -f start_voltflow_cmd.sh"))
+        assertTrue(command.indexOf("touch /data/local/tmp/voltflow_cmd_daemon.disabled") < command.indexOf("pidof voltflow_cmd_daemon"))
+        assertTrue(command.contains("cat /data/local/tmp/voltflow_cmd_watchdog.pid"))
+        assertEquals(false, command.contains("pkill -f"))
     }
 
     @Test
