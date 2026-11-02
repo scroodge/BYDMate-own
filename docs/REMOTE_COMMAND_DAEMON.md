@@ -1,6 +1,6 @@
 # Remote command daemon (survives car power-off)
 
-VoltFlow Mate can execute cloud commands (lock, climate, windows, SOC limit, TTS…) **and push
+VoltFlow Mate can execute validated cloud comfort commands (windows, climate and driver-seat heating) **and push
 live telemetry to the cloud** while the head unit is parked / "off". This document explains how
 and the exact install / update steps.
 

@@ -529,14 +529,12 @@ Four of them, in order:
 
 1. **Movement guard** — `movementBlockReason()` rejects unless speed is 0 and gear is P (stationary-charging is accepted as a P-equivalent). Rejections: `vehicle_moving`, `gear_not_park`, `gear_unknown`.
 2. **12 V guard** — rejects with `aux_voltage_low` below **11.8 V**, so a weak aux battery is not drained by actuation.
-3. **Allowlist** — `CommandAllowlist.buildPhrase()` maps a small typed command set to fixed phrases and range-checks every parameter (`set_soc_limit` 50–100, `ac_temp` 16–32, `fan_level` 0–7, window/sunroof/sunshade percentages 0–100, `tts` text ≤ 80 chars and no brackets). An unknown `type` is `unknown_type`.
+3. **Allowlist** — `CommandAllowlist.buildPhrase()` accepts only live-validated commands: working window controls (`window` and `windows_preset`), A/C on/off (`ac.on`), one-step temperature change (`ac_temp_step.direction`), recirculation (`ac_recirculation.mode`) and driver-seat heating off or maximum (`seat_heat_driver.level` = 0 or 2). It maps them to fixed D+ phrases; any other `type` is `unknown_type`.
 4. **Deny list** — any produced phrase containing `发送CAN`, `执行SHELL`, `执行TSHELL`, `点击`, `滑动`, `按钮`, `按键`, `浮窗`, `下电` is rejected outright. `DiParsControlClient` blocks the same patterns again at the send site.
 
-Supported types include: lock/unlock, windows (per-window % and presets), sunroof,
-sunshade, A/C on/off/vent/temp/fan, defrost and rear defrost, seat and steering
-heating, mirror fold, trunk, charge port, SOC limit, scheduled charging, sentry
-mode, screen off, HUD, auto high-beam, child lock, find-car, honk, flash lights,
-and TTS.
+The validated command contract contains only `window`, `windows_preset`, `ac`,
+`ac_temp_step`, `ac_recirculation` and `seat_heat_driver`. Older cloud command
+types remain audit history only and are rejected before a phrase can be sent to D+.
 
 Every command is acked back with `{"id", "status", "result"}` where status is
 `done` / `rejected` / `failed`.

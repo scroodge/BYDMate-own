@@ -7,37 +7,76 @@ import org.junit.Test
 class CommandAllowlistTest {
 
     @Test
-    fun lockPhrase() {
-        val result = CommandAllowlist.buildPhrase("lock", emptyMap())
-        assertTrue(result is CommandAllowlist.BuildResult.Ok)
-        assertEquals("车门上锁", (result as CommandAllowlist.BuildResult.Ok).phrase)
+    fun acPhrasesUseLiveVerifiedCommands() {
+        val enabled = CommandAllowlist.buildPhrase("ac", mapOf("on" to true))
+        val disabled = CommandAllowlist.buildPhrase("ac", mapOf("on" to false))
+
+        assertTrue(enabled is CommandAllowlist.BuildResult.Ok)
+        assertEquals("自动空调", (enabled as CommandAllowlist.BuildResult.Ok).phrase)
+        assertTrue(disabled is CommandAllowlist.BuildResult.Ok)
+        assertEquals("关空调", (disabled as CommandAllowlist.BuildResult.Ok).phrase)
     }
 
     @Test
-    fun rejectsInvalidSoc() {
-        val result = CommandAllowlist.buildPhrase("set_soc_limit", mapOf("value" to 40))
+    fun workingWindowCommandsRemainAvailable() {
+        val driver = CommandAllowlist.buildPhrase("window", mapOf("which" to "driver", "pct" to 10))
+        val close = CommandAllowlist.buildPhrase("windows_preset", mapOf("preset" to "close"))
+
+        assertEquals("主驾车窗打开百分之10", (driver as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("车窗关闭", (close as CommandAllowlist.BuildResult.Ok).phrase)
+    }
+
+    @Test
+    fun climateTemperatureAndRecirculationPhrasesUseLiveVerifiedCommands() {
+        val up = CommandAllowlist.buildPhrase("ac_temp_step", mapOf("direction" to "up"))
+        val down = CommandAllowlist.buildPhrase("ac_temp_step", mapOf("direction" to "down"))
+        val internal = CommandAllowlist.buildPhrase("ac_recirculation", mapOf("mode" to "internal"))
+        val external = CommandAllowlist.buildPhrase("ac_recirculation", mapOf("mode" to "external"))
+
+        assertEquals("空调升温", (up as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("空调降温", (down as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("内循环", (internal as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("外循环", (external as CommandAllowlist.BuildResult.Ok).phrase)
+    }
+
+    @Test
+    fun driverSeatHeatOnlyAcceptsOffOrVerifiedMaximum() {
+        val maximum = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 2))
+        val off = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 0))
+
+        assertEquals("主驾座椅加热2档", (maximum as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("关闭主驾座椅加热", (off as CommandAllowlist.BuildResult.Ok).phrase)
+
+        val unverifiedLevel = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 1))
+        assertTrue(unverifiedLevel is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    @Test
+    fun rejectsUnverifiedCommandTypes() {
+        val result = CommandAllowlist.buildPhrase("lock", emptyMap())
+        assertTrue(result is CommandAllowlist.BuildResult.Rejected)
+        assertEquals("unknown_type", (result as CommandAllowlist.BuildResult.Rejected).reason)
+
+        assertTrue(CommandAllowlist.buildPhrase("fan_level", mapOf("level" to 3)) is CommandAllowlist.BuildResult.Rejected)
+        assertTrue(CommandAllowlist.buildPhrase("ac_temp", mapOf("celsius" to 24)) is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    @Test
+    fun rejectsInvalidVerifiedCommandParameters() {
+        val result = CommandAllowlist.buildPhrase("ac_temp_step", mapOf("direction" to "25"))
         assertTrue(result is CommandAllowlist.BuildResult.Rejected)
     }
 
     @Test
-    fun windowDriverPhrase() {
-        val result = CommandAllowlist.buildPhrase("window", mapOf("which" to "driver", "pct" to 10))
-        assertTrue(result is CommandAllowlist.BuildResult.Ok)
-        assertEquals("主驾车窗打开百分之10", (result as CommandAllowlist.BuildResult.Ok).phrase)
+    fun rejectsInvalidSeatHeatLevel() {
+        val result = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 1))
+        assertTrue(result is CommandAllowlist.BuildResult.Rejected)
     }
 
     @Test
-    fun windowsPresetVentPhrase() {
-        val result = CommandAllowlist.buildPhrase("windows_preset", mapOf("preset" to "vent"))
-        assertTrue(result is CommandAllowlist.BuildResult.Ok)
-        assertEquals("车窗通风", (result as CommandAllowlist.BuildResult.Ok).phrase)
-    }
-
-    @Test
-    fun acVentPhrases() {
-        val on = CommandAllowlist.buildPhrase("ac_vent", mapOf("on" to true))
-        assertTrue(on is CommandAllowlist.BuildResult.Ok)
-        assertEquals("打开空调通风", (on as CommandAllowlist.BuildResult.Ok).phrase)
+    fun legacyAcVentIsNotAvailable() {
+        val result = CommandAllowlist.buildPhrase("ac_vent", mapOf("on" to true))
+        assertTrue(result is CommandAllowlist.BuildResult.Rejected)
     }
 
     @Test
