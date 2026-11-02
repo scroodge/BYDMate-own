@@ -342,6 +342,8 @@ object CloudTelemetryPayload {
         putIfPresent("rain", d.rain)
         putIfPresent("light_low", d.lightLow)
         putIfPresent("drl", d.drl)
+        // Both shapes: "gun in, BMS idle" (15) arrives as a PARKED sample.
+        putIfPresent("bms_state", d.bmsState)
     }
 
     private fun DiParsData.toStatusJson(): JSONObject = JSONObject().apply {
@@ -367,6 +369,8 @@ object CloudTelemetryPayload {
             putIfPresent("speed_kmh", speed)
             putIfPresent("mileage_km", mileage)
             putIfPresent("power_kw", power)
+            putIfPresent("charge_power_raw_kw", chargingPowerRawKw)
+            putIfPresent("max_charge_power_kw", maxChargePowerKw)
             putIfPresent("charge_gun_state", chargeGunState)
             putIfPresent("charging_status", chargingStatus)
         }

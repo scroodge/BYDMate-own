@@ -74,6 +74,20 @@ data class DiParsData(
      * the existing `soc` JSON key — `diplus_soc` is `numeric`, so the decimal is preserved.
      */
     val socPrecise: Double? = null,
+    /**
+     * di+ 2.0.0b8+ `电池管理状态` (#116): BYD `getBatteryManagementDeviceState()` raw enum —
+     * the same value the app path sends as `autoservice.bms_state` (observed: 0 preparing,
+     * 1 charging, 2 complete, 15 gun in / idle). Sent from the daemon path too, where
+     * autoservice is not read. Null on older di+ (unknown placeholders come back literal).
+     */
+    val bmsState: Int? = null,
+    /**
+     * di+ 2.0.0b8+ `充电功率` (#117): BYD `getChargingPower()`. Diagnostic only — it read
+     * 0.0 throughout real AC charges on car `way`, so it must never feed `charge_power_kw`.
+     */
+    val chargingPowerRawKw: Double? = null,
+    /** di+ 2.0.0b8+ `最大允许充电功率` (#125): BMS max allowed charge power, kW. */
+    val maxChargePowerKw: Double? = null,
 )
 
 @Singleton
@@ -110,7 +124,9 @@ open class DiParsClient @Inject constructor(
             "|DriveMode:{整车运行模式}|WorkMode:{整车工作模式}" +
             "|AutoPark:{自动驻车}|Rain:{雨量}" +
             "|LightLow:{近光灯}|DRL:{日行灯}" +
-            "|Sunshade:{遮阳帘打开百分比}|Sentry:{哨兵状态}|RemoteLock:{远程锁车状态}"
+            "|Sunshade:{遮阳帘打开百分比}|Sentry:{哨兵状态}|RemoteLock:{远程锁车状态}" +
+            // di+ 2.0.0b8+ charging params; older di+ echoes the placeholder back → null
+            "|BmsState:{电池管理状态}|ChargePowerRaw:{充电功率}|MaxChargePower:{最大允许充电功率}"
 
         // di+ emits magic "no data" sentinels when a signal can't be read; forwarding
         // them poisons cloud analytics. Values observed live on the head unit:
@@ -229,7 +245,7 @@ open class DiParsClient @Inject constructor(
         }
     }
 
-    private fun parse(raw: String): DiParsData {
+    internal fun parse(raw: String): DiParsData {
         val map = mutableMapOf<String, String>()
         raw.split("|").forEach { part ->
             val colonIdx = part.indexOf(':')
@@ -310,6 +326,9 @@ open class DiParsClient @Inject constructor(
             sunshade = parseIntNum(map["Sunshade"]),
             sentryState = parseIntNum(map["Sentry"]),
             remoteLockState = parseIntNum(map["RemoteLock"]),
+            bmsState = sanitizeSentinelInt(parseIntNum(map["BmsState"])),
+            chargingPowerRawKw = sanitizePowerKw(parseNum(map["ChargePowerRaw"])),
+            maxChargePowerKw = sanitizePowerKw(parseNum(map["MaxChargePower"])),
             stallSentryMode = null,
             powerStateLabel = null,
         )

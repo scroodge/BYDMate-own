@@ -135,4 +135,31 @@ class DiParsClientSanitizeTest {
     fun nullTempStaysNull() {
         assertNull(DiParsClient.sanitizeTempC(null))
     }
+
+    // ---- di+ 2.0.0b8+ charging params (#116 / #117 / #125) ----
+
+    @Test
+    fun diPlus2b9ChargingParamsParsed() {
+        // Captured live from car `way` on 2026-11-02, di+ 2.0.0b9, parked, gun out.
+        val data = DiParsClient(okhttp3.OkHttpClient())
+            .parse("SOC:58|ChargeGun:1|BmsState:15|ChargePowerRaw:0|MaxChargePower:73.3")
+
+        assertEquals(15, data.bmsState)
+        assertEquals(0.0, data.chargingPowerRawKw)
+        assertEquals(73.3, data.maxChargePowerKw)
+    }
+
+    @Test
+    fun olderDiPlusEchoesUnknownPlaceholdersAndTheyParseAsNull() {
+        // Verified live: di+ leaves an unknown `{name}` in the response verbatim and still
+        // fills every other field, so pre-b8 di+ must yield null rather than break parsing.
+        val data = DiParsClient(okhttp3.OkHttpClient()).parse(
+            "SOC:58|BmsState:{电池管理状态}|ChargePowerRaw:{充电功率}|MaxChargePower:{最大允许充电功率}",
+        )
+
+        assertEquals(58, data.soc)
+        assertNull(data.bmsState)
+        assertNull(data.chargingPowerRawKw)
+        assertNull(data.maxChargePowerKw)
+    }
 }

@@ -643,6 +643,44 @@ class CloudTelemetryPayloadTest {
         assertEquals(false, telemetry.has("charge_current_a"))
     }
 
+    // --- di+ 2.0.0b8+ charging params (#116 / #117 / #125) ---
+
+    @Test
+    fun `charging sample carries bms state and raw charge params without touching charge power`() {
+        // #117 read 0.0 through real AC charges on car `way`: it is diagnostic only and must
+        // never replace the engine-power / pack fallback in telemetry.charge_power_kw.
+        val snapshot = chargingSnapshot(pack = null).let {
+            it.copy(diPlusData = it.diPlusData!!.copy(bmsState = 1, chargingPowerRawKw = 0.0, maxChargePowerKw = 73.3))
+        }
+
+        val payload = JSONObject(CloudTelemetryPayload.build("way", snapshot))
+        val diplus = payload.getJSONObject("diplus")
+        assertEquals(1, diplus.getInt("bms_state"))
+        assertEquals(0.0, diplus.getDouble("charge_power_raw_kw"), 0.0)
+        assertEquals(73.3, diplus.getDouble("max_charge_power_kw"), 0.0)
+        assertEquals(5.0, payload.getJSONObject("telemetry").getDouble("charge_power_kw"), 0.0)
+    }
+
+    @Test
+    fun `parked sample still carries bms state but not the charge power params`() {
+        val snapshot = sampleSnapshot().let {
+            it.copy(diPlusData = it.diPlusData!!.copy(bmsState = 15, chargingPowerRawKw = 0.0, maxChargePowerKw = 73.3))
+        }
+
+        val diplus = JSONObject(CloudTelemetryPayload.build("way", snapshot)).getJSONObject("diplus")
+        assertEquals(15, diplus.getInt("bms_state"))
+        assertEquals(false, diplus.has("charge_power_raw_kw"))
+        assertEquals(false, diplus.has("max_charge_power_kw"))
+    }
+
+    @Test
+    fun `older di plus without the params omits the keys`() {
+        val diplus = JSONObject(CloudTelemetryPayload.build("way", chargingSnapshot())).getJSONObject("diplus")
+        assertEquals(false, diplus.has("bms_state"))
+        assertEquals(false, diplus.has("charge_power_raw_kw"))
+        assertEquals(false, diplus.has("max_charge_power_kw"))
+    }
+
     private fun sampleSnapshot() = VehicleTelemetrySnapshot.from(
         data = diPlusData(maxCellVoltage = null, minCellVoltage = null, speed = 0, gear = 1),
         battery = null,
