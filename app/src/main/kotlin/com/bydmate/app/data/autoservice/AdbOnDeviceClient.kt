@@ -96,6 +96,12 @@ interface AdbOnDeviceClient {
      * [DaemonSupervisorResult].
      */
     suspend fun ensureCommandDaemonRunning(): DaemonSupervisorResult
+    /**
+     * Explicit user control for the shell-uid survival daemon. Disabling is deliberately
+     * narrower than [exec]: it can only set/remove our fixed sentinel and terminate the
+     * fixed daemon/watchdog processes. This is what makes Gateway "Stop" survive car-off.
+     */
+    suspend fun setCommandDaemonEnabled(enabled: Boolean): Boolean = false
     /** Closes any underlying socket. Idempotent. */
     suspend fun shutdown()
 }
@@ -282,6 +288,20 @@ class AdbOnDeviceClientImpl @Inject constructor(
         )
     }
 
+    override suspend fun setCommandDaemonEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        if (!isConnected() && connect().isFailure) return@withContext false
+        val p = protocol ?: return@withContext false
+        val command = if (enabled) ENABLE_COMMAND_DAEMON_CMD else DISABLE_COMMAND_DAEMON_CMD
+        try {
+            // Intentionally does not go through exec(): that method is a read-only autoservice
+            // boundary. These two fixed commands are the only shell writes exposed here.
+            p.exec(command)?.trim() == COMMAND_DAEMON_CONTROL_OK
+        } catch (e: Exception) {
+            Log.w(TAG, "setCommandDaemonEnabled($enabled) failed: ${e.message}")
+            false
+        }
+    }
+
     override suspend fun shutdown() {
         withContext(Dispatchers.IO) {
             try {
@@ -311,5 +331,17 @@ class AdbOnDeviceClientImpl @Inject constructor(
                 "if [ -n \"\$pid\" ] && kill -0 \"\$pid\" 2>/dev/null && " +
                 "tr '\\0' ' ' < /proc/\"\$pid\"/cmdline 2>/dev/null | grep -q start_voltflow_cmd.sh; " +
                 "then echo ok; fi"
+        private const val COMMAND_DAEMON_SENTINEL = "/data/local/tmp/voltflow_cmd_daemon.disabled"
+        private const val COMMAND_DAEMON_CONTROL_OK = "voltflow_cmd_control_ok"
+        // Fixed commands only: no user input reaches this shell boundary. Touch the sentinel
+        // first so a concurrently waking watchdog observes it before its processes are killed.
+        private const val DISABLE_COMMAND_DAEMON_CMD =
+            "touch $COMMAND_DAEMON_SENTINEL; " +
+                "pkill -f voltflow_cmd_daemon; " +
+                "pkill -f start_voltflow_cmd.sh; " +
+                "rm -f /data/local/tmp/voltflow_cmd_watchdog.pid; " +
+                "echo $COMMAND_DAEMON_CONTROL_OK"
+        private const val ENABLE_COMMAND_DAEMON_CMD =
+            "rm -f $COMMAND_DAEMON_SENTINEL; echo $COMMAND_DAEMON_CONTROL_OK"
     }
 }

@@ -104,8 +104,10 @@ reboot. App startup and `TrackingService` import ready records transactionally; 
 key makes replay safe if a process dies after commit but before deleting the file. The daemon
 never opens `bydmate.db`.
 
-**Command polling stays always-on** regardless of app liveness — commands are idempotent and
-server-acked, so a brief double-poll is harmless and maximizes control reliability. When the
+**Command polling stays always-on** while the gateway is enabled, regardless of app liveness —
+commands are idempotent and server-acked, so a brief double-poll is harmless and maximizes control
+reliability. The user can explicitly opt out through **Gateway status → Stop**; see
+[Stop / disable](#stop--disable). When the
 server returns `commands_enabled: false`, both command pollers reduce their cadence to one request
 every 5 minutes. They keep that floor poll so a later `commands_enabled: true` response restores
 the normal server-requested cadence without an APK update (with up to 5 minutes of resume latency).
@@ -447,9 +449,38 @@ Action items:
 
 ## Stop / disable
 
+### From the APK (normal user path)
+
+**Gateway status → Stop** is a full parked/off shutdown, not just a stop of
+`TrackingService`. It persists `gateway_wanted=false`, cancels the gateway keep-alive and pending
+service-start work, then uses the app's authorised on-device ADB connection to perform this fixed
+shell action in order:
+
+1. create `/data/local/tmp/voltflow_cmd_daemon.disabled`;
+2. terminate `voltflow_cmd_daemon` and its `start_voltflow_cmd.sh` watchdog;
+3. remove the stale watchdog PID file.
+
+The sentinel is first, so a race with the watchdog cannot recreate the daemon. The app service
+then stops without scheduling its usual recovery worker. After the car powers off, neither the app
+poll loop nor the shell daemon can send telemetry, poll commands, hold its wakelock, keep Wi-Fi
+awake, or relaunch the app. **Gateway status → Start** is the explicit opt-in: it clears this
+sentinel and then starts the daemon/watchdog again if on-device ADB is available.
+
+On-car verification after pressing Stop:
+
+```sh
+adb -s $HOST shell "ls -l /data/local/tmp/voltflow_cmd_daemon.disabled; pidof voltflow_cmd_daemon; cat /data/local/tmp/voltflow_cmd_watchdog.pid 2>/dev/null || true"
+adb -s $HOST shell "dumpsys activity services | grep dev.scroodge.cloudevmate || true"
+```
+
+Expect the sentinel to exist and no daemon, watchdog or `TrackingService`. Do not use `pidof`
+alone: the sentinel is the persistent proof that a later car-off/quickboot cannot revive it.
+
+### Shell fallback
+
 ```sh
 adb -s $HOST shell "touch /data/local/tmp/voltflow_cmd_daemon.disabled"   # watchdog exits next loop
-adb -s $HOST shell "pkill -f voltflow_cmd_daemon"                          # kill the running daemon
+adb -s $HOST shell "pkill -f voltflow_cmd_daemon; pkill -f start_voltflow_cmd.sh"  # stop both now
 # re-enable: rm the .disabled sentinel, then relaunch the launcher (install step 3).
 ```
 

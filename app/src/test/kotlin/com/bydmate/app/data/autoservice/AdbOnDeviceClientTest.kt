@@ -160,4 +160,29 @@ class AdbOnDeviceClientTest {
 
         assertEquals(false, healthy)
     }
+
+    @Test
+    fun `explicit disable creates sentinel before terminating daemon and watchdog`() = runTest {
+        val fake = FakeProtocol(connectResult = true, execHandler = { "voltflow_cmd_control_ok\n" })
+        val client = newClient(fake)
+
+        assertTrue(client.setCommandDaemonEnabled(false))
+
+        val command = fake.execCalls.single()
+        assertTrue(command.contains("touch /data/local/tmp/voltflow_cmd_daemon.disabled"))
+        assertTrue(command.indexOf("touch /data/local/tmp/voltflow_cmd_daemon.disabled") < command.indexOf("pkill -f voltflow_cmd_daemon"))
+        assertTrue(command.contains("pkill -f start_voltflow_cmd.sh"))
+    }
+
+    @Test
+    fun `explicit enable only clears the daemon disabled sentinel`() = runTest {
+        val fake = FakeProtocol(connectResult = true, execHandler = { "voltflow_cmd_control_ok\n" })
+        val client = newClient(fake)
+
+        assertTrue(client.setCommandDaemonEnabled(true))
+
+        val command = fake.execCalls.single()
+        assertTrue(command.contains("rm -f /data/local/tmp/voltflow_cmd_daemon.disabled"))
+        assertEquals(false, command.contains("pkill"))
+    }
 }

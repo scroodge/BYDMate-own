@@ -83,6 +83,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var fullGatewayStopRequested = false
 
     // C-4: rarely-changing settings the 1 Hz poll loop needs are observed once via
     // Room Flow instead of re-queried every tick (~259k SQLite reads/day avoided).
@@ -195,6 +196,7 @@ class TrackingService : Service(), LocationListener {
         private const val WAKE_LOCK_DURATION_MS = 30L * 60_000L
         // Bundled launcher asset that spawns the shell-uid survival daemon.
         const val EXTRA_SET_GATEWAY_WANTED = "set_gateway_wanted"
+        private const val EXTRA_FULL_GATEWAY_STOP = "full_gateway_stop"
         // Tolerance between last "session active" tick and the current tick before we
         // consider the session closed. 30 sec survives brief powerState blips and
         // covers the DiLink wind-down after ignition-off.
@@ -300,15 +302,15 @@ class TrackingService : Service(), LocationListener {
         }
 
         fun stop(context: Context) {
+            // Do not call stopService straight away: the running service has to persist the
+            // opt-out and stop the shell-uid daemon before Android tears it down.
             val markIntent = Intent(context, TrackingService::class.java).apply {
-                putExtra(EXTRA_SET_GATEWAY_WANTED, false)
+                putExtra(EXTRA_FULL_GATEWAY_STOP, true)
             }
             try {
                 context.startService(markIntent)
             } catch (_: Exception) {
             }
-            GatewayKeepAliveWorker.cancel(context)
-            context.stopService(Intent(context, TrackingService::class.java))
         }
     }
 
@@ -418,7 +420,7 @@ class TrackingService : Service(), LocationListener {
                 // re-spawns its watchdog. Since TrackingService is auto-started on boot
                 // (BootReceiver → ServiceStartWorker), revive the daemon here whenever it
                 // is missing — idempotent, guarded by a pidof check.
-                ensureCommandDaemonRunning()
+                startCommandDaemonIfGatewayWanted()
             }
         }
 
@@ -453,6 +455,10 @@ class TrackingService : Service(), LocationListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.getBooleanExtra(EXTRA_FULL_GATEWAY_STOP, false) == true) {
+            requestFullGatewayStop(startId)
+            return START_NOT_STICKY
+        }
         intent?.let { handleGatewayWantedExtra(it) }
         maybeAttachWidget()
         return START_STICKY
@@ -465,10 +471,45 @@ class TrackingService : Service(), LocationListener {
             settingsRepository.setGatewayWanted(wanted)
             if (wanted) {
                 GatewayKeepAliveWorker.schedule(this@TrackingService)
+                startCommandDaemonIfGatewayWanted()
             } else {
                 GatewayKeepAliveWorker.cancel(this@TrackingService)
             }
         }
+    }
+
+    /**
+     * User-triggered Gateway Stop is an opt-out from *all* parked/off operation, not merely
+     * a stop of this Android service. The sentinel is written before killing the processes so
+     * neither the shell watchdog nor CommandDaemon's AppSupervisor can revive the app later.
+     */
+    private fun requestFullGatewayStop(startId: Int) {
+        if (fullGatewayStopRequested) return
+        fullGatewayStopRequested = true
+        serviceScope.launch {
+            settingsRepository.setGatewayWanted(false)
+            GatewayKeepAliveWorker.cancel(this@TrackingService)
+            WorkManager.getInstance(this@TrackingService)
+                .cancelUniqueWork(ServiceStartWorker.WORK_NAME)
+            val daemonStopped = adbOnDeviceClient.setCommandDaemonEnabled(false)
+            Log.i(TAG, "Full gateway stop: daemon/watchdog disabled=$daemonStopped")
+            appendChainLog("Gateway Stop: daemon/watchdog disabled=$daemonStopped")
+            stopSelf(startId)
+        }
+    }
+
+    /** Enable the parked/off daemon only after an explicit or persisted Gateway Start. */
+    private suspend fun startCommandDaemonIfGatewayWanted() {
+        if (!settingsRepository.isGatewayWanted()) {
+            Log.i(TAG, "Command daemon remains disabled: gateway_wanted=false")
+            return
+        }
+        val enabled = adbOnDeviceClient.setCommandDaemonEnabled(true)
+        if (!enabled) {
+            Log.w(TAG, "Command daemon sentinel could not be cleared; daemon not launched")
+            return
+        }
+        ensureCommandDaemonRunning()
     }
 
     private fun maybeAttachWidget() {
@@ -739,10 +780,9 @@ class TrackingService : Service(), LocationListener {
             }
         }
 
-        // Hand over to the survival daemon immediately instead of making it wait out the
-        // beacon's staleness threshold. Graceful stops only — BYD's power-off force-stop never
-        // runs onDestroy, which is why CommandDaemon still ages the beacon out on its own
-        // rather than trusting this.
+        // Ordinary lifecycle stops hand over to the survival daemon immediately instead of
+        // making it wait out the beacon's staleness threshold. An explicit Gateway Stop has
+        // already disabled that daemon and must remain completely quiet after car-off.
         runCatching {
             getExternalFilesDir(null)?.let { java.io.File(it, "voltflow_mate_heartbeat").delete() }
         }.onFailure { Log.w(TAG, "clearAppAliveHeartbeat failed: ${it.message}") }
@@ -768,17 +808,22 @@ class TrackingService : Service(), LocationListener {
         wakeLock?.let { if (it.isHeld) it.release() }
         _isRunning.value = false
 
-        // Auto-restart via WorkManager (like BydConnect AutoRestartReceiver)
-        try {
-            val request = OneTimeWorkRequestBuilder<ServiceStartWorker>().build()
-            WorkManager.getInstance(this).enqueueUniqueWork(
-                ServiceStartWorker.WORK_NAME,
-                ExistingWorkPolicy.KEEP,
-                request
-            )
-            Log.i(TAG, "Restart scheduled via WorkManager")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to schedule restart: ${e.message}")
+        // Auto-restart is only for an unexpected lifecycle stop. Explicit Gateway Stop is an
+        // opt-out, so scheduling a worker here would revive the very process the user stopped.
+        if (!fullGatewayStopRequested) {
+            try {
+                val request = OneTimeWorkRequestBuilder<ServiceStartWorker>().build()
+                WorkManager.getInstance(this).enqueueUniqueWork(
+                    ServiceStartWorker.WORK_NAME,
+                    ExistingWorkPolicy.KEEP,
+                    request
+                )
+                Log.i(TAG, "Restart scheduled via WorkManager")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to schedule restart: ${e.message}")
+            }
+        } else {
+            Log.i(TAG, "Restart skipped: explicit Gateway Stop")
         }
 
         super.onDestroy()
