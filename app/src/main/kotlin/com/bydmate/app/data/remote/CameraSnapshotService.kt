@@ -29,7 +29,7 @@ data class CameraSnapshotResult(
 )
 
 /**
- * Captures one 1280×720 JPEG from di+'s local 2×2 `pano` stream. di+ already hosts a
+ * Captures one 1920×1080 JPEG from di+'s local 2×2 `pano` stream. di+ already hosts a
  * mpegts.js player at localhost; using that player avoids exposing the FLV stream to the
  * phone or adding a second native H.264/FLV implementation to Mate.
  */
@@ -166,8 +166,8 @@ class CameraSnapshotService @Inject constructor(
                 }
                 view.value = 'pano';
                 if (fps) fps.value = '2';
-                if (width) width.value = '1280';
-                if (height) height.value = '720';
+                if (width) width.value = '1920';
+                if (height) height.value = '1080';
                 if (audio) audio.checked = false;
                 start.click();
                 setTimeout(take, 800);
