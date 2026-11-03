@@ -11,8 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runInterruptible
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -64,6 +64,11 @@ class VehicleCommandPoller @Inject constructor(
     private var pollingJob: Job? = null
     private var backoffMs = BASE_POLL_MS
 
+    // A Realtime ring cuts the wait short, so a command runs ~1 s after it is pressed instead
+    // of on the next 6 s / 90 s tick. The poll below stays the delivery path and the fallback.
+    private val wake = CommandWake()
+    private val doorbell = CommandDoorbell(pollClient, { Log.i(TAG, it) }) { wake.ring() }
+
     @Volatile var latestData: DiParsData? = null
 
     fun start() {
@@ -73,12 +78,13 @@ class VehicleCommandPoller @Inject constructor(
             Log.i(TAG, "Polling started")
             while (true) {
                 val waited = pollOnce()
-                delay(waited)
+                runInterruptible { wake.await(waited) }
             }
         }
     }
 
     fun stop() {
+        doorbell.stop()
         pollingJob?.cancel()
         pollingJob = null
         scope?.cancel()
@@ -91,6 +97,7 @@ class VehicleCommandPoller @Inject constructor(
 
     private suspend fun pollOnce(): Long {
         if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) != "true") {
+            doorbell.stop()
             return BASE_POLL_MS
         }
 
@@ -113,6 +120,7 @@ class VehicleCommandPoller @Inject constructor(
                 .header("X-Vehicle-Id", vehicleId)
                 .header("X-Vehicle-Uid", vehicleUid)
                 .header("X-App", "VoltFlow-Mate")
+                .header("X-Doorbell", "1")
                 .get()
                 .build()
 
@@ -141,6 +149,7 @@ class VehicleCommandPoller @Inject constructor(
             )
             CloudBatteryCapacity.fromJson(json)?.let { CloudBatteryCapacity.apply(settingsRepository, it, "command poll") }
             CloudRangeReserve.fromJson(json)?.let { CloudRangeReserve.apply(settingsRepository, it, "command poll") }
+            doorbell.update(DoorbellConfig.fromJson(json.optJSONObject("doorbell")))
             val nextPollMs = pollIntervalMs(
                 serverSeconds = json.optInt("poll_after_seconds", 0),
                 commandsEnabled = json.optBoolean("commands_enabled", true),

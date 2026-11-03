@@ -125,7 +125,9 @@ head unit is visible — see [cloud-telemetry-contract-ru.md](cloud-telemetry-co
 
 > **Known limitation**: DiPlus `迪加`-phrases require `电源状态 ≥ 1` (car ON) to actuate physical
 > hardware (windows, locks, AC). At `PWR=0` DiPlus ACKs the phrase but nothing moves. The daemon
-> still queues and acks commands — they will execute the next time the car is powered on.
+> still acks them as executed, but they do not run later either: the cloud expires a pending
+> command after 60 s (`COMMAND_TIMEOUT_MS`). This is why the web schedule UI is hidden
+> (`VEHICLE_COMMAND_SCHEDULES_ENABLED = false`) until the car can be powered on remotely.
 > Official BYD remote commands use a separate T-BOX/CAN wake channel.
 
 ## Components

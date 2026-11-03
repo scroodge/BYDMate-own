@@ -11,6 +11,9 @@ import com.bydmate.app.data.cloud.DaemonTelemetrySpool
 import com.bydmate.app.data.cloud.ShellCameraSnapshotIpc
 import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
+import com.bydmate.app.data.remote.CommandDoorbell
+import com.bydmate.app.data.remote.CommandWake
+import com.bydmate.app.data.remote.DoorbellConfig
 import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
@@ -935,14 +938,19 @@ object CommandDaemon {
         confPath: String,
     ) {
         var backoffMs = BASE_POLL_MS
+        // Realtime ring → poll now. This is what makes a command near-instant while parked,
+        // where the server otherwise paces this loop at 90 s. Polling stays the fallback.
+        val wake = CommandWake()
+        val doorbell = CommandDoorbell(ok, { log(it) }) { wake.ring() }
         while (true) {
             val conf = loadConf(confPath)
             if (conf == null) {
+                doorbell.stop()
                 Thread.sleep(BASE_POLL_MS)
                 continue
             }
             val waited = try {
-                val interval = pollOnce(ok, conf, control, latestData)
+                val interval = pollOnce(ok, conf, control, latestData, doorbell)
                 if (interval != null) {
                     backoffMs = BASE_POLL_MS
                     interval
@@ -955,7 +963,7 @@ object CommandDaemon {
                 backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
                 backoffMs
             }
-            Thread.sleep(waited)
+            wake.await(waited)
         }
     }
 
@@ -983,6 +991,7 @@ object CommandDaemon {
         conf: Conf,
         control: DiParsControlClient,
         data: DiParsData?,
+        doorbell: CommandDoorbell,
     ): Long? {
         val httpUrl = conf.commandsUrl.toHttpUrlOrNull() ?: return null
         val request = Request.Builder()
@@ -990,6 +999,7 @@ object CommandDaemon {
             .header("X-API-Key", conf.apiKey)
             .vehicleIdentity(conf)
             .header("X-App", "VoltFlow-Mate-Daemon")
+            .header("X-Doorbell", "1")
             .get()
             .build()
 
@@ -1004,6 +1014,7 @@ object CommandDaemon {
             // command queue is the normal case and must not skip the grant. Absent on older
             // servers, which reads as 0 and leaves the current window to lapse.
             applyLiveFastGrant(json)
+            doorbell.update(DoorbellConfig.fromJson(json.optJSONObject("doorbell")))
             val nextPollMs = commandPollIntervalMs(
                 serverSeconds = json.optInt("poll_after_seconds", 0),
                 commandsEnabled = json.optBoolean("commands_enabled", true),
