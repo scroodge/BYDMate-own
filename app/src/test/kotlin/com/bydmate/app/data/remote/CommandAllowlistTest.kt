@@ -44,9 +44,38 @@ class CommandAllowlistTest {
         val up = CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "up"))
         val down = CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "down"))
 
-        assertEquals("迪加升风速", (up as CommandAllowlist.BuildResult.Ok).phrase)
-        assertEquals("迪加降风速", (down as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("升风速", (up as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("降风速", (down as CommandAllowlist.BuildResult.Ok).phrase)
         assertTrue(CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "3")) is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    /**
+     * DiParsControlClient prepends 迪加 itself. A phrase that already carries it reaches di+ as
+     * 迪加迪加…: di+ answers success:true, does nothing, and brings its NaviActivity to the front
+     * (on `way`, 2026-11-03, 0.6.3 fan_speed_step).
+     */
+    @Test
+    fun noAllowlistedPhraseCarriesTheDiPlusPrefix() {
+        val commands = listOf(
+            "window" to mapOf("which" to "driver", "pct" to 50),
+            "windows_preset" to mapOf("preset" to "vent"),
+            "ac" to mapOf("on" to true),
+            "ac" to mapOf("on" to false),
+            "ac_temp_step" to mapOf("direction" to "up"),
+            "ac_temp_step" to mapOf("direction" to "down"),
+            "fan_speed_step" to mapOf("direction" to "up"),
+            "fan_speed_step" to mapOf("direction" to "down"),
+            "ac_recirculation" to mapOf("mode" to "internal"),
+            "ac_recirculation" to mapOf("mode" to "external"),
+            "seat_heat_driver" to mapOf("level" to 0),
+            "seat_heat_driver" to mapOf("level" to 2),
+        )
+        for ((type, params) in commands) {
+            val built = CommandAllowlist.buildPhrase(type, params)
+            assertTrue("$type$params must build", built is CommandAllowlist.BuildResult.Ok)
+            val phrase = (built as CommandAllowlist.BuildResult.Ok).phrase
+            assertTrue("$type$params → '$phrase'", !phrase.startsWith("迪加"))
+        }
     }
 
     @Test
@@ -92,13 +121,27 @@ class CommandAllowlistTest {
     @Test
     fun movementGuardBlocksDriving() {
         val data = sampleDiPars(speed = 10, gear = 4)
-        assertEquals("vehicle_moving", CommandAllowlist.movementBlockReason(data))
+        assertEquals("vehicle_moving", CommandAllowlist.movementBlockReason("window", data))
+    }
+
+    @Test
+    fun movementGuardAllowsClimateWhileDriving() {
+        val data = sampleDiPars(speed = 60, gear = 4)
+        for (type in listOf("ac", "ac_temp_step", "fan_speed_step", "ac_recirculation")) {
+            assertEquals(null, CommandAllowlist.movementBlockReason(type, data))
+        }
+    }
+
+    @Test
+    fun movementGuardStillBlocksSeatHeatWhileDriving() {
+        val data = sampleDiPars(speed = 60, gear = 4)
+        assertEquals("vehicle_moving", CommandAllowlist.movementBlockReason("seat_heat_driver", data))
     }
 
     @Test
     fun movementGuardAllowsChargingWhenNotInPark() {
         val data = sampleDiPars(speed = 0, gear = 4, chargeGunState = 2)
-        assertEquals(null, CommandAllowlist.movementBlockReason(data))
+        assertEquals(null, CommandAllowlist.movementBlockReason("window", data))
     }
 
     private fun sampleDiPars(

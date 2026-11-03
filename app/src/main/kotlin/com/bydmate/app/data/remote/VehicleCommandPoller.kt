@@ -180,7 +180,7 @@ class VehicleCommandPoller @Inject constructor(
             val snapshot = cameraSnapshotService.captureAndUpload(id)
             return ack(id, snapshot.status, snapshot.result)
         }
-        movementBlock(data)?.let { reason ->
+        CommandAllowlist.movementBlockReason(type, data)?.let { reason ->
             return ack(id, "rejected", mapOf("error" to reason))
         }
         CommandAllowlist.auxVoltageBlockReason(data)?.let { reason ->
@@ -199,11 +199,6 @@ class VehicleCommandPoller @Inject constructor(
                 }
             }
         }
-    }
-
-    private fun movementBlock(data: DiParsData?): String? {
-        val reason = CommandAllowlist.movementBlockReason(data) ?: return null
-        return reason
     }
 
     private fun ack(id: String, status: String, result: Map<String, Any?>): JSONObject {

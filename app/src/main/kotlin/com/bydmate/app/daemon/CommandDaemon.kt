@@ -1038,7 +1038,7 @@ object CommandDaemon {
                 ?: return ack(id, "failed", mapOf("error" to "camera_capture_bridge_failed"))
             return ack(id, snapshot.status, snapshot.result)
         }
-        CommandAllowlist.movementBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
+        CommandAllowlist.movementBlockReason(type, data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
         CommandAllowlist.auxVoltageBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
 
         return when (val built = CommandAllowlist.buildPhrase(type, params)) {

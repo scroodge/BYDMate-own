@@ -28,7 +28,16 @@ object CommandAllowlist {
         data class Rejected(val reason: String) : BuildResult()
     }
 
-    fun movementBlockReason(data: DiParsData?): String? {
+    /**
+     * Climate commands only change cabin comfort and the driver can override them from the
+     * screen, so they are allowed while driving. Windows and seat heat stay parked-only.
+     */
+    private val MOVEMENT_EXEMPT_TYPES = setOf(
+        "ac", "ac_temp_step", "fan_speed_step", "ac_recirculation",
+    )
+
+    fun movementBlockReason(type: String, data: DiParsData?): String? {
+        if (type in MOVEMENT_EXEMPT_TYPES) return null
         if (data == null) return null
         val speed = data.speed
         if (speed != null && speed != 0) return "vehicle_moving"
@@ -78,8 +87,8 @@ object CommandAllowlist {
                 else -> return BuildResult.Rejected("ac_temp_step.direction invalid")
             }
             "fan_speed_step" -> when (params["direction"]?.toString()?.trim()) {
-                "up" -> "迪加升风速"
-                "down" -> "迪加降风速"
+                "up" -> "升风速"
+                "down" -> "降风速"
                 else -> return BuildResult.Rejected("fan_speed_step.direction invalid")
             }
             "ac_recirculation" -> when (params["mode"]?.toString()?.trim()) {
