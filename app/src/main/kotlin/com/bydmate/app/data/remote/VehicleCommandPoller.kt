@@ -42,6 +42,7 @@ class VehicleCommandPoller @Inject constructor(
         private const val TAG = "VehicleCmdPoll"
         private const val BASE_POLL_MS = CommandPollingCadence.BASE_POLL_MS
         private const val MAX_BACKOFF_MS = 30_000L
+        private const val CAMERA_SNAPSHOT_COMMAND_TYPE = "camera_snapshot"
 
         /**
          * Next poll delay from the server's `poll_after_seconds`, or [BASE_POLL_MS] when the
@@ -254,7 +255,4 @@ class VehicleCommandPoller @Inject constructor(
         }
     }
 
-    private companion object {
-        const val CAMERA_SNAPSHOT_COMMAND_TYPE = "camera_snapshot"
-    }
 }
