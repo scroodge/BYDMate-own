@@ -40,6 +40,16 @@ class CommandAllowlistTest {
     }
 
     @Test
+    fun fanSpeedStepsUseLiveVerifiedCommands() {
+        val up = CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "up"))
+        val down = CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "down"))
+
+        assertEquals("迪加升风速", (up as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("迪加降风速", (down as CommandAllowlist.BuildResult.Ok).phrase)
+        assertTrue(CommandAllowlist.buildPhrase("fan_speed_step", mapOf("direction" to "3")) is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    @Test
     fun driverSeatHeatOnlyAcceptsOffOrVerifiedMaximum() {
         val maximum = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 2))
         val off = CommandAllowlist.buildPhrase("seat_heat_driver", mapOf("level" to 0))

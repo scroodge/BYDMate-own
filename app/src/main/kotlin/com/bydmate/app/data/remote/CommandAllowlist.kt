@@ -77,6 +77,11 @@ object CommandAllowlist {
                 "down" -> "空调降温"
                 else -> return BuildResult.Rejected("ac_temp_step.direction invalid")
             }
+            "fan_speed_step" -> when (params["direction"]?.toString()?.trim()) {
+                "up" -> "迪加升风速"
+                "down" -> "迪加降风速"
+                else -> return BuildResult.Rejected("fan_speed_step.direction invalid")
+            }
             "ac_recirculation" -> when (params["mode"]?.toString()?.trim()) {
                 "internal" -> "内循环"
                 "external" -> "外循环"

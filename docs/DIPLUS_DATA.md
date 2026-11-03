@@ -4,7 +4,7 @@ How VoltFlow Mate reads vehicle data from **di+** on the BYD DiLink head unit, t
 documented readable-parameter catalog, the known "no data" sentinels, and a captured live
 snapshot.
 
-- **Installed on car `way`:** di+ **`2.0.0b1`** (`versionCode 158`) as of 2026-08-14.
+- **Installed on car `way`:** di+ **`2.0.0b9`** (`versionCode 169`) as of 2026-11-03.
   The parameter catalog below is unchanged between generations and applies to both.
 - **Previous baseline:** `1.3.8b16` (`versionCode 143`), kept at
   `research/diplus.1.3.8-beta16.apk` for rollback.
@@ -30,13 +30,19 @@ Current first-party reference: [di+ Apifox API](https://s.apifox.cn/c3ce5ff5-754
 The parameter catalog below is cross-checked against its
 [`getVal`](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391/473237176e0)
 and [`getDiPars`](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391/473237177e0)
-pages and the supplied `research/diplus.1.3.8-beta16.apk`.
+pages and the locally archived `research/diplus-2.0.0b9.apk`.
 
 Code: [`DiParsClient`](../app/src/main/kotlin/com/bydmate/app/data/remote/DiParsClient.kt)
 (template + parse) → `DiParsData` →
 [`CloudTelemetryPayload`](../app/src/main/kotlin/com/bydmate/app/data/cloud/CloudTelemetryPayload.kt)
 → cloud `bydmate_telemetry_samples.diplus_*`.
 Trip DB: [`DiPlusDbReader`](../app/src/main/kotlin/com/bydmate/app/data/remote/DiPlusDbReader.kt).
+
+### Confirmed climate commands
+
+On `way` with di+ 2.0.0b9, the relative blower commands are verified to move the
+current `风量档位` by exactly one level: `迪加升风速` (up) and `迪加降风速` (down).
+`迪加设置风速N` is listed by di+ but did not actuate and is deliberately unsupported.
 
 ### Reading it manually over adb
 
