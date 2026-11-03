@@ -29,7 +29,7 @@ data class CameraSnapshotResult(
 )
 
 /**
- * Captures one 640×360 JPEG from di+'s local 2×2 `pano` stream. di+ already hosts a
+ * Captures one 1280×720 JPEG from di+'s local 2×2 `pano` stream. di+ already hosts a
  * mpegts.js player at localhost; using that player avoids exposing the FLV stream to the
  * phone or adding a second native H.264/FLV implementation to Mate.
  */
@@ -144,8 +144,9 @@ class CameraSnapshotService @Inject constructor(
     private companion object {
         const val LOCAL_PLAYER_URL = "http://127.0.0.1:8988/live-player.html"
         const val JS_BRIDGE = "VoltFlowSnapshot"
-        const val CAPTURE_TIMEOUT_MS = 20_000L
-        const val MAX_JPEG_BASE64_CHARS = 1_900_000
+        const val CAPTURE_TIMEOUT_MS = 30_000L
+        // Six MiB JPEG plus Base64 expansion; kept in sync with the cloud upload limit.
+        const val MAX_JPEG_BASE64_CHARS = 8_388_608
         val CAPTURE_SCRIPT = """
             (function () {
               const fail = () => window.$JS_BRIDGE.failed();
@@ -165,8 +166,8 @@ class CameraSnapshotService @Inject constructor(
                 }
                 view.value = 'pano';
                 if (fps) fps.value = '2';
-                if (width) width.value = '640';
-                if (height) height.value = '360';
+                if (width) width.value = '1280';
+                if (height) height.value = '720';
                 if (audio) audio.checked = false;
                 start.click();
                 setTimeout(take, 800);
@@ -178,7 +179,7 @@ class CameraSnapshotService @Inject constructor(
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     canvas.getContext('2d').drawImage(video, 0, 0);
-                    window.$JS_BRIDGE.complete(canvas.toDataURL('image/jpeg', 0.72).split(',')[1]);
+                    window.$JS_BRIDGE.complete(canvas.toDataURL('image/jpeg', 0.90).split(',')[1]);
                   } catch (_) { fail(); }
                 } else if (Date.now() < deadline) {
                   setTimeout(take, 250);
