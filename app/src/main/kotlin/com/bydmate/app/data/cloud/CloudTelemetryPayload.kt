@@ -327,6 +327,12 @@ object CloudTelemetryPayload {
      * sent them either.
      */
     private fun JSONObject.putCommonDiPlusFields(d: DiParsData) = apply {
+        // Climate state in both shapes: the live snapshot's diplus jsonb is replaced by each
+        // push, and the web's climate buttons read it. Status-only pushes (live-fast, parked)
+        // used to drop ac_status/ac_temp_c, so the buttons lost the value after every refresh.
+        putIfPresent("ac_status", d.acStatus)
+        putIfPresent("ac_temp_c", d.acTemp)
+        putIfPresent("inside_temp_c", d.insideTemp)
         putIfPresent("fan_level", d.fanLevel)
         putIfPresent("ac_circ", d.acCirc)
         putIfPresent("door_fl", d.doorFL)
@@ -404,9 +410,6 @@ object CloudTelemetryPayload {
         putIfPresent("tire_press_fr_kpa", tirePressFR)
         putIfPresent("tire_press_rl_kpa", tirePressRL)
         putIfPresent("tire_press_rr_kpa", tirePressRR)
-        putIfPresent("ac_status", acStatus)
-        putIfPresent("ac_temp_c", acTemp)
-        putIfPresent("inside_temp_c", insideTemp)
         putIfPresent("power_state", powerStateLabel ?: powerState)
         putIfPresent("stall_sentry_mode", stallSentryMode)
         putCommonDiPlusFields(this@toJson)

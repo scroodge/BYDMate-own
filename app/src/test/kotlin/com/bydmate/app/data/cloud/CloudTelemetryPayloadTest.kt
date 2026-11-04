@@ -136,6 +136,11 @@ class CloudTelemetryPayloadTest {
 
         assertEquals(1, diPlus.getInt("gear"))
         assertEquals(1, diPlus.getInt("charge_gun_state"))
+        // Climate state rides in the status shape too: the web's climate buttons read it from
+        // the live snapshot, which each push replaces whole.
+        assertEquals(0, diPlus.getInt("ac_status"))
+        assertEquals(22, diPlus.getInt("ac_temp_c"))
+        assertEquals(22, diPlus.getInt("inside_temp_c"))
         assertEquals(240, diPlus.getInt("tire_press_fl_kpa"))
         assertEquals(241, diPlus.getInt("tire_press_fr_kpa"))
         assertEquals(239, diPlus.getInt("tire_press_rl_kpa"))
@@ -305,6 +310,11 @@ class CloudTelemetryPayloadTest {
 
         assertEquals(1, diPlus.getInt("gear"))
         assertEquals(1, diPlus.getInt("charge_gun_state"))
+        // Climate state rides in the status shape too: the web's climate buttons read it from
+        // the live snapshot, which each push replaces whole.
+        assertEquals(0, diPlus.getInt("ac_status"))
+        assertEquals(22, diPlus.getInt("ac_temp_c"))
+        assertEquals(22, diPlus.getInt("inside_temp_c"))
         assertEquals(12.6, diPlus.getDouble("voltage_12v"), 0.0001)
     }
 
