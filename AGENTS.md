@@ -50,7 +50,7 @@ grid-side figure. Do **not** re-propose BMS-for-cost. Authoritative rule: EvAcCh
 ## Project Focus
 
 - VoltFlow Mate is a Kotlin/Compose Android app for BYD DiLink telemetry to VoltFlow.
-- Build/install preference is **debug APK only** for this project. Use `./gradlew testDebugUnitTest assembleDebug` and install `app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk`; do not build or install release APKs unless the user explicitly overrides this rule.
+- The project ships **debug APKs only** — there is no release build; never run `assembleRelease`. Build with `tools/build-apk.sh [--test] [--clean]` (skill `build-apk`): it runs `testDebugUnitTest`/`assembleDebug` quietly and prints a 5-line summary (version, APK path, sha, warnings, `start_voltflow_cmd.sh` byte-sync) or only the errors. Output: `app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk`; the user installs it themselves.
 - **Releases:** follow `.claude/skills/release-apk/SKILL.md` (the `/release-apk` skill). A release is not done until fresh rows appear in `bydmate_telemetry_samples` / `bydmate_live_snapshots` **after** the install — an APK that builds and installs but stops sending telemetry is a failed release (this shipped in v0.4.1).
 - For Cloud Sync work, start with `CloudTelemetrySender`, `CloudTelemetryPayload`, `CloudTelemetryCadence`, `TrackingService`, and tests in `app/src/test/kotlin/com/bydmate/app/data/cloud/`.
 - For parked/off remote command work, start with `CommandDaemon`, `VehicleCommandPoller`, `CommandAllowlist`, `DiParsControlClient`, `tools/start_voltflow_cmd.sh`, and `docs/REMOTE_COMMAND_DAEMON.md`.

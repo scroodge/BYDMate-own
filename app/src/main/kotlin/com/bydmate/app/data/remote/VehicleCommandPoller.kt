@@ -70,6 +70,10 @@ class VehicleCommandPoller @Inject constructor(
     private val doorbell = CommandDoorbell(pollClient, { Log.i(TAG, it) }) { wake.ring() }
 
     @Volatile var latestData: DiParsData? = null
+        set(value) {
+            field = value
+            doorbell.setPowerOn((value?.powerState ?: 0) >= 1)
+        }
 
     fun start() {
         if (pollingJob?.isActive == true) return

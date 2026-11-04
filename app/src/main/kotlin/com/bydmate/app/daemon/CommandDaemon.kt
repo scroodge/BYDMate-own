@@ -144,6 +144,8 @@ object CommandDaemon {
      */
     @Volatile private var latestData: DiParsData? = null
     @Volatile private var latestDataAt = 0L
+    /** Set by [commandLoop]; the status loop feeds it the car power state (see CommandDoorbell). */
+    @Volatile private var commandDoorbell: CommandDoorbell? = null
 
     // Built lazily from the daemon's own OkHttpClient on the first charging push; it caches the
     // last di+ pack reading, so one instance must live across pushes.
@@ -758,6 +760,7 @@ object CommandDaemon {
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
                         diPars.fetch()?.let {
                             latestData = it; latestDataAt = now
+                            commandDoorbell?.setPowerOn((it.powerState ?: 0) >= 1)
                             lastKnownGear = it.gear; lastKnownGunState = it.chargeGunState
                         }
                     }
@@ -942,6 +945,8 @@ object CommandDaemon {
         // where the server otherwise paces this loop at 90 s. Polling stays the fallback.
         val wake = CommandWake()
         val doorbell = CommandDoorbell(ok, { log(it) }) { wake.ring() }
+        commandDoorbell = doorbell
+        latestData?.let { doorbell.setPowerOn((it.powerState ?: 0) >= 1) }
         while (true) {
             val conf = loadConf(confPath)
             if (conf == null) {

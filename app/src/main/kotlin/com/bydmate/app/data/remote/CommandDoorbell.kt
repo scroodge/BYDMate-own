@@ -63,6 +63,10 @@ class CommandWake {
  * too. All state lives on one executor thread; socket callbacks hop onto it and are dropped
  * when they belong to an older connection. Reconnects back off 1 s → 60 s; each successful
  * join rings once, to pick up anything inserted while the socket was down.
+ *
+ * Held only while the car is powered ([setPowerOn], `电源状态` ≥ 1): with the car off di+
+ * cannot execute a command anyway, so an open socket would only cost the 12 V battery and
+ * data. Power-on reconnects at once, without waiting for the next (90 s parked) poll.
  */
 class CommandDoorbell(
     baseClient: OkHttpClient,
@@ -78,7 +82,9 @@ class CommandDoorbell(
         Thread(r, "voltflow-doorbell").apply { isDaemon = true }
     }
 
-    private var config: DoorbellConfig? = null
+    private var config: DoorbellConfig? = null // what the socket is connected to right now
+    private var desired: DoorbellConfig? = null // last server answer
+    @Volatile private var powerOn = false
     private var socket: WebSocket? = null
     private var generation = 0
     private var ref = 1
@@ -93,17 +99,33 @@ class CommandDoorbell(
     /** Apply the latest server answer; `null` closes the socket. Cheap when unchanged. */
     fun update(newConfig: DoorbellConfig?) {
         executor.execute {
-            if (newConfig == config) return@execute
-            config = newConfig
-            backoffMs = MIN_BACKOFF_MS
-            pendingReconnect?.cancel(false)
-            pendingReconnect = null
-            closeSocket(if (newConfig == null) "disabled" else "config changed")
-            if (newConfig != null) connect()
+            desired = newConfig
+            apply()
         }
     }
 
     fun stop() = update(null)
+
+    /** Called on every vehicle sample; only a change of state costs anything. */
+    fun setPowerOn(on: Boolean) {
+        if (on == powerOn) return
+        powerOn = on
+        executor.execute {
+            if (desired != null) log(if (on) "doorbell resumed: car powered" else "doorbell paused: car off")
+            apply()
+        }
+    }
+
+    private fun apply() {
+        val target = if (powerOn) desired else null
+        if (target == config) return
+        config = target
+        backoffMs = MIN_BACKOFF_MS
+        pendingReconnect?.cancel(false)
+        pendingReconnect = null
+        closeSocket(if (target == null) "disabled" else "config changed")
+        if (target != null) connect()
+    }
 
     private fun connect() {
         val cfg = config ?: return

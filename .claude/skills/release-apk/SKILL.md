@@ -36,11 +36,11 @@ now happened twice: v0.4.1, and v0.5.2's four-day silent outage.
 ## 3. Test + build (debug only)
 
 ```bash
-./gradlew testDebugUnitTest assembleDebug
+tools/build-apk.sh --test   # = testDebugUnitTest assembleDebug, compact output
 ```
 
-- **Debug APK only** — never `assembleRelease` unless the user explicitly overrides
-  (AGENTS.md rule).
+- **Debug APK only** — the project never builds `assembleRelease`; the GitHub release
+  ships the debug APK.
 - Output: `app/build/outputs/apk/debug/VoltFlow-Mate-v<version>.apk`.
 - If tests fail, stop and report; do not proceed with a red suite.
 
