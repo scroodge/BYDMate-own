@@ -81,6 +81,7 @@ class TrackingService : Service(), LocationListener {
     @Inject lateinit var cloudTelemetrySender: CloudTelemetrySender
     @Inject lateinit var daemonSpoolImporter: DaemonSpoolImporter
     @Inject lateinit var sohResolver: com.bydmate.app.domain.battery.SohResolver
+    @Inject lateinit var autoserviceTelemetryReader: com.bydmate.app.data.autoservice.AutoserviceTelemetryReader
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var fullGatewayStopRequested = false
@@ -92,6 +93,11 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var cloudSyncEnabledCached: Boolean = false
     @Volatile private var autoserviceEnabledCached: Boolean = false
     @Volatile private var omitGpsCached: Boolean = false
+    // Test toggle "данные autoservice" (KEY_AUTOSERVICE_TELEMETRY).
+    @Volatile private var autoserviceTelemetryCached: Boolean = false
+    private var lastAsTelemetryLogMs = 0L
+    private var lastAsTelemetryChainLogMs = 0L
+    private var lastAsTelemetryFileLogMs = 0L
     // Cached like the flags above: read on every 1 Hz tick, so it must not touch Room there.
     @Volatile private var socPreferenceCached: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST
     private var pollingJob: Job? = null
@@ -182,6 +188,8 @@ class TrackingService : Service(), LocationListener {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "bydmate_tracking"
         private const val POLL_INTERVAL_MS = 1000L // 1 second for local telemetry pooling
+        private const val AS_TELEMETRY_LOG_INTERVAL_MS = 30_000L
+        private const val AS_TELEMETRY_CHAINLOG_INTERVAL_MS = 10 * 60_000L
         // Throttle autoservice gun-state read so we don't hit Binder/ADB on every
         // 3-second poll. 5 ticks ≈ 15 s — fast enough that the user sees a row
         // appear within ~half a minute of unplugging, gentle enough not to
@@ -226,6 +234,16 @@ class TrackingService : Service(), LocationListener {
 
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
+
+        /**
+         * Test toggle "данные autoservice": di+ sample with autoservice values overlaid, plus
+         * the per-field di+/autoservice disagreements. Display only — null when the toggle
+         * is off. Nothing that writes history or talks to the cloud reads this.
+         */
+        private val _autoserviceTelemetryView =
+            MutableStateFlow<com.bydmate.app.data.autoservice.AutoserviceOverlayResult?>(null)
+        val autoserviceTelemetryView: StateFlow<com.bydmate.app.data.autoservice.AutoserviceOverlayResult?> =
+            _autoserviceTelemetryView
 
         /**
          * The car's own (display-scale, whole %) SOC while the user prefers it over Di+, else
@@ -1071,9 +1089,34 @@ class TrackingService : Service(), LocationListener {
             // Off the poll loop on purpose: a throw in the estimator must never abort a
             // tick upstream of the cloud push and the liveness beacon (see CHANGELOG 0.5.2).
             launch { runAiRangeLoop() }
+            autoserviceTelemetryCached = settingsRepository.isAutoserviceTelemetryEnabled()
+            if (autoserviceTelemetryCached) {
+                com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendHeader(
+                    this@TrackingService, "polling start, autoservice telemetry ON",
+                )
+            }
+            launch {
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_AUTOSERVICE_TELEMETRY)
+                    .collect {
+                        val on = (it ?: "false") == "true"
+                        if (on != autoserviceTelemetryCached) {
+                            appendChainLog("autoservice telemetry ${if (on) "ON" else "OFF"}")
+                            com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendHeader(
+                                this@TrackingService, "autoservice telemetry ${if (on) "ON" else "OFF"}",
+                            )
+                        }
+                        autoserviceTelemetryCached = on
+                    }
+            }
+            // Same reason as the estimator: ADB reads (~28 ms per fid) stay off the 1 Hz loop;
+            // the loop only merges whatever snapshot the reader has ready.
+            launch { autoserviceTelemetryReader.run { autoserviceTelemetryCached } }
             while (true) {
                 try {
                     val data = diParsClient.fetch()
+                    // Local-only test view: never feeds _lastData, the cloud, trips or
+                    // automations — those stay on di+ until the comparison is judged.
+                    updateAutoserviceTelemetryView(data)
                     if (data != null) {
                         val nowMs = System.currentTimeMillis()
                         consecutiveNullCount = 0
@@ -1661,6 +1704,53 @@ class TrackingService : Service(), LocationListener {
     }
 
     private fun appendChainLog(entry: String) = ChainLog.append(this, entry)
+
+    /**
+     * Test toggle "данные autoservice": overlays the reader's latest snapshot onto the di+
+     * sample and publishes it as [autoserviceTelemetryView] for the screen ONLY — the
+     * cloud, trips, charges and automations keep getting the plain di+ sample until the
+     * on-car comparison has been judged. Never throws into the poll loop (CLAUDE.md, the
+     * v0.5.2 outage).
+     */
+    private fun updateAutoserviceTelemetryView(diPlusData: DiParsData?) {
+        if (!autoserviceTelemetryCached) {
+            _autoserviceTelemetryView.value = null
+            return
+        }
+        try {
+            val nowMs = System.currentTimeMillis()
+            val snapshot = autoserviceTelemetryReader.snapshot()
+            val result = com.bydmate.app.data.autoservice.AutoserviceTelemetryOverlay.apply(
+                diPlusData, snapshot, nowMs,
+            )
+            _autoserviceTelemetryView.value = result
+            // Comparison file for «Отправить диагностику» — written even with no result, so
+            // a reader that never gets data (ADB down) is visible in the log too.
+            if (nowMs - lastAsTelemetryFileLogMs >= com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.INTERVAL_MS) {
+                lastAsTelemetryFileLogMs = nowMs
+                com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendSample(
+                    this, diPlusData, result, snapshot, autoserviceTelemetryReader.lastError,
+                )
+            }
+            if (result == null) return
+            if (nowMs - lastAsTelemetryLogMs >= AS_TELEMETRY_LOG_INTERVAL_MS) {
+                lastAsTelemetryLogMs = nowMs
+                val summary = "as-telemetry di+=${if (diPlusData != null) "ok" else "none"}" +
+                    " fields=${result.fromAutoservice.size}" +
+                    " mismatch=${result.mismatches.size}" +
+                    (autoserviceTelemetryReader.lastError?.let { " err=$it" } ?: "") +
+                    (if (result.mismatches.isNotEmpty()) " [" + result.mismatches.take(6).joinToString("; ") + "]" else "")
+                Log.i(TAG, summary)
+                if (nowMs - lastAsTelemetryChainLogMs >= AS_TELEMETRY_CHAINLOG_INTERVAL_MS) {
+                    lastAsTelemetryChainLogMs = nowMs
+                    appendChainLog(summary)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "autoservice telemetry merge failed: ${e.message}", e)
+            _autoserviceTelemetryView.value = null
+        }
+    }
 
     private fun updateNotification(data: DiParsData) {
         val parts = mutableListOf<String>()

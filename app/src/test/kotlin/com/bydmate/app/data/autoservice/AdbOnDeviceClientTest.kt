@@ -54,6 +54,52 @@ class AdbOnDeviceClientTest {
     }
 
     @Test
+    fun `execAutoserviceReads sends one marker-separated read-only command`() = runTest {
+        val fake = FakeProtocol(execHandler = {
+            "@vfas0\nResult: Parcel(00000000 0007f330   '....0...')\n" +
+                "@vfas1\nResult: Parcel(00000000 42a80000   '.......B')"
+        })
+        val client = newClient(fake)
+        client.connect()
+        val result = client.execAutoserviceReads(listOf(
+            AutoserviceRead(5, 1014, 1246765072),
+            AutoserviceRead(7, 1013, -1807745016),
+        ))
+        assertEquals(listOf(0x7f330, 0x42a80000), result)
+        assertEquals(1, fake.execCalls.size)
+        assertEquals(
+            "echo @vfas0;service call autoservice 5 i32 1014 i32 1246765072;" +
+                "echo @vfas1;service call autoservice 7 i32 1013 i32 -1807745016",
+            fake.execCalls.single(),
+        )
+    }
+
+    @Test
+    fun `execAutoserviceReads returns null on transport failure`() = runTest {
+        val client = newClient(FakeProtocol(execHandler = { null }))
+        client.connect()
+        assertNull(client.execAutoserviceReads(listOf(AutoserviceRead(5, 1014, 1))))
+    }
+
+    @Test
+    fun `AutoserviceRead refuses write transact codes`() {
+        try {
+            AutoserviceRead(6, 1014, 1145045032)
+            fail("Expected IllegalArgumentException")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("read-only"))
+        }
+    }
+
+    @Test
+    fun `parseBatchOutput keys by marker so a failed call does not shift later values`() {
+        val out = "@vfas0\nService autoservice does not exist\n" +
+            "@vfas1\nResult: Parcel(00000000 00000060   '....`...')\n" +
+            "@vfas2\nResult: Parcel(00000000 ffffd8e5   '........')"
+        assertEquals(listOf(null, 0x60, -10011), AdbOnDeviceClientImpl.parseBatchOutput(out, 3))
+    }
+
+    @Test
     fun `exec write command throws write barrier`() = runTest {
         val client = newClient(FakeProtocol())
         client.connect()

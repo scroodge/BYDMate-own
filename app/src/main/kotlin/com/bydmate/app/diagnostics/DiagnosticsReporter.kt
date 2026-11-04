@@ -94,6 +94,9 @@ class DiagnosticsReporter @Inject constructor(
             "daemon log" to (daemonLog ?: "(daemon did not answer within ${DAEMON_WAIT_MS / 1000}s — not running?)"),
             "logcat (this app)" to logcat(),
             "recorded log sessions" to recordedLog(),
+            // "данные autoservice" test toggle: di+/autoservice per field, every 5 s.
+            "autoservice telemetry log" to com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.read(context)
+                ?.let { DiagnosticsBundle.tail(it, MAX_SECTION_CHARS) },
         )
     }
 

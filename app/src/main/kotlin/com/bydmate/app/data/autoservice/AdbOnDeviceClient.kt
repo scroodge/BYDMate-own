@@ -15,6 +15,16 @@ import javax.inject.Singleton
  * the sequence stopped earlier (ADB unavailable / launcher deploy failed) — check
  * [adbConnected] and [daemonRunning]/[watchdogRunning] first to tell those apart.
  */
+/** One read-only autoservice call: transact 5 = getInt, 7 = getFloat. */
+data class AutoserviceRead(val tx: Int, val dev: Int, val fid: Int) {
+    init {
+        require(tx == FidRegistry.TX_GET_INT || tx == FidRegistry.TX_GET_FLOAT) { "read-only tx only: $tx" }
+        require(dev >= 0) { "dev must be non-negative: $dev" }
+    }
+
+    fun command(): String = "service call autoservice $tx i32 $dev i32 $fid"
+}
+
 data class DaemonSupervisorResult(
     val adbConnected: Boolean,
     val daemonRunning: Boolean,
@@ -44,6 +54,14 @@ interface AdbOnDeviceClient {
     suspend fun isConnected(): Boolean
     /** Executes a one-shot shell command and returns stdout, or null on failure. */
     suspend fun exec(cmd: String): String?
+    /**
+     * Runs several read-only autoservice calls in ONE shell session — one ADB round trip
+     * instead of one per fid (~28 ms each on the head unit). Returns the raw 32-bit results
+     * in input order, null per call that produced no parcel, or null for the whole batch on
+     * transport failure. Keep batches short: [AdbProtocolClient.exec] is synchronized, so a
+     * long batch holds up every other autoservice read (e.g. the charging-gun poll).
+     */
+    suspend fun execAutoserviceReads(reads: List<AutoserviceRead>): List<Int?>? = null
     /**
      * Grants PACKAGE_USAGE_STATS appop to our own package via shell uid. The
      * only non-autoservice write we permit through this client — needed so
@@ -161,6 +179,27 @@ class AdbOnDeviceClientImpl @Inject constructor(
             Log.w(TAG, "exec failed: ${e.message}")
             null
         }
+    }
+
+    override suspend fun execAutoserviceReads(reads: List<AutoserviceRead>): List<Int?>? = withContext(Dispatchers.IO) {
+        if (reads.isEmpty()) return@withContext emptyList()
+        // Every call still passes the single-call write barrier; the only glue added
+        // between them is a fixed `echo @<index>` marker, built from an Int.
+        val cmd = reads.mapIndexed { i, r ->
+            val call = r.command()
+            require(call.matches(WRITE_BARRIER_REGEX)) {
+                "AdbOnDeviceClient: refused command (write barrier): $call"
+            }
+            "echo $BATCH_MARKER$i;$call"
+        }.joinToString(";")
+        val p = protocol ?: return@withContext null
+        val out = try {
+            kotlinx.coroutines.runInterruptible { p.exec(cmd) }
+        } catch (e: Exception) {
+            Log.w(TAG, "execAutoserviceReads failed: ${e.message}")
+            null
+        } ?: return@withContext null
+        parseBatchOutput(out, reads.size)
     }
 
     override suspend fun grantUsageStatsAppop(packageName: String): Boolean = withContext(Dispatchers.IO) {
@@ -318,6 +357,32 @@ class AdbOnDeviceClientImpl @Inject constructor(
         // Allow only: service call autoservice <5|7|9> i32 <dev> i32 <fid>
         // Rejects tx=6 (setInt), tx=8 (setBuffer), and arbitrary shell.
         private val WRITE_BARRIER_REGEX = Regex("""^service call autoservice [579] i32 \d+ i32 -?\d+$""")
+
+        private const val BATCH_MARKER = "@vfas"
+        private val BATCH_MARKER_REGEX = Regex("""^$BATCH_MARKER(\d+)$""")
+        private val PARCEL_INT_REGEX = Regex("""Parcel\(00000000\s+([0-9a-fA-F]{8})""")
+
+        /**
+         * Splits `echo @vfas<i>` / `Result: Parcel(00000000 xxxxxxxx ...)` output back into
+         * per-call raw ints. Marker-keyed rather than positional, so one call that prints an
+         * error instead of a parcel can't shift every value after it onto the wrong field.
+         */
+        internal fun parseBatchOutput(out: String, count: Int): List<Int?> {
+            val result = arrayOfNulls<Int>(count)
+            var current = -1
+            for (line in out.lineSequence()) {
+                val trimmed = line.trim()
+                val marker = BATCH_MARKER_REGEX.find(trimmed)
+                if (marker != null) {
+                    current = marker.groupValues[1].toIntOrNull() ?: -1
+                    continue
+                }
+                if (current !in 0 until count || result[current] != null) continue
+                val m = PARCEL_INT_REGEX.find(trimmed) ?: continue
+                result[current] = m.groupValues[1].toLong(16).toInt()
+            }
+            return result.toList()
+        }
 
         // Hardcoded — no params, so no injection surface.
         private const val LAUNCH_DIPLUS_CMD =

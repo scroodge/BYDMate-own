@@ -116,4 +116,53 @@ object FidRegistry {
     const val FID_TIRE_PRESSURE_RL = -1728052948
     /** Rear-right tire pressure, kPa. */
     const val FID_TIRE_PRESSURE_RR = -1728052944
+
+    // === Telemetry-from-autoservice fids (settings toggle "данные autoservice") ===
+    // Source: BYDMate-v4.2.0 (upstream com.bydmate.app) FID table `A2/r.java`, symbol names
+    // from BYDAutoFeatureIds. Live-probed on car `way` (Leopard 3, DiLink 3.0, CANFD) on
+    // 2026-11-04, ignition OFF, side by side with di+ getDiPars: every value below matched
+    // di+ except where noted. Parked-only check — speed/gear D/power in motion and the
+    // AC block while running are still unvalidated; the toggle exists to validate them.
+    // Not used: DRL (1004/1231040528 read 0 while di+ said 1), 4.2's alternate trunk
+    // (1074790416) and window-RR (947912752), which return sentinel on this car.
+    const val DEV_AC = 1000
+    const val DEV_LIGHT = 1004
+    const val DEV_ENERGY = 1006
+    const val DEV_INSTRUMENT = 1007
+    const val DEV_GEARBOX = 1011
+    const val DEV_SPEED = 1013
+    const val DEV_SETTING = 1023
+    const val DEV_LOCK = 1032
+
+    /** Vehicle speed, km/h (transact 7=float). `Speed.SPEED_AUTO_SPEED`. */
+    const val FID_SPEED = -1807745016
+    /** Highest / lowest cell voltage, mV (transact 5, ×0.001 → V). di+ 3.335 = raw 3335. */
+    const val FID_MAX_CELL_VOLTAGE = 1147142192
+    const val FID_MIN_CELL_VOLTAGE = 1147142160
+    /** Highest / lowest battery temp, °C + 40 (transact 5). Raw 48 = di+ 8 °C. */
+    const val FID_MAX_BATTERY_TEMP = 1148190752
+    const val FID_MIN_BATTERY_TEMP = 1148190736
+    const val BATTERY_TEMP_OFFSET_C = 40
+    /** BMS max allowed charge power, kW ×10 (transact 5). Raw 560 = di+ 56. */
+    const val FID_MAX_CHARGE_POWER = 877658136
+    /** Gear, same enum as di+ (1=P, 2=R, 3=N, 4=D). `Gearbox.GEARBOX_AUTO_MODE_TYPE`. */
+    const val FID_GEAR = 555745336
+    /** Power state, same enum as di+ (0=OFF, 1=ON, 2=DRIVE). `Setting.SET_VEHICLE_STATE`. */
+    const val FID_POWER_STATE = 315621408
+    /** Drive mode / work mode, same enums as di+. `Energy.ENERGY_OPERATION_MODE` / `_MODE_INSTRUMENT`. */
+    const val FID_DRIVE_MODE = 555745294
+    const val FID_WORK_MODE = 874512420
+    /** AC block (dev 1000), same values as di+. Inside temp returns sentinel with ignition off. */
+    const val FID_AC_POWER_STATE = 1077936144
+    const val FID_AC_CYCLE_MODE = 1077936148
+    const val FID_AC_WIND_LEVEL = 1077936156
+    const val FID_AC_TEMP_MAIN = 1077936168
+    const val FID_AC_TEMP_OUT = 1077936184
+    const val FID_AC_TEMP_INSIDE = 1031798832
+    /** Driver seatbelt, same enum as di+. `Instrument.INSTRUMENT_DD_MAIN_SAFETYBELT_STATE`. */
+    const val FID_SEATBELT_FL = 692060184
+    /** Driver door lock, same enum as di+ (1=unlocked, 2=locked). `Ota.OTA_LF_DOOR_LOCK`. */
+    const val FID_LOCK_FL = 1081081864
+    /** Low beam, 0=OFF 1=ON. `Light.LIGHT_LOW_BEAM_LIGHT`. */
+    const val FID_LIGHT_LOW = 950009866
 }

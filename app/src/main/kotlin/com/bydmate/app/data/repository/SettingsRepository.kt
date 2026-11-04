@@ -101,6 +101,8 @@ open class SettingsRepository @Inject constructor(
         const val KEY_APP_LANGUAGE = "app_language"
         const val KEY_DATA_SOURCE = "data_source"
         const val KEY_AUTOSERVICE_ENABLED = "autoservice_enabled"
+        /** Test toggle: take live telemetry fields from autoservice instead of di+. Default off. */
+        const val KEY_AUTOSERVICE_TELEMETRY = "autoservice_telemetry_primary"
         const val KEY_LAST_KNOWN_SOH = "last_known_soh_percent"
         const val KEY_LAST_MILEAGE_KM = "last_mileage_km"
         const val KEY_LAST_CAPACITY_KWH = "last_capacity_kwh"
@@ -301,6 +303,12 @@ open class SettingsRepository @Inject constructor(
 
     suspend fun setAutoserviceEnabled(enabled: Boolean) =
         setString(KEY_AUTOSERVICE_ENABLED, enabled.toString())
+
+    suspend fun isAutoserviceTelemetryEnabled(): Boolean =
+        getString(KEY_AUTOSERVICE_TELEMETRY, "false") == "true"
+
+    suspend fun setAutoserviceTelemetryEnabled(enabled: Boolean) =
+        setString(KEY_AUTOSERVICE_TELEMETRY, enabled.toString())
 
     suspend fun getLastKnownSohPercent(): Double? =
         getString(KEY_LAST_KNOWN_SOH, "").toDoubleOrNull()?.takeIf { it in 0.0..100.0 }
