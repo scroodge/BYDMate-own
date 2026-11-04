@@ -11,6 +11,7 @@ import com.bydmate.app.data.cloud.DaemonTelemetrySpool
 import com.bydmate.app.data.cloud.ShellCameraSnapshotIpc
 import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
+import com.bydmate.app.data.remote.AckOutbox
 import com.bydmate.app.data.remote.CommandDoorbell
 import com.bydmate.app.data.remote.CommandWake
 import com.bydmate.app.data.remote.DoorbellConfig
@@ -146,6 +147,7 @@ object CommandDaemon {
     @Volatile private var latestDataAt = 0L
     /** Set by [commandLoop]; the status loop feeds it the car power state (see CommandDoorbell). */
     @Volatile private var commandDoorbell: CommandDoorbell? = null
+    private val ackOutbox = AckOutbox()
 
     // Built lazily from the daemon's own OkHttpClient on the first charging push; it caches the
     // last di+ pack reading, so one instance must live across pushes.
@@ -999,6 +1001,8 @@ object CommandDaemon {
         doorbell: CommandDoorbell,
     ): Long? {
         val httpUrl = conf.commandsUrl.toHttpUrlOrNull() ?: return null
+        // Acks lost on an earlier poll go first: the web is still waiting on those commands.
+        if (!ackOutbox.isEmpty) deliverAcks(ok, conf, null)
         val request = Request.Builder()
             .url(httpUrl)
             .header("X-API-Key", conf.apiKey)
@@ -1025,7 +1029,7 @@ object CommandDaemon {
                 commandsEnabled = json.optBoolean("commands_enabled", true),
             )
             val commands = json.optJSONArray("commands") ?: JSONArray()
-            if (commands.length() == 0) return nextPollMs
+            if (commands.length() == 0) return pacedForAcks(nextPollMs)
 
             log("received ${commands.length()} command(s)")
             val acks = JSONArray()
@@ -1036,8 +1040,8 @@ object CommandDaemon {
                 val params = jsonObjectToMap(cmd.optJSONObject("params") ?: JSONObject())
                 acks.put(executeCommand(control, data, id, type, params))
             }
-            postAck(ok, conf, acks)
-            nextPollMs
+            deliverAcks(ok, conf, acks)
+            pacedForAcks(nextPollMs)
         }
     }
 
@@ -1073,20 +1077,35 @@ object CommandDaemon {
         }
     }
 
-    private fun postAck(ok: OkHttpClient, conf: Conf, acks: JSONArray) {
-        try {
-            val payload = JSONObject().put("acks", acks).toString()
-            val request = Request.Builder()
-                .url(conf.ackUrl)
-                .header("Content-Type", "application/json")
-                .header("X-API-Key", conf.apiKey)
-                .vehicleIdentity(conf)
-                .header("X-App", "VoltFlow-Mate-Daemon")
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
-            ok.newCall(request).execute().use { log("ack HTTP ${it.code} (${acks.length()} items)") }
-        } catch (e: Exception) {
-            log("ack failed: ${e.message}")
+    private fun pacedForAcks(nextPollMs: Long): Long =
+        if (ackOutbox.isEmpty) nextPollMs else min(nextPollMs, AckOutbox.RETRY_MS)
+
+    private fun deliverAcks(ok: OkHttpClient, conf: Conf, acks: JSONArray?) {
+        val code = ackOutbox.deliver(acks, System.currentTimeMillis()) { batch ->
+            try {
+                postAck(ok, conf, batch)
+            } catch (e: Exception) {
+                log("ack failed: ${e.message}")
+                null
+            }
+        }
+        if (!ackOutbox.isEmpty) log("ack pending retry: ${ackOutbox.size} item(s) (last HTTP ${code ?: "-"})")
+    }
+
+    /** @return the HTTP status; throws when the request itself fails. */
+    private fun postAck(ok: OkHttpClient, conf: Conf, acks: JSONArray): Int {
+        val payload = JSONObject().put("acks", acks).toString()
+        val request = Request.Builder()
+            .url(conf.ackUrl)
+            .header("Content-Type", "application/json")
+            .header("X-API-Key", conf.apiKey)
+            .vehicleIdentity(conf)
+            .header("X-App", "VoltFlow-Mate-Daemon")
+            .post(payload.toRequestBody("application/json".toMediaType()))
+            .build()
+        return ok.newCall(request).execute().use {
+            log("ack HTTP ${it.code} (${acks.length()} items)")
+            it.code
         }
     }
 

@@ -68,6 +68,7 @@ class VehicleCommandPoller @Inject constructor(
     // of on the next 6 s / 90 s tick. The poll below stays the delivery path and the fallback.
     private val wake = CommandWake()
     private val doorbell = CommandDoorbell(pollClient, { Log.i(TAG, it) }) { wake.ring() }
+    private val ackOutbox = AckOutbox()
 
     @Volatile var latestData: DiParsData? = null
         set(value) {
@@ -115,6 +116,8 @@ class VehicleCommandPoller @Inject constructor(
         val commandsUrl = commandsUrlFromTelemetry(telemetryUrl) ?: return BASE_POLL_MS
         val ackUrl = "$commandsUrl/ack"
         val vehicleUid = settingsRepository.getOrCreateVehicleUid()
+        // Acks lost on an earlier poll go first: the web is still waiting on those commands.
+        if (!ackOutbox.isEmpty) deliverAcks(ackUrl, apiKey, vehicleId, vehicleUid, null)
 
         return try {
             val httpUrl = commandsUrl.toHttpUrlOrNull() ?: return BASE_POLL_MS
@@ -159,7 +162,7 @@ class VehicleCommandPoller @Inject constructor(
                 commandsEnabled = json.optBoolean("commands_enabled", true),
             )
             val commands = json.optJSONArray("commands") ?: JSONArray()
-            if (commands.length() == 0) return nextPollMs
+            if (commands.length() == 0) return pacedForAcks(nextPollMs)
 
             Log.i(TAG, "Received ${commands.length()} command(s)")
             val acks = JSONArray()
@@ -174,8 +177,8 @@ class VehicleCommandPoller @Inject constructor(
                 acks.put(ack)
             }
 
-            postAck(ackUrl, apiKey, vehicleId, vehicleUid, acks)
-            nextPollMs
+            deliverAcks(ackUrl, apiKey, vehicleId, vehicleUid, acks)
+            pacedForAcks(nextPollMs)
         } catch (e: Exception) {
             Log.e(TAG, "Poll error: ${e.message}")
             CloudLinkStatus.onPoll(ok = false)
@@ -222,23 +225,36 @@ class VehicleCommandPoller @Inject constructor(
         }
     }
 
-    private fun postAck(url: String, apiKey: String, vehicleId: String, vehicleUid: String, acks: JSONArray) {
-        try {
-            val payload = JSONObject().put("acks", acks).toString()
-            val request = Request.Builder()
-                .url(url)
-                .header("Content-Type", "application/json")
-                .header("X-API-Key", apiKey)
-                .header("X-Vehicle-Id", vehicleId)
-                .header("X-Vehicle-Uid", vehicleUid)
-                .header("X-App", "VoltFlow-Mate")
-                .post(payload.toRequestBody("application/json".toMediaType()))
-                .build()
-            pollClient.newCall(request).execute().use { response ->
-                Log.i(TAG, "Ack HTTP ${response.code} (${acks.length()} items)")
+    private fun pacedForAcks(nextPollMs: Long): Long =
+        if (ackOutbox.isEmpty) nextPollMs else min(nextPollMs, AckOutbox.RETRY_MS)
+
+    private fun deliverAcks(url: String, apiKey: String, vehicleId: String, vehicleUid: String, acks: JSONArray?) {
+        val code = ackOutbox.deliver(acks, System.currentTimeMillis()) { batch ->
+            try {
+                postAck(url, apiKey, vehicleId, vehicleUid, batch)
+            } catch (e: Exception) {
+                Log.e(TAG, "Ack failed: ${e.message}")
+                null
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Ack failed: ${e.message}")
+        }
+        if (!ackOutbox.isEmpty) Log.w(TAG, "Ack pending retry: ${ackOutbox.size} item(s) (last HTTP ${code ?: "-"})")
+    }
+
+    /** @return the HTTP status; throws when the request itself fails. */
+    private fun postAck(url: String, apiKey: String, vehicleId: String, vehicleUid: String, acks: JSONArray): Int {
+        val payload = JSONObject().put("acks", acks).toString()
+        val request = Request.Builder()
+            .url(url)
+            .header("Content-Type", "application/json")
+            .header("X-API-Key", apiKey)
+            .header("X-Vehicle-Id", vehicleId)
+            .header("X-Vehicle-Uid", vehicleUid)
+            .header("X-App", "VoltFlow-Mate")
+            .post(payload.toRequestBody("application/json".toMediaType()))
+            .build()
+        return pollClient.newCall(request).execute().use { response ->
+            Log.i(TAG, "Ack HTTP ${response.code} (${acks.length()} items)")
+            response.code
         }
     }
 
