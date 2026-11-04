@@ -145,6 +145,7 @@ class CameraSnapshotService @Inject constructor(
         const val LOCAL_PLAYER_URL = "http://127.0.0.1:8988/live-player.html"
         const val JS_BRIDGE = "VoltFlowSnapshot"
         const val CAPTURE_TIMEOUT_MS = 30_000L
+        const val STREAM_BITRATE_BPS = 4_000_000
         // Six MiB JPEG plus Base64 expansion; kept in sync with the cloud upload limit.
         const val MAX_JPEG_BASE64_CHARS = 8_388_608
         val CAPTURE_SCRIPT = """
@@ -153,6 +154,7 @@ class CameraSnapshotService @Inject constructor(
               const video = document.getElementById('live-video');
               const view = document.getElementById('view');
               const fps = document.getElementById('fps');
+              const bitrate = document.getElementById('bitrate');
               const width = document.getElementById('width');
               const height = document.getElementById('height');
               const audio = document.getElementById('audio');
@@ -166,11 +168,19 @@ class CameraSnapshotService @Inject constructor(
                 }
                 view.value = 'pano';
                 if (fps) fps.value = '2';
+                // The player's default 737280 bps was sized for 1280x720, and di+ ignores
+                // fps (it streams ~24 fps), so a 1080p key frame got ~7 KB and the photo
+                // came out as blocks. 4 Mbit/s is di+'s ceiling (8 Mbit/s gave the same
+                // frame sizes on `way`, 2026-11-04).
+                if (bitrate) bitrate.value = '$STREAM_BITRATE_BPS';
                 if (width) width.value = '1920';
                 if (height) height.value = '1080';
                 if (audio) audio.checked = false;
                 start.click();
-                setTimeout(take, 800);
+                // Take the very first decoded frame: a fresh stream opens on its key frame,
+                // ~95 KB at 4 Mbit/s against ~22 KB for every later one. The old fixed 800 ms
+                // wait landed ~20 frames in.
+                setTimeout(take, 100);
               };
               const take = () => {
                 if (video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2) {
@@ -182,7 +192,7 @@ class CameraSnapshotService @Inject constructor(
                     window.$JS_BRIDGE.complete(canvas.toDataURL('image/jpeg', 0.90).split(',')[1]);
                   } catch (_) { fail(); }
                 } else if (Date.now() < deadline) {
-                  setTimeout(take, 250);
+                  setTimeout(take, 50);
                 } else {
                   fail();
                 }
