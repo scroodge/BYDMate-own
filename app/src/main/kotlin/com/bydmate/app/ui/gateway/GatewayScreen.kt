@@ -110,11 +110,10 @@ fun GatewayScreen(
     val context = LocalContext.current
     val isRunning by TrackingService.isRunning.collectAsStateWithLifecycle()
     val diPlusConnected by TrackingService.diPlusConnected.collectAsStateWithLifecycle()
-    val diPlusData by TrackingService.lastData.collectAsStateWithLifecycle()
-    // Test toggle "данные autoservice": the screen shows the autoservice overlay; the
-    // cloud, trips and automations still run on di+ (see TrackingService).
+    // Already the chosen source's sample (di+, or the car via autoservice) — see TrackingService.
+    val data by TrackingService.lastData.collectAsStateWithLifecycle()
     val autoserviceView by TrackingService.autoserviceTelemetryView.collectAsStateWithLifecycle()
-    val data = autoserviceView?.data ?: diPlusData
+    val diPlusInstalled by TrackingService.diPlusInstalled.collectAsStateWithLifecycle()
     val rangeKm by TrackingService.lastRangeKm.collectAsStateWithLifecycle()
     val tripDistanceKm by TrackingService.tripDistanceKm.collectAsStateWithLifecycle()
     val chargingPowerKw by TrackingService.chargingPowerKw.collectAsStateWithLifecycle()
@@ -216,15 +215,16 @@ fun GatewayScreen(
             omitGps = state.cloudSyncOmitGps,
             keepWifiAwake = state.cloudSyncKeepWifiAwake,
             socFromCar = state.cloudSocFromCar,
-            autoserviceTelemetry = state.autoserviceTelemetry,
+            carSource = state.carTelemetrySource,
             autoserviceView = autoserviceView,
+            diPlusInstalled = diPlusInstalled,
             diPlusPresent = diPlusConnected,
             onEnabled = viewModel::toggleCloudSync,
             onWifiOnly = viewModel::toggleCloudSyncWifiOnly,
             onOmitGps = viewModel::toggleCloudSyncOmitGps,
             onKeepWifiAwake = viewModel::toggleCloudSyncKeepWifiAwake,
             onSocFromCar = viewModel::toggleCloudSocFromCar,
-            onAutoserviceTelemetry = viewModel::toggleAutoserviceTelemetry,
+            onCarSource = viewModel::setCarTelemetrySource,
             strings = strings,
         )
     }
@@ -1204,15 +1204,16 @@ private fun CloudSwitchesCard(
     omitGps: Boolean,
     keepWifiAwake: Boolean,
     socFromCar: Boolean,
-    autoserviceTelemetry: Boolean,
+    carSource: Boolean,
     autoserviceView: com.bydmate.app.data.autoservice.AutoserviceOverlayResult?,
+    diPlusInstalled: Boolean,
     diPlusPresent: Boolean,
     onEnabled: (Boolean) -> Unit,
     onWifiOnly: (Boolean) -> Unit,
     onOmitGps: (Boolean) -> Unit,
     onKeepWifiAwake: (Boolean) -> Unit,
     onSocFromCar: (Boolean) -> Unit,
-    onAutoserviceTelemetry: (Boolean) -> Unit,
+    onCarSource: (Boolean) -> Unit,
     strings: GatewayStrings,
 ) {
     GatewayCard {
@@ -1232,22 +1233,34 @@ private fun CloudSwitchesCard(
         SwitchRow(strings.gpsPrivacy, null, omitGps, onOmitGps)
         SwitchRow(strings.keepWifiAwake, strings.keepWifiAwakeHint, keepWifiAwake, onKeepWifiAwake)
         SwitchRow(strings.socFromCar, strings.socFromCarHint, socFromCar, onSocFromCar)
-        SwitchRow(strings.autoserviceTelemetry, strings.autoserviceTelemetryHint, autoserviceTelemetry, onAutoserviceTelemetry)
-        if (autoserviceTelemetry) {
-            val view = autoserviceView
-            val status = when {
-                view == null -> strings.autoserviceTelemetryWaiting
-                else -> String.format(
-                    strings.autoserviceTelemetryStatus,
-                    view.fromAutoservice.size,
-                    com.bydmate.app.data.autoservice.AutoserviceTelemetryField.entries.size,
-                    view.mismatches.size,
-                ) + if (!diPlusPresent) " · " + strings.autoserviceTelemetryNoDiPlus else ""
+        // Data source — one of two. Without di+ installed only the car row exists, forced on.
+        Gap(10.dp)
+        Text(strings.dataSourceTitle, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        val carEffective = carSource || !diPlusInstalled
+        if (diPlusInstalled) {
+            SwitchRow(strings.dataSourceDiPlus, strings.dataSourceDiPlusHint, !carSource) { on -> onCarSource(!on) }
+        }
+        SwitchRow(strings.dataSourceCar, strings.dataSourceCarHint, carEffective) { on ->
+            if (diPlusInstalled) onCarSource(on)
+        }
+        val view = autoserviceView
+        val status = when {
+            carEffective && view == null -> strings.autoserviceTelemetryWaiting
+            view == null -> null
+            else -> String.format(
+                strings.autoserviceTelemetryStatus,
+                view.fromAutoservice.size,
+                com.bydmate.app.data.autoservice.AutoserviceTelemetryField.entries.size,
+                view.mismatches.size,
+            ) + when {
+                !diPlusInstalled -> " · " + strings.dataSourceNoDiPlusInstalled
+                !diPlusPresent -> " · " + strings.autoserviceTelemetryNoDiPlus
+                else -> ""
             }
-            Text(status, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
-            view?.mismatches?.take(8)?.forEach { line ->
-                Text(line, color = AccentOrange, fontSize = 11.sp, lineHeight = 15.sp)
-            }
+        }
+        if (status != null) Text(status, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
+        view?.mismatches?.take(8)?.forEach { line ->
+            Text(line, color = AccentOrange, fontSize = 11.sp, lineHeight = 15.sp)
         }
     }
 }
@@ -1481,8 +1494,12 @@ private data class GatewayStrings(
     val keepWifiAwake: String,
     val socFromCar: String,
     val socFromCarHint: String,
-    val autoserviceTelemetry: String,
-    val autoserviceTelemetryHint: String,
+    val dataSourceTitle: String,
+    val dataSourceDiPlus: String,
+    val dataSourceDiPlusHint: String,
+    val dataSourceCar: String,
+    val dataSourceCarHint: String,
+    val dataSourceNoDiPlusInstalled: String,
     /** %1$d fields from autoservice, %2$d known, %3$d disagreements with di+. */
     val autoserviceTelemetryStatus: String,
     val autoserviceTelemetryWaiting: String,
@@ -1599,8 +1616,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Экспериментально: демон переподключает Wi-Fi каждые ~60 с, чтобы телеметрия не терялась на стоянке. Нужен on-device ADB.",
             socFromCar = "SOC от машины, а не от Di+",
             socFromCarHint = "Выкл — SOC от Di+ (точнее, шаг 0,1 %). Вкл — как на приборной панели, целые %. Второй источник — запасной.",
-            autoserviceTelemetry = "Данные autoservice (тест)",
-            autoserviceTelemetryHint = "Скорость, мощность, пробег, температуры, двери, шины и т.д. читаются напрямую из машины через ADB и показываются на этом экране. В облако, поездки и зарядки по-прежнему идут данные Di+. SOC не затрагивается.",
+            dataSourceTitle = "Источник данных",
+            dataSourceDiPlus = "Данные от Di+",
+            dataSourceDiPlusHint = "Как раньше: всё приложение работает от Di+. Если Di+ молчит — временно берутся данные машины.",
+            dataSourceCar = "Данные от машины напрямую",
+            dataSourceCarHint = "Через ADB из системы машины (autoservice): экран, облако, поездки и зарядки. SOC — как на приборке, целые %. То, чего у машины нет (статус зарядки, охрана, дождь), берётся из Di+, если он есть.",
+            dataSourceNoDiPlusInstalled = "Di+ не установлен",
             autoserviceTelemetryStatus = "Из autoservice: %1\$d из %2\$d полей, расхождений с Di+: %3\$d",
             autoserviceTelemetryWaiting = "Ждём первые данные autoservice (нужен ADB)…",
             autoserviceTelemetryNoDiPlus = "Di+ молчит — показаны только данные autoservice",
@@ -1712,8 +1733,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Experimental: the daemon reconnects Wi-Fi every ~60s so telemetry doesn't drop while parked. Requires on-device ADB.",
             socFromCar = "Use the car's SOC instead of Di+",
             socFromCarHint = "Off: Di+ SOC (finer, 0.1 % steps). On: the instrument-cluster SOC, whole %. The other source is the fallback.",
-            autoserviceTelemetry = "autoservice data (test)",
-            autoserviceTelemetryHint = "Speed, power, odometer, temperatures, doors, tyres etc. are read straight from the car over ADB and shown on this screen. The cloud, trips and charges keep using Di+ data. SOC is not affected.",
+            dataSourceTitle = "Data source",
+            dataSourceDiPlus = "Data from Di+",
+            dataSourceDiPlusHint = "As before: the whole app runs on Di+. If Di+ goes silent, the car's data is used meanwhile.",
+            dataSourceCar = "Data from the car directly",
+            dataSourceCarHint = "Over ADB from the car's own system service (autoservice): screen, cloud, trips and charges. SOC as on the cluster, whole %. What the car lacks (charging status, sentry, rain) comes from Di+ when present.",
+            dataSourceNoDiPlusInstalled = "Di+ not installed",
             autoserviceTelemetryStatus = "From autoservice: %1\$d of %2\$d fields, disagreements with Di+: %3\$d",
             autoserviceTelemetryWaiting = "Waiting for the first autoservice reading (ADB required)…",
             autoserviceTelemetryNoDiPlus = "Di+ is silent — showing autoservice data only",
@@ -1825,8 +1850,12 @@ private fun gatewayStrings(language: String): GatewayStrings =
             keepWifiAwakeHint = "Эксперыментальна: дэман перападключае Wi-Fi кожныя ~60 с, каб тэлеметрыя не гублялася на стаянцы. Патрэбны on-device ADB.",
             socFromCar = "SOC ад машыны, а не ад Di+",
             socFromCarHint = "Выкл — SOC ад Di+ (дакладней, крок 0,1 %). Укл — як на прыборнай панэлі, цэлыя %. Другая крыніца — запасная.",
-            autoserviceTelemetry = "Даныя autoservice (тэст)",
-            autoserviceTelemetryHint = "Хуткасць, магутнасць, прабег, тэмпературы, дзверы, шыны і г.д. чытаюцца непасрэдна з машыны праз ADB і паказваюцца на гэтым экране. У воблака, паездкі і зарадкі па-ранейшаму ідуць даныя Di+. SOC не закранаецца.",
+            dataSourceTitle = "Крыніца даных",
+            dataSourceDiPlus = "Даныя ад Di+",
+            dataSourceDiPlusHint = "Як раней: уся праграма працуе ад Di+. Калі Di+ маўчыць — часова бяруцца даныя машыны.",
+            dataSourceCar = "Даныя ад машыны напрамую",
+            dataSourceCarHint = "Праз ADB з сістэмы машыны (autoservice): экран, воблака, паездкі і зарадкі. SOC — як на прыборнай панэлі, цэлыя %. Тое, чаго ў машыны няма (статус зарадкі, ахова, дождж), бярэцца з Di+, калі ён ёсць.",
+            dataSourceNoDiPlusInstalled = "Di+ не ўсталяваны",
             autoserviceTelemetryStatus = "З autoservice: %1\$d з %2\$d палёў, разыходжанняў з Di+: %3\$d",
             autoserviceTelemetryWaiting = "Чакаем першыя даныя autoservice (патрэбны ADB)…",
             autoserviceTelemetryNoDiPlus = "Di+ маўчыць — паказаны толькі даныя autoservice",

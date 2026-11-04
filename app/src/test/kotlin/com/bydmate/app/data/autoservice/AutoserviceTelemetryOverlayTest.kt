@@ -120,7 +120,13 @@ class AutoserviceTelemetryOverlayTest {
         val all = AutoserviceTelemetryReader.FAST_FIELDS + AutoserviceTelemetryReader.SLOW_CHUNKS.flatten()
         assertEquals(F.entries.toSet(), all.toSet())
         assertEquals(F.entries.size, all.size)
-        assertTrue(AutoserviceTelemetryReader.SLOW_CHUNKS.all { it.size <= 6 })
-        assertTrue(AutoserviceTelemetryReader.FAST_FIELDS.size <= 6)
+        assertTrue(AutoserviceTelemetryReader.SLOW_CHUNKS.all { it.size <= 7 })
+        assertEquals(AutoserviceTelemetryReader.FAST_FIELDS, AutoserviceTelemetryReader.FAST_CHUNKS.flatten())
+        assertTrue(AutoserviceTelemetryReader.FAST_CHUNKS.all { it.size <= 7 })
+        // One cycle (all fast chunks + one slow chunk) at ~45 ms/read must fit the 1 s cadence.
+        val readsPerCycle = AutoserviceTelemetryReader.FAST_FIELDS.size + AutoserviceTelemetryReader.SLOW_CHUNKS.maxOf { it.size }
+        assertTrue("reads/cycle=$readsPerCycle", readsPerCycle * 45 <= 800)
+        // A slow field is refreshed well inside its 30 s freshness window.
+        assertTrue(AutoserviceTelemetryReader.SLOW_CHUNKS.size * 1_000L <= AutoserviceTelemetrySnapshot.SLOW_MAX_AGE_MS / 2)
     }
 }

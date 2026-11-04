@@ -93,8 +93,13 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var cloudSyncEnabledCached: Boolean = false
     @Volatile private var autoserviceEnabledCached: Boolean = false
     @Volatile private var omitGpsCached: Boolean = false
-    // Test toggle "данные autoservice" (KEY_AUTOSERVICE_TELEMETRY).
-    @Volatile private var autoserviceTelemetryCached: Boolean = false
+    // Telemetry source (KEY_TELEMETRY_SOURCE_CAR): true = the car via autoservice, false = di+.
+    @Volatile private var carSourceCached: Boolean = false
+    // Optimistic until the first PackageManager check, so a cold start never skips di+.
+    @Volatile private var diPlusInstalledCached: Boolean = true
+    private var lastDiPlusInstalledCheckMs = 0L
+    // Last tick di+ answered; the autoservice reader wakes as a fallback once it goes stale.
+    @Volatile private var lastDiPlusOkMs = 0L
     private var lastAsTelemetryLogMs = 0L
     private var lastAsTelemetryChainLogMs = 0L
     private var lastAsTelemetryFileLogMs = 0L
@@ -188,6 +193,10 @@ class TrackingService : Service(), LocationListener {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "bydmate_tracking"
         private const val POLL_INTERVAL_MS = 1000L // 1 second for local telemetry pooling
+        private const val DIPLUS_PACKAGE = "com.van.diplus"
+        // di+ silent this long → the autoservice reader starts so the car can fill in.
+        private const val DIPLUS_FALLBACK_AFTER_MS = 5_000L
+        private const val DIPLUS_INSTALLED_CHECK_MS = 60_000L
         private const val AS_TELEMETRY_LOG_INTERVAL_MS = 30_000L
         private const val AS_TELEMETRY_CHAINLOG_INTERVAL_MS = 10 * 60_000L
         // Throttle autoservice gun-state read so we don't hit Binder/ADB on every
@@ -235,10 +244,14 @@ class TrackingService : Service(), LocationListener {
         private val _lastData = MutableStateFlow<DiParsData?>(null)
         val lastData: StateFlow<DiParsData?> = _lastData
 
+        /** Whether di+ (com.van.diplus) is installed — settings show the di+ source only then. */
+        private val _diPlusInstalled = MutableStateFlow(true)
+        val diPlusInstalled: StateFlow<Boolean> = _diPlusInstalled
+
         /**
-         * Test toggle "данные autoservice": di+ sample with autoservice values overlaid, plus
-         * the per-field di+/autoservice disagreements. Display only — null when the toggle
-         * is off. Nothing that writes history or talks to the cloud reads this.
+         * The car-sourced sample (autoservice over di+) and its per-field di+/autoservice
+         * disagreements, for the settings status line. Null while di+ is the source and
+         * answering — the reader is idle then.
          */
         private val _autoserviceTelemetryView =
             MutableStateFlow<com.bydmate.app.data.autoservice.AutoserviceOverlayResult?>(null)
@@ -948,7 +961,7 @@ class TrackingService : Service(), LocationListener {
      * the preference would silently fall back to Di+ on almost every tick.
      */
     private suspend fun refreshCarSoc(nowMs: Long, diPlusSoc: Int?) {
-        if (socPreferenceCached != CloudSocPreference.AUTOSERVICE_FIRST || !autoserviceEnabledCached) {
+        if (effectiveSocPreference() != CloudSocPreference.AUTOSERVICE_FIRST || !autoserviceEnabledCached) {
             carSocPercent = null
             carSocReadMs = 0L
             _carSoc.value = null
@@ -1089,42 +1102,57 @@ class TrackingService : Service(), LocationListener {
             // Off the poll loop on purpose: a throw in the estimator must never abort a
             // tick upstream of the cloud push and the liveness beacon (see CHANGELOG 0.5.2).
             launch { runAiRangeLoop() }
-            autoserviceTelemetryCached = settingsRepository.isAutoserviceTelemetryEnabled()
-            if (autoserviceTelemetryCached) {
-                com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendHeader(
-                    this@TrackingService, "polling start, autoservice telemetry ON",
-                )
-            }
+            refreshDiPlusInstalled()
+            carSourceCached = settingsRepository.isCarTelemetrySource()
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendHeader(
+                this@TrackingService, "polling start, source=${sourceLabel()}",
+            )
+            appendChainLog("telemetry source=${sourceLabel()}")
             launch {
-                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_AUTOSERVICE_TELEMETRY)
+                settingsRepository.observeString(com.bydmate.app.data.repository.SettingsRepository.KEY_TELEMETRY_SOURCE_CAR)
                     .collect {
-                        val on = (it ?: "false") == "true"
-                        if (on != autoserviceTelemetryCached) {
-                            appendChainLog("autoservice telemetry ${if (on) "ON" else "OFF"}")
+                        val car = (it ?: "false") == "true"
+                        val changed = car != carSourceCached
+                        carSourceCached = car
+                        if (changed) {
+                            appendChainLog("telemetry source=${sourceLabel()}")
                             com.bydmate.app.data.autoservice.AutoserviceTelemetryLog.appendHeader(
-                                this@TrackingService, "autoservice telemetry ${if (on) "ON" else "OFF"}",
+                                this@TrackingService, "source=${sourceLabel()}",
                             )
                         }
-                        autoserviceTelemetryCached = on
                     }
             }
             // Same reason as the estimator: ADB reads (~28 ms per fid) stay off the 1 Hz loop;
-            // the loop only merges whatever snapshot the reader has ready.
-            launch { autoserviceTelemetryReader.run { autoserviceTelemetryCached } }
+            // the loop only merges whatever snapshot the reader has ready. The reader runs
+            // when the car is the source, or as the fallback while di+ is silent.
+            launch {
+                autoserviceTelemetryReader.run {
+                    isCarSourceEffective() ||
+                        System.currentTimeMillis() - lastDiPlusOkMs > DIPLUS_FALLBACK_AFTER_MS
+                }
+            }
             while (true) {
                 try {
-                    val data = diParsClient.fetch()
-                    // Local-only test view: never feeds _lastData, the cloud, trips or
-                    // automations — those stay on di+ until the comparison is judged.
-                    updateAutoserviceTelemetryView(data)
-                    if (data != null) {
-                        val nowMs = System.currentTimeMillis()
+                    val tickMs = System.currentTimeMillis()
+                    if (tickMs - lastDiPlusInstalledCheckMs >= DIPLUS_INSTALLED_CHECK_MS) refreshDiPlusInstalled()
+                    // di+ not installed → don't even knock on its port.
+                    val diPlusData = if (diPlusInstalledCached) diParsClient.fetch() else null
+                    if (diPlusData != null) lastDiPlusOkMs = tickMs
+                    // Car source: autoservice values over di+'s. di+ source: di+, and the car
+                    // only as the fallback while di+ is silent.
+                    val data = resolveTelemetry(diPlusData)
+                    if (diPlusData != null) {
                         consecutiveNullCount = 0
                         lastDiPlusRelaunchTs = 0L
-                        currentPollIntervalMs = POLL_INTERVAL_MS
                         _diPlusConnected.value = true
+                        _lastDiPlusUpdateMs.value = tickMs
+                    } else {
+                        onDiPlusSilent(hasFallbackData = data != null)
+                    }
+                    if (data != null) {
+                        val nowMs = System.currentTimeMillis()
+                        currentPollIntervalMs = POLL_INTERVAL_MS
                         _lastData.value = data
-                        _lastDiPlusUpdateMs.value = System.currentTimeMillis()
 
                         // Feed DiPlus data to Alice for real device states
                         alicePollingManager.latestData = data
@@ -1343,34 +1371,13 @@ class TrackingService : Service(), LocationListener {
                                 currentTripDistanceKm = tripDistance,
                                 currentTripConsumptionKwh100km = displayValue,
                                 location = locationForCloud,
-                                socPreference = socPreferenceCached,
+                                socPreference = effectiveSocPreference(),
                                 pack = telemetryPack,
                             ).let { base ->
                                 if (resolvedSoh != null) base.copy(sohPercent = resolvedSoh) else base
                             }
                             _lastTelemetrySnapshot.value = telemetrySnapshot
                             maybeSendCloudTelemetry(telemetrySnapshot, nowMs)
-                        }
-                    } else {
-                        consecutiveNullCount++
-                        renewWakeLockIfNeeded()
-                        if (consecutiveNullCount >= NULL_WARNING_THRESHOLD) {
-                            _diPlusConnected.value = false
-                            currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong()
-                                .coerceAtMost(MAX_POLL_INTERVAL_MS)
-                            val now = System.currentTimeMillis()
-                            if (DiPlusWatchdog.shouldRelaunch(
-                                    failuresCount = consecutiveNullCount,
-                                    threshold = NULL_WARNING_THRESHOLD,
-                                    nowMs = now,
-                                    lastRelaunchTs = lastDiPlusRelaunchTs,
-                                    cooldownMs = DIPLUS_RELAUNCH_COOLDOWN_MS,
-                                )
-                            ) {
-                                Log.w(TAG, "DiPlus silent ($consecutiveNullCount nulls), relaunching (backoff ${currentPollIntervalMs}ms)")
-                                tryLaunchDiPlus()
-                                lastDiPlusRelaunchTs = now
-                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -1705,19 +1712,82 @@ class TrackingService : Service(), LocationListener {
 
     private fun appendChainLog(entry: String) = ChainLog.append(this, entry)
 
+    /** di+ not installed → the car is the only possible source, whatever the setting says. */
+    private fun isCarSourceEffective(): Boolean = carSourceCached || !diPlusInstalledCached
+
+    private fun sourceLabel(): String = when {
+        !diPlusInstalledCached -> "car(no di+)"
+        carSourceCached -> "car"
+        else -> "diplus"
+    }
+
+    /** Car source also means the car's own SOC (display scale, tagged `soc_source=autoservice`). */
+    private fun effectiveSocPreference(): CloudSocPreference =
+        if (isCarSourceEffective()) CloudSocPreference.AUTOSERVICE_FIRST else socPreferenceCached
+
+    private fun refreshDiPlusInstalled() {
+        lastDiPlusInstalledCheckMs = System.currentTimeMillis()
+        val installed = runCatching {
+            packageManager.getPackageInfo(DIPLUS_PACKAGE, 0)
+            true
+        }.getOrDefault(false)
+        if (installed != diPlusInstalledCached) {
+            Log.i(TAG, "di+ installed=$installed")
+            appendChainLog("di+ installed=$installed")
+        }
+        diPlusInstalledCached = installed
+        _diPlusInstalled.value = installed
+    }
+
     /**
-     * Test toggle "данные autoservice": overlays the reader's latest snapshot onto the di+
-     * sample and publishes it as [autoserviceTelemetryView] for the screen ONLY — the
-     * cloud, trips, charges and automations keep getting the plain di+ sample until the
-     * on-car comparison has been judged. Never throws into the poll loop (CLAUDE.md, the
-     * v0.5.2 outage).
+     * di+ returned nothing this tick. Counts the silence and relaunches di+ — but only when di+
+     * is installed and is the chosen source; with the car as source there is nothing to chase.
+     * Backs the poll interval off only when the car had no fallback data either.
      */
-    private fun updateAutoserviceTelemetryView(diPlusData: DiParsData?) {
-        if (!autoserviceTelemetryCached) {
-            _autoserviceTelemetryView.value = null
+    private fun onDiPlusSilent(hasFallbackData: Boolean) {
+        if (!diPlusInstalledCached) {
+            _diPlusConnected.value = false
             return
         }
-        try {
+        consecutiveNullCount++
+        renewWakeLockIfNeeded()
+        if (consecutiveNullCount < NULL_WARNING_THRESHOLD) return
+        _diPlusConnected.value = false
+        if (!hasFallbackData) {
+            currentPollIntervalMs = (currentPollIntervalMs * 1.5).toLong().coerceAtMost(MAX_POLL_INTERVAL_MS)
+        }
+        if (carSourceCached) return
+        val now = System.currentTimeMillis()
+        if (DiPlusWatchdog.shouldRelaunch(
+                failuresCount = consecutiveNullCount,
+                threshold = NULL_WARNING_THRESHOLD,
+                nowMs = now,
+                lastRelaunchTs = lastDiPlusRelaunchTs,
+                cooldownMs = DIPLUS_RELAUNCH_COOLDOWN_MS,
+            )
+        ) {
+            Log.w(TAG, "DiPlus silent ($consecutiveNullCount nulls), relaunching (backoff ${currentPollIntervalMs}ms)")
+            tryLaunchDiPlus()
+            lastDiPlusRelaunchTs = now
+        }
+    }
+
+    /**
+     * Picks this tick's telemetry sample.
+     *  - car source: autoservice values over di+'s (di+ still fills what the car lacks:
+     *    charging status, sentry, rain…, and SOC is resolved separately — see
+     *    [effectiveSocPreference]);
+     *  - di+ source: di+ as is; the car only while di+ is silent.
+     * Also publishes [autoserviceTelemetryView] and writes the comparison log. Never throws
+     * into the poll loop (CLAUDE.md, the v0.5.2 outage) — on failure it returns di+'s sample.
+     */
+    private fun resolveTelemetry(diPlusData: DiParsData?): DiParsData? {
+        val car = isCarSourceEffective()
+        if (!car && diPlusData != null) {
+            _autoserviceTelemetryView.value = null
+            return diPlusData
+        }
+        return try {
             val nowMs = System.currentTimeMillis()
             val snapshot = autoserviceTelemetryReader.snapshot()
             val result = com.bydmate.app.data.autoservice.AutoserviceTelemetryOverlay.apply(
@@ -1732,10 +1802,9 @@ class TrackingService : Service(), LocationListener {
                     this, diPlusData, result, snapshot, autoserviceTelemetryReader.lastError,
                 )
             }
-            if (result == null) return
-            if (nowMs - lastAsTelemetryLogMs >= AS_TELEMETRY_LOG_INTERVAL_MS) {
+            if (result != null && nowMs - lastAsTelemetryLogMs >= AS_TELEMETRY_LOG_INTERVAL_MS) {
                 lastAsTelemetryLogMs = nowMs
-                val summary = "as-telemetry di+=${if (diPlusData != null) "ok" else "none"}" +
+                val summary = "as-telemetry source=${sourceLabel()} di+=${if (diPlusData != null) "ok" else "none"}" +
                     " fields=${result.fromAutoservice.size}" +
                     " mismatch=${result.mismatches.size}" +
                     (autoserviceTelemetryReader.lastError?.let { " err=$it" } ?: "") +
@@ -1746,9 +1815,11 @@ class TrackingService : Service(), LocationListener {
                     appendChainLog(summary)
                 }
             }
+            result?.data ?: diPlusData
         } catch (e: Exception) {
             Log.w(TAG, "autoservice telemetry merge failed: ${e.message}", e)
             _autoserviceTelemetryView.value = null
+            diPlusData
         }
     }
 

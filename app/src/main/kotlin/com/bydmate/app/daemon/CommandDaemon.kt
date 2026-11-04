@@ -634,6 +634,8 @@ object CommandDaemon {
         val vehicleUid: String? = null,
         /** `soc_source` in the conf; absent = Di+ first, as before the app-side switch existed. */
         val socPreference: CloudSocPreference = CloudSocPreference.DIPLUS_FIRST,
+        /** `telemetry_source=car` in the conf: the car (autoservice) is the telemetry source. */
+        val carSource: Boolean = false,
     )
 
     /** `X-Vehicle-Id`, plus the B-03 `X-Vehicle-Uid` once the app has exported one. */
@@ -694,6 +696,7 @@ object CommandDaemon {
         var lastLoggedIdentity: String? = null
         // Same on-car evidence for the SOC-source switch: the daemon's adopted value, not Room's.
         var lastLoggedSocPreference: CloudSocPreference? = null
+        var lastLoggedSource: String? = null
         // Last gear/gun state di+ actually reported. `latestData` itself is never cleared to
         // null once di+ has answered once — a failed fetch() just leaves it stale — so these
         // are captured separately at the moment of each successful fetch and read back once
@@ -731,6 +734,16 @@ object CommandDaemon {
                         if (lastLoggedSocPreference == null) " (startup)" else " (changed)")
                     lastLoggedSocPreference = conf.socPreference
                 }
+                val sourceLabel = when {
+                    !diPlusInstalled(System.currentTimeMillis()) -> "car(no di+)"
+                    conf.carSource -> "car"
+                    else -> "diplus"
+                }
+                if (sourceLabel != lastLoggedSource) {
+                    log("config: telemetry_source=$sourceLabel" +
+                        if (lastLoggedSource == null) " (startup)" else " (changed)")
+                    lastLoggedSource = sourceLabel
+                }
                 // B-03 on-car evidence: which identity and name the daemon is pushing under.
                 val identity = "vehicle_id=${conf.vehicleId} vehicle_uid=${conf.vehicleUid ?: "-"}"
                 if (identity != lastLoggedIdentity) {
@@ -762,7 +775,21 @@ object CommandDaemon {
 
                     // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
-                        diPars.fetch()?.let {
+                        // Same source rule as the app (TrackingService.resolveTelemetry): the
+                        // car when chosen or when di+ is not installed; otherwise di+, with the
+                        // car filling in while di+ is silent.
+                        val installed = diPlusInstalled(now)
+                        val di = if (installed) diPars.fetch() else null
+                        if (di != null) lastDiPlusOkAt = now
+                        val needCar = conf.carSource || !installed || now - lastDiPlusOkAt > DIPLUS_STALE_MS
+                        val sample = if (needCar) {
+                            // App alive and sending → only the fields the guards need.
+                            val full = !shouldDeferToApp(beaconAgeMs(now), liveOnly = false)
+                            carSample(di, now, full)
+                        } else {
+                            di
+                        }
+                        sample?.let {
                             latestData = it; latestDataAt = now
                             commandDoorbell?.setPowerOn((it.powerState ?: 0) >= 1)
                             lastKnownGear = it.gear; lastKnownGunState = it.chargeGunState
@@ -1328,7 +1355,12 @@ object CommandDaemon {
                 autoserviceSocPercent = autoserviceSoc,
                 autoserviceGun = autoserviceGun,
                 capturedAtMs = System.currentTimeMillis(),
-                socPreference = conf.socPreference,
+                // Car as source also means the car's SOC — same as the app's effectiveSocPreference.
+                socPreference = if (conf.carSource || !diPlusInstalled(System.currentTimeMillis())) {
+                    CloudSocPreference.AUTOSERVICE_FIRST
+                } else {
+                    conf.socPreference
+                },
                 pack = pack,
             )
             val payloadJson = CloudTelemetryPayload.build(
@@ -1578,6 +1610,76 @@ object CommandDaemon {
      * readable beacon at all. The whole impure part of the app-alive gate lives here; the
      * decision is [shouldDeferToApp].
      */
+    // --- telemetry source = car (mirror of the app's AutoserviceTelemetryReader) ---
+
+    @Volatile private var lastDiPlusOkAt = 0L
+    @Volatile private var diPlusInstalledCached = true
+    @Volatile private var diPlusInstalledCheckedAt = 0L
+    private val carValues = java.util.concurrent.ConcurrentHashMap<com.bydmate.app.data.autoservice.AutoserviceTelemetryField, Double>()
+    private val carReadAt = java.util.concurrent.ConcurrentHashMap<com.bydmate.app.data.autoservice.AutoserviceTelemetryField, Long>()
+    private const val DIPLUS_INSTALLED_CHECK_MS = 5 * 60_000L
+
+    /**
+     * Fields the daemon's guards read every refresh while the app is alive (power on, gear,
+     * speed, gun, BMS). Listed explicitly, not the app's fast group, which also carries doors
+     * and cell voltages the guards don't need.
+     */
+    private val GUARD_FIELDS: List<com.bydmate.app.data.autoservice.AutoserviceTelemetryField> =
+        listOf(
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.SPEED,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.POWER,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.GEAR,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.POWER_STATE,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.MILEAGE,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.CHARGE_GUN,
+            com.bydmate.app.data.autoservice.AutoserviceTelemetryField.BMS_STATE,
+        )
+
+    /** `pm path com.van.diplus` as shell uid, cached [DIPLUS_INSTALLED_CHECK_MS]. */
+    private fun diPlusInstalled(now: Long): Boolean {
+        if (now - diPlusInstalledCheckedAt < DIPLUS_INSTALLED_CHECK_MS) return diPlusInstalledCached
+        diPlusInstalledCheckedAt = now
+        val installed = try {
+            val proc = Runtime.getRuntime().exec(arrayOf("pm", "path", "com.van.diplus"))
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            out.contains("package:")
+        } catch (e: Exception) {
+            diPlusInstalledCached // can't tell → keep the previous answer
+        }
+        if (installed != diPlusInstalledCached) log("di+ installed=$installed")
+        diPlusInstalledCached = installed
+        return installed
+    }
+
+    /**
+     * Reads [full] = all autoservice telemetry fields (or just [GUARD_FIELDS]) in one shell
+     * batch and overlays them onto [diPlus] exactly as the app does. Null when neither source
+     * has anything.
+     */
+    private fun carSample(diPlus: DiParsData?, now: Long, full: Boolean): DiParsData? {
+        val fields = if (full) com.bydmate.app.data.autoservice.AutoserviceTelemetryField.entries else GUARD_FIELDS
+        val reads = fields.map { it.read }
+        val raws = try {
+            val cmd = reads.mapIndexed { i, r -> "echo @vfas$i;${r.command()}" }.joinToString(";")
+            val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd))
+            val out = proc.inputStream.bufferedReader().readText()
+            proc.waitFor()
+            com.bydmate.app.data.autoservice.AdbOnDeviceClientImpl.parseBatchOutput(out, reads.size)
+        } catch (e: Exception) {
+            log("autoservice batch read failed: ${e.message}")
+            null
+        }
+        if (raws != null) {
+            fields.forEachIndexed { i, field ->
+                val v = raws.getOrNull(i)?.let { field.decode(it) }
+                if (v != null) { carValues[field] = v; carReadAt[field] = now } else { carValues.remove(field); carReadAt.remove(field) }
+            }
+        }
+        val snapshot = com.bydmate.app.data.autoservice.AutoserviceTelemetrySnapshot(HashMap(carValues), HashMap(carReadAt))
+        return com.bydmate.app.data.autoservice.AutoserviceTelemetryOverlay.apply(diPlus, snapshot, now)?.data ?: diPlus
+    }
+
     private fun beaconAgeMs(now: Long): Long? = try {
         File(APP_HEARTBEAT_FILE).takeIf { it.exists() }
             ?.readText()?.trim()?.toLongOrNull()
@@ -1639,6 +1741,7 @@ object CommandDaemon {
             keepWifiAwake = props["keep_wifi_awake"] == "1",
             vehicleUid = props["vehicle_uid"]?.takeIf { it.isNotBlank() },
             socPreference = CloudSocPreference.fromWire(props["soc_source"]),
+            carSource = props["telemetry_source"] == "car",
         )
     }
 

@@ -160,8 +160,8 @@ data class SettingsUiState(
     val cloudSyncKeepWifiAwake: Boolean = false,
     /** Cloud payload carries the car's own SOC instead of Di+'s. */
     val cloudSocFromCar: Boolean = false,
-    /** Test toggle: live telemetry fields from autoservice instead of di+. */
-    val autoserviceTelemetry: Boolean = false,
+    /** Telemetry source: true = the car directly (autoservice), false = di+. */
+    val carTelemetrySource: Boolean = false,
     val cloudSyncStatus: String? = null,
     val cloudSyncStatusIsError: Boolean = false,
     val lastCloudSyncTs: Long = 0L,
@@ -295,7 +295,7 @@ class SettingsViewModel @Inject constructor(
             val cloudSyncOmitGps = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_OMIT_GPS, "false") == "true"
             val cloudSyncKeepWifiAwake = settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_KEEP_WIFI_AWAKE, "false") == "true"
             val cloudSocFromCar = settingsRepository.getCloudSocPreference() == CloudSocPreference.AUTOSERVICE_FIRST
-            val autoserviceTelemetry = settingsRepository.isAutoserviceTelemetryEnabled()
+            val carTelemetrySource = settingsRepository.isCarTelemetrySource()
             val cloudSyncStatusPair = formatCloudSyncStatus()
             val appLanguage = settingsRepository.getString(
                 SettingsRepository.KEY_APP_LANGUAGE,
@@ -336,7 +336,7 @@ class SettingsViewModel @Inject constructor(
                     cloudSyncOmitGps = cloudSyncOmitGps,
                     cloudSyncKeepWifiAwake = cloudSyncKeepWifiAwake,
                     cloudSocFromCar = cloudSocFromCar,
-                    autoserviceTelemetry = autoserviceTelemetry,
+                    carTelemetrySource = carTelemetrySource,
                     cloudSyncStatus = cloudSyncStatusPair?.first,
                     cloudSyncStatusIsError = cloudSyncStatusPair?.second ?: false,
                     appLanguage = appLanguage,
@@ -771,10 +771,11 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun toggleAutoserviceTelemetry(enabled: Boolean) {
-        _uiState.update { it.copy(autoserviceTelemetry = enabled) }
+    /** One of two: true = data from the car directly (autoservice), false = from di+. */
+    fun setCarTelemetrySource(fromCar: Boolean) {
+        _uiState.update { it.copy(carTelemetrySource = fromCar) }
         viewModelScope.launch {
-            settingsRepository.setAutoserviceTelemetryEnabled(enabled)
+            settingsRepository.setCarTelemetrySource(fromCar)
         }
     }
 

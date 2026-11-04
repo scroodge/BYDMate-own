@@ -25,7 +25,9 @@ import kotlin.math.roundToInt
  *    remote lock, stall-sentry label, DRL (autoservice disagreed with di+ on this car).
  */
 enum class AutoserviceTelemetryField(val read: AutoserviceRead, val fast: Boolean) {
-    // Fast group — changes second to second while driving; read every cycle.
+    // Fast group — read every cycle. Driving values plus the ones a 5 s log or a short event
+    // would miss on the slow rotation: cell voltage sags under load within a second, and a
+    // door/trunk/lock opened and shut again (on-car drive log 2026-11-04) — see FAST_CHUNKS.
     SPEED(AutoserviceRead(FidRegistry.TX_GET_FLOAT, FidRegistry.DEV_SPEED, FidRegistry.FID_SPEED), fast = true),
     POWER(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_ENGINE, FidRegistry.FID_ENGINE_POWER), fast = true),
     GEAR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_GEARBOX, FidRegistry.FID_GEAR), fast = true),
@@ -35,8 +37,8 @@ enum class AutoserviceTelemetryField(val read: AutoserviceRead, val fast: Boolea
     // Slow group — read in rotating chunks, full refresh every few seconds.
     TOTAL_ELEC_CONSUMPTION(AutoserviceRead(FidRegistry.TX_GET_FLOAT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_LIFETIME_KWH), fast = false),
     VOLTAGE_12V(AutoserviceRead(FidRegistry.TX_GET_FLOAT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_OTA_BATTERY_POWER_VOLTAGE), fast = false),
-    MAX_CELL_VOLTAGE(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MAX_CELL_VOLTAGE), fast = false),
-    MIN_CELL_VOLTAGE(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MIN_CELL_VOLTAGE), fast = false),
+    MAX_CELL_VOLTAGE(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MAX_CELL_VOLTAGE), fast = true),
+    MIN_CELL_VOLTAGE(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MIN_CELL_VOLTAGE), fast = true),
     MAX_BATTERY_TEMP(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MAX_BATTERY_TEMP), fast = false),
     MIN_BATTERY_TEMP(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MIN_BATTERY_TEMP), fast = false),
     MAX_CHARGE_POWER(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_STATISTIC, FidRegistry.FID_MAX_CHARGE_POWER), fast = false),
@@ -48,20 +50,20 @@ enum class AutoserviceTelemetryField(val read: AutoserviceRead, val fast: Boolea
     AC_CIRC(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_AC, FidRegistry.FID_AC_CYCLE_MODE), fast = false),
     INSIDE_TEMP(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_AC, FidRegistry.FID_AC_TEMP_INSIDE), fast = false),
     EXTERIOR_TEMP(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_AC, FidRegistry.FID_AC_TEMP_OUT), fast = false),
-    DOOR_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_FL), fast = false),
-    DOOR_FR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_FR), fast = false),
-    DOOR_RL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_RL), fast = false),
-    DOOR_RR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_RR), fast = false),
+    DOOR_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_FL), fast = true),
+    DOOR_FR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_FR), fast = true),
+    DOOR_RL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_RL), fast = true),
+    DOOR_RR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_DOOR_RR), fast = true),
     WINDOW_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_WINDOW_FL), fast = false),
     WINDOW_FR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_WINDOW_FR), fast = false),
     WINDOW_RL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_WINDOW_RL), fast = false),
     WINDOW_RR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_WINDOW_RR), fast = false),
     SUNROOF(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_SUNROOF), fast = false),
     SUNSHADE(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_SUNSHADE), fast = false),
-    TRUNK(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_TRUNK), fast = false),
+    TRUNK(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_TRUNK), fast = true),
     HOOD(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_HOOD), fast = false),
     SEATBELT_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_INSTRUMENT, FidRegistry.FID_SEATBELT_FL), fast = false),
-    LOCK_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_LOCK, FidRegistry.FID_LOCK_FL), fast = false),
+    LOCK_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_LOCK, FidRegistry.FID_LOCK_FL), fast = true),
     TIRE_FL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_TIRE_PRESSURE_FL), fast = false),
     TIRE_FR(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_TIRE_PRESSURE_FR), fast = false),
     TIRE_RL(AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_BODYWORK, FidRegistry.FID_TIRE_PRESSURE_RL), fast = false),
@@ -223,7 +225,7 @@ object AutoserviceTelemetryOverlay {
  * never sit upstream of the cloud push and the liveness beacon (CLAUDE.md, v0.5.2).
  *
  * Each cycle reads the fast group plus one rotating slow chunk, as separate ADB execs so
- * the synchronized protocol lock is never held for more than ~6 calls at a time.
+ * the synchronized protocol lock is never held for more than ~7 calls at a time.
  */
 @Singleton
 class AutoserviceTelemetryReader @Inject constructor(
@@ -261,7 +263,7 @@ class AutoserviceTelemetryReader @Inject constructor(
                     adb.connect().onFailure { lastError = "adb connect: ${it.message}" }
                 }
                 if (adb.isConnected()) {
-                    readGroup(FAST_FIELDS)
+                    FAST_CHUNKS.forEach { readGroup(it) }
                     readGroup(SLOW_CHUNKS[slowChunkIndex])
                     slowChunkIndex = (slowChunkIndex + 1) % SLOW_CHUNKS.size
                     lastCycleMs = System.currentTimeMillis()
@@ -303,10 +305,16 @@ class AutoserviceTelemetryReader @Inject constructor(
         private const val MIN_GAP_MS = 200L
         private const val IDLE_DELAY_MS = 2_000L
         private const val RECONNECT_INTERVAL_MS = 30_000L
-        private const val SLOW_CHUNK_SIZE = 6
+        /**
+         * Max reads per ADB exec, so the synchronized protocol lock is never held for long.
+         * Measured on car 2026-11-04: ~45 ms per `service call`; 13 fast + 3 slow ≈ 0.7 s/cycle.
+         */
+        private const val CHUNK_SIZE = 7
+        private const val SLOW_CHUNK_SIZE = 3
 
         val FAST_FIELDS: List<AutoserviceTelemetryField> =
             AutoserviceTelemetryField.entries.filter { it.fast }
+        val FAST_CHUNKS: List<List<AutoserviceTelemetryField>> = FAST_FIELDS.chunked(CHUNK_SIZE)
         val SLOW_CHUNKS: List<List<AutoserviceTelemetryField>> =
             AutoserviceTelemetryField.entries.filter { !it.fast }.chunked(SLOW_CHUNK_SIZE)
     }

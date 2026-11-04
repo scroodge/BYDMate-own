@@ -89,6 +89,29 @@ class DaemonConfigExportTest {
     }
 
     @Test
+    fun `telemetry source switch reaches the daemon and defaults to di+ when absent`() = runTest {
+        val repo = SettingsRepository(ObservableSettingsDao(linked))
+        val dir = tmp.newFolder()
+        val confPath = java.io.File(dir, DaemonConfigExport.FILE_NAME).path
+
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            DaemonConfigExport.observe(repo).collect { text ->
+                if (text != null) DaemonConfigExport.write(dir, text)
+            }
+        }
+        assertFalse(java.io.File(confPath).readText().contains("telemetry_source"))
+        assertFalse(CommandDaemon.loadConf(confPath)!!.carSource)
+
+        repo.setCarTelemetrySource(true)
+        assertTrue(CommandDaemon.loadConf(confPath)!!.carSource)
+
+        repo.setCarTelemetrySource(false)
+        assertFalse(CommandDaemon.loadConf(confPath)!!.carSource)
+
+        job.cancel()
+    }
+
+    @Test
     fun `B-03 renaming the car keeps the install uid the daemon sends`() = runTest {
         val repo = SettingsRepository(ObservableSettingsDao(linked))
         val dir = tmp.newFolder()
