@@ -55,6 +55,31 @@ class CommandWake {
 }
 
 /**
+ * After a ring, a failed poll is retried within [retryMs] (up to [maxAttempts] times) instead
+ * of on the doubling backoff. On 2026-11-04 the car's link dropped new HTTPS requests for
+ * minutes while the open socket still delivered rings; each failed poll then pushed the next
+ * one 12 s, 24 s… out and commands took 20–35 s although di+ ran them in 0.3 s.
+ */
+class RingRetry(private val maxAttempts: Int = 5, private val retryMs: Long = 1_500L) {
+    private var attemptsLeft = 0
+
+    fun onWake(rung: Boolean) {
+        if (rung) attemptsLeft = maxAttempts
+    }
+
+    /** @return how long to wait after a poll that succeeded ([pollOk]) or not. */
+    fun nextWaitMs(pollOk: Boolean, normalWaitMs: Long): Long {
+        if (pollOk) {
+            attemptsLeft = 0
+            return normalWaitMs
+        }
+        if (attemptsLeft <= 0) return normalWaitMs
+        attemptsLeft--
+        return min(retryMs, normalWaitMs)
+    }
+}
+
+/**
  * One Supabase Realtime (Phoenix v1 JSON) WebSocket, subscribed to this car's doorbell
  * topic. A `command` broadcast calls [onRing]; the caller then polls `/commands` as usual,
  * so validation, the allowlist and acks are unchanged and a forged ring is one extra poll.

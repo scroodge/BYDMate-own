@@ -87,3 +87,25 @@ class CommandDoorbellTest {
         assertTrue(wake.await(5_000))
     }
 }
+
+class RingRetryTest {
+    @org.junit.Test
+    fun failedPollAfterARingRetriesFastThenFallsBack() {
+        val retry = RingRetry(maxAttempts = 2, retryMs = 1_500L)
+        retry.onWake(rung = true)
+        org.junit.Assert.assertEquals(1_500L, retry.nextWaitMs(pollOk = false, normalWaitMs = 12_000L))
+        retry.onWake(rung = false)
+        org.junit.Assert.assertEquals(1_500L, retry.nextWaitMs(pollOk = false, normalWaitMs = 24_000L))
+        retry.onWake(rung = false)
+        org.junit.Assert.assertEquals(30_000L, retry.nextWaitMs(pollOk = false, normalWaitMs = 30_000L))
+    }
+
+    @org.junit.Test
+    fun successOrNoRingKeepsTheNormalCadence() {
+        val retry = RingRetry()
+        org.junit.Assert.assertEquals(12_000L, retry.nextWaitMs(pollOk = false, normalWaitMs = 12_000L))
+        retry.onWake(rung = true)
+        org.junit.Assert.assertEquals(6_000L, retry.nextWaitMs(pollOk = true, normalWaitMs = 6_000L))
+        org.junit.Assert.assertEquals(12_000L, retry.nextWaitMs(pollOk = false, normalWaitMs = 12_000L))
+    }
+}

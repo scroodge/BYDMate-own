@@ -63,6 +63,8 @@ class VehicleCommandPoller @Inject constructor(
     private var scope: CoroutineScope? = null
     private var pollingJob: Job? = null
     private var backoffMs = BASE_POLL_MS
+    /** Set by [pollOnce] when the server answered 2xx. */
+    private var lastPollOk = false
 
     // A Realtime ring cuts the wait short, so a command runs ~1 s after it is pressed instead
     // of on the next 6 s / 90 s tick. The poll below stays the delivery path and the fallback.
@@ -81,9 +83,12 @@ class VehicleCommandPoller @Inject constructor(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         pollingJob = scope?.launch {
             Log.i(TAG, "Polling started")
+            val ringRetry = RingRetry()
             while (true) {
-                val waited = pollOnce()
-                runInterruptible { wake.await(waited) }
+                lastPollOk = false
+                val normalWait = pollOnce()
+                val waited = ringRetry.nextWaitMs(lastPollOk, normalWait)
+                ringRetry.onWake(runInterruptible { wake.await(waited) })
             }
         }
     }
@@ -140,6 +145,7 @@ class VehicleCommandPoller @Inject constructor(
             }
 
             backoffMs = BASE_POLL_MS
+            lastPollOk = true
             CloudLinkStatus.onPoll(ok = true)
             val body = response.body?.string().orEmpty()
             val json = JSONObject(body)
@@ -207,9 +213,10 @@ class VehicleCommandPoller @Inject constructor(
             is CommandAllowlist.BuildResult.Rejected ->
                 ack(id, "rejected", mapOf("error" to built.reason))
             is CommandAllowlist.BuildResult.Ok -> {
-                val sent = controlClient.sendAllowlistedPhrase(built.phrase)
-                if (sent) {
-                    ack(id, "done", mapOf("phrase" to built.phrase, "verified" to false))
+                val sent = controlClient.sendObserved(built.phrase, CommandStateProbe.forCommand(type, params))
+                if (sent.accepted) {
+                    sent.observation?.let { Log.i(TAG, "'$type' ${it.field}: ${it.before} → ${it.after} verified=${it.verified}") }
+                    ack(id, "done", CommandStateProbe.doneResult(built.phrase, sent.observation))
                 } else {
                     ack(id, "failed", mapOf("error" to "sendCmd_failed", "phrase" to built.phrase))
                 }

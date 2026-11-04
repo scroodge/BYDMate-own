@@ -13,8 +13,10 @@ import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.AckOutbox
 import com.bydmate.app.data.remote.CommandDoorbell
+import com.bydmate.app.data.remote.CommandStateProbe
 import com.bydmate.app.data.remote.CommandWake
 import com.bydmate.app.data.remote.DoorbellConfig
+import com.bydmate.app.data.remote.RingRetry
 import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
@@ -943,6 +945,7 @@ object CommandDaemon {
         confPath: String,
     ) {
         var backoffMs = BASE_POLL_MS
+        val ringRetry = RingRetry()
         // Realtime ring → poll now. This is what makes a command near-instant while parked,
         // where the server otherwise paces this loop at 90 s. Polling stays the fallback.
         val wake = CommandWake()
@@ -956,9 +959,11 @@ object CommandDaemon {
                 Thread.sleep(BASE_POLL_MS)
                 continue
             }
-            val waited = try {
+            var pollOk = false
+            val normalWait = try {
                 val interval = pollOnce(ok, conf, control, latestData, doorbell)
                 if (interval != null) {
+                    pollOk = true
                     backoffMs = BASE_POLL_MS
                     interval
                 } else {
@@ -970,7 +975,7 @@ object CommandDaemon {
                 backoffMs = min(backoffMs * 2, MAX_BACKOFF_MS)
                 backoffMs
             }
-            wake.await(waited)
+            ringRetry.onWake(wake.await(ringRetry.nextWaitMs(pollOk, normalWait)))
         }
     }
 
@@ -1065,10 +1070,14 @@ object CommandDaemon {
             is CommandAllowlist.BuildResult.Rejected ->
                 ack(id, "rejected", mapOf("error" to built.reason))
             is CommandAllowlist.BuildResult.Ok -> {
-                val sent = control.sendAllowlistedPhrase(built.phrase)
-                if (sent) {
-                    log("executed '$type' → '${built.phrase}'")
-                    ack(id, "done", mapOf("phrase" to built.phrase, "verified" to false))
+                val sent = control.sendObserved(built.phrase, CommandStateProbe.forCommand(type, params))
+                if (sent.accepted) {
+                    val obs = sent.observation
+                    log(
+                        "executed '$type' → '${built.phrase}'" +
+                            (obs?.let { " ${it.field}: ${it.before} → ${it.after} verified=${it.verified}" } ?: ""),
+                    )
+                    ack(id, "done", CommandStateProbe.doneResult(built.phrase, obs))
                 } else {
                     log("FAILED '$type' → '${built.phrase}'")
                     ack(id, "failed", mapOf("error" to "sendCmd_failed", "phrase" to built.phrase))
