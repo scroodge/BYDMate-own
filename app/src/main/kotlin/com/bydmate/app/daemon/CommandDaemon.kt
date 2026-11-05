@@ -776,12 +776,10 @@ object CommandDaemon {
                     // Refresh telemetry for guards if stale (cheap localhost call).
                     if (now - latestDataAt > TELEMETRY_TTL_MS) {
                         // Same source rule as the app (TrackingService.resolveTelemetry): the
-                        // car when chosen or when di+ is not installed; otherwise di+, with the
-                        // car filling in while di+ is silent.
+                        // car when chosen or when di+ is not installed; otherwise di+ only.
                         val installed = diPlusInstalled(now)
                         val di = if (installed) diPars.fetch() else null
-                        if (di != null) lastDiPlusOkAt = now
-                        val needCar = conf.carSource || !installed || now - lastDiPlusOkAt > DIPLUS_STALE_MS
+                        val needCar = conf.carSource || !installed
                         val sample = if (needCar) {
                             // App alive and sending → only the fields the guards need.
                             val full = !shouldDeferToApp(beaconAgeMs(now), liveOnly = false)
@@ -1612,7 +1610,6 @@ object CommandDaemon {
      */
     // --- telemetry source = car (mirror of the app's AutoserviceTelemetryReader) ---
 
-    @Volatile private var lastDiPlusOkAt = 0L
     @Volatile private var diPlusInstalledCached = true
     @Volatile private var diPlusInstalledCheckedAt = 0L
     private val carValues = java.util.concurrent.ConcurrentHashMap<com.bydmate.app.data.autoservice.AutoserviceTelemetryField, Double>()

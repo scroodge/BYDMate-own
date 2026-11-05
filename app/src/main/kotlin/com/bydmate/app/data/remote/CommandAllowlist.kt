@@ -101,6 +101,12 @@ object CommandAllowlist {
                 2 -> "主驾座椅加热2档"
                 else -> return BuildResult.Rejected("seat_heat_driver.level must be 0 or 2")
             }
+            // Verified on `way` 2026-11-04: {日行灯} flips 1 (on) <-> 2 (off).
+            "drl" -> when (readBool(params["on"])) {
+                true -> "打开日行灯"
+                false -> "关闭日行灯"
+                null -> return BuildResult.Rejected("drl.on must be boolean")
+            }
             else -> return BuildResult.Rejected("unknown_type")
         }
 

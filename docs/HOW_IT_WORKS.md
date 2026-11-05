@@ -529,11 +529,11 @@ Four of them, in order:
 
 1. **Movement guard** — `movementBlockReason(type, data)` skips climate types (`ac`, `ac_temp_step`, `fan_speed_step`, `ac_recirculation`), which are allowed while driving; every other type is rejected unless speed is 0 and gear is P (stationary-charging is accepted as a P-equivalent). Rejections: `vehicle_moving`, `gear_not_park`, `gear_unknown`.
 2. **12 V guard** — rejects with `aux_voltage_low` below **11.8 V**, so a weak aux battery is not drained by actuation.
-3. **Allowlist** — `CommandAllowlist.buildPhrase()` accepts only live-validated commands: working window controls (`window` and `windows_preset`), A/C on/off (`ac.on`), one-step temperature change (`ac_temp_step.direction`), recirculation (`ac_recirculation.mode`) and driver-seat heating off or maximum (`seat_heat_driver.level` = 0 or 2). It maps them to fixed D+ phrases; any other `type` is `unknown_type`.
+3. **Allowlist** — `CommandAllowlist.buildPhrase()` accepts only live-validated commands: working window controls (`window` and `windows_preset`), A/C on/off (`ac.on`), one-step temperature change (`ac_temp_step.direction`), recirculation (`ac_recirculation.mode`) and driver-seat heating off or maximum (`seat_heat_driver.level` = 0 or 2) and daytime running lights on/off (`drl.on`, confirmed by `CommandStateProbe` reading `日行灯` 1/2). It maps them to fixed D+ phrases; any other `type` is `unknown_type`.
 4. **Deny list** — any produced phrase containing `发送CAN`, `执行SHELL`, `执行TSHELL`, `点击`, `滑动`, `按钮`, `按键`, `浮窗`, `下电` is rejected outright. `DiParsControlClient` blocks the same patterns again at the send site.
 
 The validated command contract contains only `window`, `windows_preset`, `ac`,
-`ac_temp_step`, `ac_recirculation` and `seat_heat_driver`. Older cloud command
+`ac_temp_step`, `fan_speed_step`, `ac_recirculation`, `seat_heat_driver` and `drl`. Older cloud command
 types remain audit history only and are rejected before a phrase can be sent to D+.
 
 Every command is acked back with `{"id", "status", "result"}` where status is

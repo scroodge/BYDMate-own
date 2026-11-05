@@ -99,7 +99,6 @@ class TrackingService : Service(), LocationListener {
     @Volatile private var diPlusInstalledCached: Boolean = true
     private var lastDiPlusInstalledCheckMs = 0L
     // Last tick di+ answered; the autoservice reader wakes as a fallback once it goes stale.
-    @Volatile private var lastDiPlusOkMs = 0L
     private var lastAsTelemetryLogMs = 0L
     private var lastAsTelemetryChainLogMs = 0L
     private var lastAsTelemetryFileLogMs = 0L
@@ -194,8 +193,6 @@ class TrackingService : Service(), LocationListener {
         private const val CHANNEL_ID = "bydmate_tracking"
         private const val POLL_INTERVAL_MS = 1000L // 1 second for local telemetry pooling
         private const val DIPLUS_PACKAGE = "com.van.diplus"
-        // di+ silent this long → the autoservice reader starts so the car can fill in.
-        private const val DIPLUS_FALLBACK_AFTER_MS = 5_000L
         private const val DIPLUS_INSTALLED_CHECK_MS = 60_000L
         private const val AS_TELEMETRY_LOG_INTERVAL_MS = 30_000L
         private const val AS_TELEMETRY_CHAINLOG_INTERVAL_MS = 10 * 60_000L
@@ -1123,13 +1120,12 @@ class TrackingService : Service(), LocationListener {
                     }
             }
             // Same reason as the estimator: ADB reads (~28 ms per fid) stay off the 1 Hz loop;
-            // the loop only merges whatever snapshot the reader has ready. The reader runs
-            // when the car is the source, or as the fallback while di+ is silent.
+            // the loop only merges whatever snapshot the reader has ready. The reader runs only
+            // when the car is the source (chosen, or di+ not installed). No silent fallback
+            // under the di+ source: FIDs are verified on one car only, so a fleet car on di+
+            // must never start sending autoservice values without its owner choosing it.
             launch {
-                autoserviceTelemetryReader.run {
-                    isCarSourceEffective() ||
-                        System.currentTimeMillis() - lastDiPlusOkMs > DIPLUS_FALLBACK_AFTER_MS
-                }
+                autoserviceTelemetryReader.run { isCarSourceEffective() }
             }
             while (true) {
                 try {
@@ -1137,9 +1133,7 @@ class TrackingService : Service(), LocationListener {
                     if (tickMs - lastDiPlusInstalledCheckMs >= DIPLUS_INSTALLED_CHECK_MS) refreshDiPlusInstalled()
                     // di+ not installed → don't even knock on its port.
                     val diPlusData = if (diPlusInstalledCached) diParsClient.fetch() else null
-                    if (diPlusData != null) lastDiPlusOkMs = tickMs
-                    // Car source: autoservice values over di+'s. di+ source: di+, and the car
-                    // only as the fallback while di+ is silent.
+                    // Car source: autoservice values over di+'s. di+ source: di+ only.
                     val data = resolveTelemetry(diPlusData)
                     if (diPlusData != null) {
                         consecutiveNullCount = 0
@@ -1783,7 +1777,7 @@ class TrackingService : Service(), LocationListener {
      */
     private fun resolveTelemetry(diPlusData: DiParsData?): DiParsData? {
         val car = isCarSourceEffective()
-        if (!car && diPlusData != null) {
+        if (!car) {
             _autoserviceTelemetryView.value = null
             return diPlusData
         }

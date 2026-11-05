@@ -9,7 +9,7 @@ package com.bydmate.app.data.remote
  * this is the only signal that a command really landed. Plain logic + injected I/O: the app's
  * [VehicleCommandPoller] and the shell-uid daemon run the same code, and it is unit-testable.
  *
- * Climate only for now. Windows take several seconds to travel (their final % arrives with the
+ * Climate and DRL for now. Windows take several seconds to travel (their final % arrives with the
  * live snapshot) and di+ exposes no seat-heat state, so those commands carry no probe.
  */
 object CommandStateProbe {
@@ -41,6 +41,7 @@ object CommandStateProbe {
     private const val FAN_LEVEL = "风量档位"
     private const val AC_STATUS = "空调状态"
     private const val AC_CIRC = "空调循环方式"
+    private const val DRL = "日行灯"
 
     /**
      * `空调循环方式` value for each mode, measured on `way` 2026-11-04: `内循环` moved it 0 → 1.
@@ -68,6 +69,12 @@ object CommandStateProbe {
                     if (target != null) after == target else before != null && after != before
                 }, settleMs = CIRCULATION_SETTLE_MS)
             }
+        }
+        // `日行灯`: 1 = on, 2 = off (0 invalid, 3 undefined). Moved within 3 s on `way` 2026-11-04.
+        "drl" -> when (params["on"]?.toString()?.trim()?.lowercase()) {
+            "true", "1" -> Probe(DRL, "drl") { _, after -> after == 1.0 }
+            "false", "0" -> Probe(DRL, "drl") { _, after -> after == 2.0 }
+            else -> null
         }
         else -> null
     }

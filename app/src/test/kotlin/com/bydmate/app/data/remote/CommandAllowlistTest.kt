@@ -91,6 +91,17 @@ class CommandAllowlistTest {
     }
 
     @Test
+    fun mapsDaytimeRunningLightsToVerifiedPhrases() {
+        val on = CommandAllowlist.buildPhrase("drl", mapOf("on" to true))
+        val off = CommandAllowlist.buildPhrase("drl", mapOf("on" to false))
+        assertEquals("打开日行灯", (on as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("关闭日行灯", (off as CommandAllowlist.BuildResult.Ok).phrase)
+
+        assertTrue(CommandAllowlist.buildPhrase("drl", emptyMap()) is CommandAllowlist.BuildResult.Rejected)
+        assertTrue(CommandAllowlist.buildPhrase("drl", mapOf("on" to "maybe")) is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    @Test
     fun rejectsUnverifiedCommandTypes() {
         val result = CommandAllowlist.buildPhrase("lock", emptyMap())
         assertTrue(result is CommandAllowlist.BuildResult.Rejected)

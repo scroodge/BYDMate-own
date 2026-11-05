@@ -71,6 +71,19 @@ class CommandStateProbeTest {
     }
 
     @Test
+    fun drlOnAndOffCheckTheDiplusState() {
+        val car = FakeCar(1.0, 2.0)
+        val off = car.observe(probe("drl", "on" to false))!!
+        assertTrue(off.verified)
+        assertEquals("drl", off.field)
+        assertEquals("日行灯", car.reads.first())
+        assertTrue(FakeCar(2.0, 1.0).observe(probe("drl", "on" to true))!!.verified)
+        // 0 = invalid reading: never counts as "off".
+        assertFalse(FakeCar(1.0, 0.0).observe(probe("drl", "on" to false))!!.verified)
+        assertNull(CommandStateProbe.forCommand("drl", mapOf("on" to "maybe")))
+    }
+
+    @Test
     fun circulationChecksTheMeasuredModeValueAndWaitsLonger() {
         assertTrue(FakeCar(0.0, 1.0).observe(probe("ac_recirculation", "mode" to "internal"))!!.verified)
         assertTrue(FakeCar(1.0, 1.0, 0.0).observe(probe("ac_recirculation", "mode" to "external"))!!.verified)
