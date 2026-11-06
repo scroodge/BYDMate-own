@@ -113,6 +113,50 @@ class AdbOnDeviceClientTest {
     }
 
     @Test
+    fun `approved seat action writes its fixed fid and verifies read back`() = runTest {
+        val action = AutoserviceActuation.PASSENGER_SEAT_HEAT_LEVEL_2
+        val write = "service call autoservice 6 i32 1023 i32 1125122076 i32 3"
+        val read = "service call autoservice 5 i32 1023 i32 1335885843"
+        val client = newClient(FakeProtocol(execResponses = mapOf(
+            write to "Result: Parcel(00000001)",
+            read to "Result: Parcel(00000000 00000003   '........')",
+        )))
+        client.connect()
+
+        val result = client.executeAutoserviceActuation(action)
+
+        assertEquals(AutoserviceActuationResult(true, true, 3), result)
+    }
+
+    @Test
+    fun `rejected direct write never attempts read back`() = runTest {
+        val fake = FakeProtocol(execResponses = mapOf(
+            "service call autoservice 6 i32 1023 i32 1125122068 i32 1" to
+                "Result: Parcel(ffffd8e5)",
+        ))
+        val client = newClient(fake)
+        client.connect()
+
+        val result = client.executeAutoserviceActuation(AutoserviceActuation.DRIVER_SEAT_HEAT_OFF)
+
+        assertEquals(AutoserviceActuationResult(false, false), result)
+        assertEquals(1, fake.execCalls.size)
+    }
+
+    @Test
+    fun `drl accepts only the fixed write and has no fabricated read back`() = runTest {
+        val write = "service call autoservice 6 i32 1004 i32 1125122118 i32 1"
+        val fake = FakeProtocol(execResponses = mapOf(write to "Result: Parcel(00000001)"))
+        val client = newClient(fake)
+        client.connect()
+
+        val result = client.executeAutoserviceActuation(AutoserviceActuation.DRL_ON)
+
+        assertEquals(AutoserviceActuationResult(true, null), result)
+        assertEquals(listOf(write), fake.execCalls)
+    }
+
+    @Test
     fun `exec disconnected returns null`() = runTest {
         val client = newClient(FakeProtocol(connectResult = false))
         // Note: not calling connect() — protocol field stays null.

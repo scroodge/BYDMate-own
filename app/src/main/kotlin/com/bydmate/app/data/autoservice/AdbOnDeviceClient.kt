@@ -25,6 +25,47 @@ data class AutoserviceRead(val tx: Int, val dev: Int, val fid: Int) {
     fun command(): String = "service call autoservice $tx i32 $dev i32 $fid"
 }
 
+/**
+ * The only direct writes the app may request through on-device ADB.
+ *
+ * This is deliberately an enum rather than `(dev, fid, value)` arguments: callers cannot turn
+ * the ADB transport into a generic autoservice writer. Values below were individually verified
+ * on car `way` on 2026-11-06; see docs/AUTOSERVICE_ACTUATION.md.
+ */
+enum class AutoserviceActuation(
+    internal val dev: Int,
+    internal val setFid: Int,
+    internal val value: Int,
+    internal val readBack: AutoserviceRead? = null,
+    internal val expectedReadBack: Int? = null,
+) {
+    DRIVER_SEAT_HEAT_OFF(
+        dev = 1023, setFid = 1125122068, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885835), expectedReadBack = 1,
+    ),
+    DRIVER_SEAT_HEAT_LEVEL_2(
+        dev = 1023, setFid = 1125122068, value = 3,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885835), expectedReadBack = 3,
+    ),
+    PASSENGER_SEAT_HEAT_OFF(
+        dev = 1023, setFid = 1125122076, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 1,
+    ),
+    PASSENGER_SEAT_HEAT_LEVEL_2(
+        dev = 1023, setFid = 1125122076, value = 3,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 3,
+    ),
+    DRL_ON(dev = 1004, setFid = 1125122118, value = 1),
+    DRL_OFF(dev = 1004, setFid = 1125122118, value = 2),
+}
+
+data class AutoserviceActuationResult(
+    val accepted: Boolean,
+    /** `null` means the action has no reliable read fid (currently DRL). */
+    val verified: Boolean?,
+    val observedValue: Int? = null,
+)
+
 data class DaemonSupervisorResult(
     val adbConnected: Boolean,
     val daemonRunning: Boolean,
@@ -62,6 +103,11 @@ interface AdbOnDeviceClient {
      * long batch holds up every other autoservice read (e.g. the charging-gun poll).
      */
     suspend fun execAutoserviceReads(reads: List<AutoserviceRead>): List<Int?>? = null
+    /**
+     * Executes exactly one [AutoserviceActuation] as ADB shell UID. No arbitrary `(fid, value)`
+     * path exists here; this is intentionally separate from the read-only [exec] boundary.
+     */
+    suspend fun executeAutoserviceActuation(action: AutoserviceActuation): AutoserviceActuationResult? = null
     /**
      * Grants PACKAGE_USAGE_STATS appop to our own package via shell uid. The
      * only non-autoservice write we permit through this client — needed so
@@ -200,6 +246,39 @@ class AdbOnDeviceClientImpl @Inject constructor(
             null
         } ?: return@withContext null
         parseBatchOutput(out, reads.size)
+    }
+
+    override suspend fun executeAutoserviceActuation(
+        action: AutoserviceActuation,
+    ): AutoserviceActuationResult? = withContext(Dispatchers.IO) {
+        val p = protocol ?: return@withContext null
+        try {
+            // All three fields are compile-time enum values. Never accept a caller-built shell
+            // string or fid/value pair here: this is a deliberately tiny write capability.
+            val write = p.exec(
+                "service call autoservice 6 i32 ${action.dev} i32 ${action.setFid} i32 ${action.value}",
+            ) ?: return@withContext null
+            val accepted = SET_INT_ACCEPTED_REGEX.containsMatchIn(write)
+            if (!accepted) return@withContext AutoserviceActuationResult(accepted = false, verified = false)
+
+            val read = action.readBack ?: return@withContext AutoserviceActuationResult(
+                accepted = true,
+                verified = null,
+            )
+            val raw = p.exec(read.command()) ?: return@withContext AutoserviceActuationResult(
+                accepted = true,
+                verified = false,
+            )
+            val observed = PARCEL_INT_REGEX.find(raw)?.groupValues?.get(1)?.toLong(16)?.toInt()
+            AutoserviceActuationResult(
+                accepted = true,
+                verified = observed == action.expectedReadBack,
+                observedValue = observed,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "executeAutoserviceActuation($action) failed: ${e.message}")
+            null
+        }
     }
 
     override suspend fun grantUsageStatsAppop(packageName: String): Boolean = withContext(Dispatchers.IO) {
@@ -361,6 +440,7 @@ class AdbOnDeviceClientImpl @Inject constructor(
         private const val BATCH_MARKER = "@vfas"
         private val BATCH_MARKER_REGEX = Regex("""^$BATCH_MARKER(\d+)$""")
         private val PARCEL_INT_REGEX = Regex("""Parcel\(00000000\s+([0-9a-fA-F]{8})""")
+        private val SET_INT_ACCEPTED_REGEX = Regex("""Parcel\(00000001\b""")
 
         /**
          * Splits `echo @vfas<i>` / `Result: Parcel(00000000 xxxxxxxx ...)` output back into

@@ -150,6 +150,8 @@ data class SettingsUiState(
     val floatingWidgetNeedsPermission: Boolean = false,
     /** Proportional widget size, 0.7–2.0 (see WidgetPreferences.SCALE_MIN/MAX). */
     val floatingWidgetScale: Float = 1.0f,
+    /** Explicit opt-in for the widget's vehicle quick-controls drawer. */
+    val floatingWidgetQuickControlsEnabled: Boolean = false,
     val daemonStatus: DaemonStatus = DaemonStatus.UNKNOWN,
     val cloudSyncEnabled: Boolean = true,
     val cloudSyncUrl: String = SettingsRepository.DEFAULT_CLOUD_SYNC_URL,
@@ -395,6 +397,7 @@ class SettingsViewModel @Inject constructor(
                 floatingWidgetEnabled = enabled,
                 floatingWidgetNeedsPermission = enabled && !canDraw,
                 floatingWidgetScale = prefs.getScale(),
+                floatingWidgetQuickControlsEnabled = prefs.isQuickControlsEnabled(),
             )
         }
     }
@@ -406,6 +409,11 @@ class SettingsViewModel @Inject constructor(
             com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MIN,
             com.bydmate.app.ui.widget.WidgetPreferences.SCALE_MAX,
         )) }
+    }
+
+    fun setFloatingWidgetQuickControlsEnabled(enabled: Boolean) {
+        com.bydmate.app.ui.widget.WidgetPreferences(appContext).setQuickControlsEnabled(enabled)
+        _uiState.update { it.copy(floatingWidgetQuickControlsEnabled = enabled) }
     }
 
     /**

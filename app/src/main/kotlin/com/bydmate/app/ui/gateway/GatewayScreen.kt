@@ -187,8 +187,10 @@ fun GatewayScreen(
             enabled = state.floatingWidgetEnabled,
             needsPermission = state.floatingWidgetNeedsPermission,
             scale = state.floatingWidgetScale,
+            quickControlsEnabled = state.floatingWidgetQuickControlsEnabled,
             onEnabledChange = viewModel::setFloatingWidgetEnabled,
             onScaleChange = viewModel::setFloatingWidgetScale,
+            onQuickControlsEnabledChange = viewModel::setFloatingWidgetQuickControlsEnabled,
             strings = strings,
         )
     }
@@ -597,8 +599,10 @@ private fun FloatingWidgetCard(
     enabled: Boolean,
     needsPermission: Boolean,
     scale: Float,
+    quickControlsEnabled: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     onScaleChange: (Float) -> Unit,
+    onQuickControlsEnabledChange: (Boolean) -> Unit,
     strings: GatewayStrings,
 ) {
     val context = LocalContext.current
@@ -633,6 +637,22 @@ private fun FloatingWidgetCard(
             Text(strings.widgetNeedsPermission, color = AccentOrange, fontSize = 12.sp, lineHeight = 17.sp)
         }
         if (enabled) {
+            Gap(14.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(strings.widgetQuickControlsToggle, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(strings.widgetQuickControlsHint, color = TextSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                }
+                Switch(
+                    checked = quickControlsEnabled,
+                    onCheckedChange = onQuickControlsEnabledChange,
+                    colors = bydSwitchColors(),
+                )
+            }
             Gap(14.dp)
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1569,6 +1589,8 @@ private data class GatewayStrings(
     val widgetHint: String,
     val widgetNeedsPermission: String,
     val widgetScaleLabel: String,
+    val widgetQuickControlsToggle: String,
+    val widgetQuickControlsHint: String,
 )
 
 private fun gatewayStrings(language: String): GatewayStrings =
@@ -1689,6 +1711,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetHint = "AI запас хода, AI расход с трендом, температуры, 12V и связь с облаком. Появляется, когда VoltFlow Mate свёрнут.",
             widgetNeedsPermission = "Нет разрешения на показ поверх окон. Подключите ADB в «Расширенных функциях» и включите виджет ещё раз.",
             widgetScaleLabel = "Размер виджета",
+            widgetQuickControlsToggle = "Быстрые настройки",
+            widgetQuickControlsHint = "По касанию виджета открывает подогрев водителя и пассажира (2), а также ДХО.",
         )
         SettingsRepository.LANGUAGE_EN -> GatewayStrings(
             bridge = "VoltFlow telemetry bridge",
@@ -1806,6 +1830,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetHint = "AI range, AI consumption with trend, temperatures, 12V and cloud link. Appears while VoltFlow Mate is in the background.",
             widgetNeedsPermission = "No permission to draw over other apps. Connect ADB under Advanced features, then turn the widget on again.",
             widgetScaleLabel = "Widget size",
+            widgetQuickControlsToggle = "Quick controls",
+            widgetQuickControlsHint = "Tapping the widget opens driver and passenger seat heat (level 2) and DRL controls.",
         )
         else -> GatewayStrings(
             bridge = "Мост тэлеметрыі VoltFlow",
@@ -1923,6 +1949,8 @@ private fun gatewayStrings(language: String): GatewayStrings =
             widgetHint = "AI запас ходу, AI расход з трэндам, тэмпературы, 12V і сувязь з воблакам. З'яўляецца, калі VoltFlow Mate згорнуты.",
             widgetNeedsPermission = "Няма дазволу паказваць паверх вокнаў. Падключыце ADB у «Пашыраных функцыях» і ўключыце віджэт яшчэ раз.",
             widgetScaleLabel = "Памер віджэта",
+            widgetQuickControlsToggle = "Хуткія налады",
+            widgetQuickControlsHint = "Націск на віджэт адкрывае падагрэў кіроўцы і пасажыра (2), а таксама ДХО.",
         )
     }
 

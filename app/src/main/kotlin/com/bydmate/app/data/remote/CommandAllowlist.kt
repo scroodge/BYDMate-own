@@ -101,6 +101,11 @@ object CommandAllowlist {
                 2 -> "主驾座椅加热2档"
                 else -> return BuildResult.Rejected("seat_heat_driver.level must be 0 or 2")
             }
+            "seat_heat_pass" -> when (readInt(params["level"])) {
+                0 -> "关闭副驾座椅加热"
+                2 -> "副驾座椅加热2档"
+                else -> return BuildResult.Rejected("seat_heat_pass.level must be 0 or 2")
+            }
             // Verified on `way` 2026-11-04: {日行灯} flips 1 (on) <-> 2 (off).
             "drl" -> when (readBool(params["on"])) {
                 true -> "打开日行灯"

@@ -99,6 +99,16 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(KEY_LEFT_TAP_NAVIGATOR, enabled).apply()
     }
 
+    /**
+     * Explicit opt-in for the quick-controls drawer. Off keeps the historical short-tap
+     * behaviour (open BYDMate, or Navigator when that optional preference is enabled).
+     */
+    fun isQuickControlsEnabled(): Boolean = prefs.getBoolean(KEY_QUICK_CONTROLS_ENABLED, false)
+
+    fun setQuickControlsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_QUICK_CONTROLS_ENABLED, enabled).apply()
+    }
+
     fun leftTapNavigatorFlow(): Flow<Boolean> = callbackFlow {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, changedKey ->
             if (changedKey == KEY_LEFT_TAP_NAVIGATOR) trySend(isLeftTapNavigatorEnabled())
@@ -117,6 +127,7 @@ class WidgetPreferences(private val prefs: SharedPreferences) {
         const val KEY_SCALE = "widget_scale"
         const val KEY_HIDDEN_UNTIL_LAUNCH = "widget_hidden_until_launch"
         const val KEY_LEFT_TAP_NAVIGATOR = "widget_left_tap_navigator"
+        const val KEY_QUICK_CONTROLS_ENABLED = "widget_quick_controls_enabled"
         const val SCALE_MIN = 0.7f
         const val SCALE_MAX = 2.0f
     }

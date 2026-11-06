@@ -20,9 +20,11 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.bydmate.app.MainActivity
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.ui.overlay.OverlayLifecycleOwner
+import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import com.bydmate.app.data.cloud.CloudLinkEvents
 import com.bydmate.app.data.cloud.CloudLinkStatus
@@ -45,16 +47,12 @@ object WidgetController {
     // Widget dimensions in dp — matches FloatingWidgetView layout
     private const val WIDGET_WIDTH_DP = 260
     private const val WIDGET_HEIGHT_DP = 108
+    private const val QUICK_CONTROLS_HEIGHT_DP = 120
     private const val DRAG_THRESHOLD_DP = 8
     private const val TRASH_RADIUS_DP = 48
     private const val LONG_PRESS_MS = 1500L
-    // Tap on the left third of the widget launches Yandex Navigator if
-    // installed; the right two thirds keep the historical behaviour
-    // (open BYDMate). Threshold uses the live view width, so it stays
-    // proportional across the 70-200% widget size range.
     private const val YANDEX_NAVI_PACKAGE = "ru.yandex.yandexnavi"
     private const val LEFT_TAP_FRACTION = 1f / 3f
-
     @Volatile private var appForegrounded: Boolean = false
     @Volatile private var previewMode: Boolean = false
 
@@ -70,6 +68,15 @@ object WidgetController {
 
     private var trashView: ComposeView? = null
     private var trashLifecycle: OverlayLifecycleOwner? = null
+
+    // This is intentionally a second overlay. The telemetry widget has a raw View touch listener
+    // for dragging, so Compose buttons inside it could never receive a click.
+    private var quickControlsView: ComposeView? = null
+    private var quickControlsLifecycle: OverlayLifecycleOwner? = null
+    private var quickControlsParams: WindowManager.LayoutParams? = null
+    private var quickControlsVisible = false
+    private var commandScope: CoroutineScope? = null
+    private var commandPendingState = mutableStateOf(false)
 
     private var dataScope: CoroutineScope? = null
     private var dataJob: Job? = null
@@ -139,6 +146,7 @@ object WidgetController {
 
         val lifecycleOwner = OverlayLifecycleOwner().also { it.onCreate() }
         widgetLifecycle = lifecycleOwner
+        commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
         val compose = ComposeView(appCtx).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
@@ -215,8 +223,11 @@ object WidgetController {
         dataJob = null
         dataScope?.cancel()
         dataScope = null
+        commandScope?.cancel()
+        commandScope = null
 
         hideTrashZone()
+        hideQuickControls()
 
         widgetView?.let { v ->
             try {
@@ -292,6 +303,7 @@ object WidgetController {
                 val hideForCamera = snap.cameraActive
                 widgetView?.visibility = if (hideForCamera) View.GONE else View.VISIBLE
                 if (hideForCamera) hideTrashZone()
+                if (hideForCamera) hideQuickControls()
             }
         }
     }
@@ -327,6 +339,7 @@ object WidgetController {
         } catch (e: Exception) {
             Log.w(TAG, "updateViewLayout scale: ${e.message}")
         }
+        updateQuickControlsLayout()
     }
 
     private data class WidgetSnapshot(
@@ -403,6 +416,125 @@ object WidgetController {
 
     internal fun setTrashActive(active: Boolean) {
         trashActive.value = active
+    }
+
+    // --- Quick controls ---
+
+    private fun toggleQuickControls(context: Context) {
+        if (quickControlsVisible) hideQuickControls() else showQuickControls(context)
+    }
+
+    private fun showQuickControls(context: Context) {
+        if (quickControlsView != null) return
+        val windowManager = wm ?: return
+        val widgetLayout = widgetParams ?: return
+        val appCtx = context.applicationContext
+        val scale = scaleState.value
+        val width = (dp(appCtx, WIDGET_WIDTH_DP) * scale).toInt()
+        val height = (dp(appCtx, QUICK_CONTROLS_HEIGHT_DP) * scale).toInt()
+        val metrics = appCtx.resources.displayMetrics
+        val params = WindowManager.LayoutParams(
+            width,
+            height,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = widgetLayout.x
+            y = quickControlsY(widgetLayout.y, height, metrics)
+        }
+        val lifecycleOwner = OverlayLifecycleOwner().also { it.onCreate() }
+        val compose = ComposeView(appCtx).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setContent {
+                WidgetQuickControlsView(
+                    alpha = alphaState.value,
+                    scaleFactor = scaleState.value,
+                    commandPending = commandPendingState.value,
+                    onSet = ::sendQuickControl,
+                )
+            }
+        }
+        quickControlsLifecycle = lifecycleOwner
+        quickControlsParams = params
+        quickControlsView = compose
+        try {
+            windowManager.addView(compose, params)
+            quickControlsVisible = true
+        } catch (e: Exception) {
+            Log.w(TAG, "addView quick controls: ${e.message}")
+            hideQuickControls()
+        }
+    }
+
+    private fun hideQuickControls() {
+        commandPendingState.value = false
+        quickControlsView?.let { view ->
+            try { wm?.removeView(view) } catch (_: Exception) {}
+        }
+        quickControlsLifecycle?.onDestroy()
+        quickControlsView = null
+        quickControlsLifecycle = null
+        quickControlsParams = null
+        quickControlsVisible = false
+    }
+
+    private fun updateQuickControlsLayout() {
+        val view = quickControlsView ?: return
+        val params = quickControlsParams ?: return
+        val widgetLayout = widgetParams ?: return
+        val windowManager = wm ?: return
+        val context = view.context ?: return
+        val scale = scaleState.value
+        val height = (dp(context, QUICK_CONTROLS_HEIGHT_DP) * scale).toInt()
+        params.width = (dp(context, WIDGET_WIDTH_DP) * scale).toInt()
+        params.height = height
+        params.x = widgetLayout.x
+        params.y = quickControlsY(widgetLayout.y, height, context.resources.displayMetrics)
+        try {
+            windowManager.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            Log.w(TAG, "updateViewLayout quick controls: ${e.message}")
+        }
+    }
+
+    private fun quickControlsY(widgetY: Int, controlsHeight: Int, metrics: DisplayMetrics): Int =
+        (widgetY + currentWidgetHpx).coerceAtMost((metrics.heightPixels - controlsHeight).coerceAtLeast(0))
+
+    private fun sendQuickControl(control: WidgetQuickControl, enabled: Boolean) {
+        if (commandPendingState.value) return
+        val context = widgetView?.context ?: return
+        val scope = commandScope ?: return
+        commandPendingState.value = true
+        scope.launch {
+            val result = try {
+                val executor = EntryPointAccessors.fromApplication(
+                    context.applicationContext,
+                    WidgetQuickCommandEntryPoint::class.java,
+                ).widgetQuickCommandExecutor()
+                executor.set(control, enabled)
+            } catch (e: Exception) {
+                Log.e(TAG, "quick control failed: ${e.message}")
+                WidgetQuickCommandExecutor.Result.Failed
+            }
+            commandPendingState.value = false
+            val message = when (result) {
+                is WidgetQuickCommandExecutor.Result.Sent -> result.message
+                is WidgetQuickCommandExecutor.Result.Rejected -> "Команда отклонена: ${result.reason}"
+                WidgetQuickCommandExecutor.Result.Failed -> "Не удалось выполнить команду"
+            }
+            try {
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {}
+        }
     }
 
     // --- Helpers ---
@@ -522,6 +654,7 @@ object WidgetController {
                         try {
                             windowManager.updateViewLayout(v, params)
                         } catch (_: Exception) {}
+                        updateQuickControlsLayout()
 
                         // Trash zone hit-test (center-to-center)
                         val widgetCx = clampedX + widgetWpx / 2
@@ -547,29 +680,27 @@ object WidgetController {
                     val wasTap = DragGestureLogic.isTap(0, 0, dx, dy, thresholdPx)
 
                     if (wasTap) {
-                        // Tap zoning is opt-in via WidgetPreferences. Default: a tap
-                        // anywhere opens BYDMate. When the user has flipped the
-                        // setting on, the LEFT third launches Yandex Navigator (if
-                        // installed; otherwise the tap is a no-op so we don't fall
-                        // back to BYDMate, which would be confusing). The right two
-                        // thirds always open BYDMate. event.x is relative to the
-                        // touched view, so the boundary follows the live widget
-                        // size after the user's resize setting.
-                        val width = v.width
-                        val isLeftTap = prefs.isLeftTapNavigatorEnabled() &&
-                            width > 0 && event.x < width * LEFT_TAP_FRACTION
-                        try {
-                            val intent: Intent? = if (isLeftTap) {
-                                context.packageManager.getLaunchIntentForPackage(YANDEX_NAVI_PACKAGE)
-                            } else {
-                                Intent(context, MainActivity::class.java)
+                        if (prefs.isQuickControlsEnabled()) {
+                            // It is a separate overlay, so buttons remain clickable despite this
+                            // raw touch listener owning drag and long-press recognition.
+                            toggleQuickControls(context)
+                        } else {
+                            // Quick controls are deliberately opt-in. Preserve the established
+                            // widget behaviour until the user enables them in Settings.
+                            val width = v.width
+                            val isLeftTap = prefs.isLeftTapNavigatorEnabled() &&
+                                width > 0 && event.x < width * LEFT_TAP_FRACTION
+                            try {
+                                val intent: Intent? = if (isLeftTap) {
+                                    context.packageManager.getLaunchIntentForPackage(YANDEX_NAVI_PACKAGE)
+                                } else {
+                                    Intent(context, MainActivity::class.java)
+                                }
+                                intent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                intent?.let(context::startActivity)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "tap launch failed: ${e.message}")
                             }
-                            if (intent != null) {
-                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                context.startActivity(intent)
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "tap launch failed: ${e.message}")
                         }
                     } else {
                         // End drag

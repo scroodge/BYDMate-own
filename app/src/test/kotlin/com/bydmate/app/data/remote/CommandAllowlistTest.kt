@@ -91,6 +91,18 @@ class CommandAllowlistTest {
     }
 
     @Test
+    fun passengerSeatHeatOnlyAcceptsOffOrVerifiedMaximum() {
+        val maximum = CommandAllowlist.buildPhrase("seat_heat_pass", mapOf("level" to 2))
+        val off = CommandAllowlist.buildPhrase("seat_heat_pass", mapOf("level" to 0))
+
+        assertEquals("副驾座椅加热2档", (maximum as CommandAllowlist.BuildResult.Ok).phrase)
+        assertEquals("关闭副驾座椅加热", (off as CommandAllowlist.BuildResult.Ok).phrase)
+
+        val unverifiedLevel = CommandAllowlist.buildPhrase("seat_heat_pass", mapOf("level" to 1))
+        assertTrue(unverifiedLevel is CommandAllowlist.BuildResult.Rejected)
+    }
+
+    @Test
     fun mapsDaytimeRunningLightsToVerifiedPhrases() {
         val on = CommandAllowlist.buildPhrase("drl", mapOf("on" to true))
         val off = CommandAllowlist.buildPhrase("drl", mapOf("on" to false))
@@ -147,6 +159,7 @@ class CommandAllowlistTest {
     fun movementGuardStillBlocksSeatHeatWhileDriving() {
         val data = sampleDiPars(speed = 60, gear = 4)
         assertEquals("vehicle_moving", CommandAllowlist.movementBlockReason("seat_heat_driver", data))
+        assertEquals("vehicle_moving", CommandAllowlist.movementBlockReason("seat_heat_pass", data))
     }
 
     @Test

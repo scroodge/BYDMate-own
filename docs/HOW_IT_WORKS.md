@@ -97,7 +97,10 @@ So survival genuinely is the app's own algorithm — but it is independence from
 B-07 moved every read to the `autoservice` binder, D+ would still be required:
 
 - D+'s 熄火哨兵 stall-sentry is what keeps the head unit awake while parked.
-- `127.0.0.1:8988/api/sendCmd` is the **only** actuation channel. `AdbOnDeviceClient` is deliberately write-barriered, so there is no autoservice write path for commands.
+- Cloud commands still actuate through `127.0.0.1:8988/api/sendCmd`. The local floating
+  widget additionally has a deliberately tiny direct-autoservice path: six fixed enum actions
+  (driver/passenger seat heat off/level 2 and DRL on/off) executed through the head unit's own
+  ADB shell UID. It has no arbitrary fid/value or shell-command surface.
 
 A full `nativestack` port (direct autoservice reads) was **evaluated and rejected**:
 ~40 per-vehicle-validated fids, more on-device ADB load, no new data — and D+ still
@@ -222,9 +225,12 @@ This path unlocks what D+ cannot give: **`FID_SOH`** (battery state of health),
 **`FID_CHARGING_CAPACITY`** (per-session kWh into the cells), `FID_LIFETIME_KWH`,
 lifetime mileage, HV pack voltage, battery chemistry, float SOC.
 
-The client is intentionally **write-barriered** — the only non-autoservice write it
-permits is granting `PACKAGE_USAGE_STATS` to the app's own package (needed for
-camera-overlay detection), plus starting D+'s MainService and launching the daemon.
+The generic client is intentionally **write-barriered**. Its only autoservice-write exception
+is `AutoserviceActuation`: six compile-time fixed widget actions (both front-seat heat: off/
+level 2; DRL: on/off), with heat read back before reporting success. It does not accept a
+caller-provided fid, value or shell string. The other fixed writes grant `PACKAGE_USAGE_STATS`
+to the app's own package (needed for camera-overlay detection), start D+'s MainService and
+launch the daemon.
 
 The same ADB key is what makes the survival daemon, remote commands, and
 telemetry-while-parked possible. Without it the app still streams normal live
@@ -520,8 +526,9 @@ VoltFlow /api/bydmate/commands ──poll──> poller / daemon
                             POST /api/bydmate/commands/ack <────┘
 ```
 
-Actuation is **only ever** a D+ voice-assistant phrase (`迪加`-style) pushed to
-`sendCmd`. There is no direct CAN write path in this app.
+Cloud/daemon actuation is a D+ voice-assistant phrase (`迪加`-style) pushed to `sendCmd`.
+The floating widget is the narrow exception: its three controls use fixed direct-autoservice
+`setInt` writes via on-device ADB shell, with no D+ fallback and no generic direct-write API.
 
 ### 6.2 Safety layers
 
@@ -529,11 +536,15 @@ Four of them, in order:
 
 1. **Movement guard** — `movementBlockReason(type, data)` skips climate types (`ac`, `ac_temp_step`, `fan_speed_step`, `ac_recirculation`), which are allowed while driving; every other type is rejected unless speed is 0 and gear is P (stationary-charging is accepted as a P-equivalent). Rejections: `vehicle_moving`, `gear_not_park`, `gear_unknown`.
 2. **12 V guard** — rejects with `aux_voltage_low` below **11.8 V**, so a weak aux battery is not drained by actuation.
-3. **Allowlist** — `CommandAllowlist.buildPhrase()` accepts only live-validated commands: working window controls (`window` and `windows_preset`), A/C on/off (`ac.on`), one-step temperature change (`ac_temp_step.direction`), recirculation (`ac_recirculation.mode`) and driver-seat heating off or maximum (`seat_heat_driver.level` = 0 or 2) and daytime running lights on/off (`drl.on`, confirmed by `CommandStateProbe` reading `日行灯` 1/2). It maps them to fixed D+ phrases; any other `type` is `unknown_type`.
+3. **Actuation allowlists** — cloud/daemon commands pass `CommandAllowlist.buildPhrase()` and
+   map only fixed types to D+ phrases. The local widget passes `AutoserviceActuation`, an enum
+   limited to driver/passenger seat heat off/level 2 and DRL on/off; it cannot supply a fid or
+   value. Seat-heat writes require matching autoservice read-back; DRL has no reliable read fid,
+   so only its accepted write is reported.
 4. **Deny list** — any produced phrase containing `发送CAN`, `执行SHELL`, `执行TSHELL`, `点击`, `滑动`, `按钮`, `按键`, `浮窗`, `下电` is rejected outright. `DiParsControlClient` blocks the same patterns again at the send site.
 
 The validated command contract contains only `window`, `windows_preset`, `ac`,
-`ac_temp_step`, `fan_speed_step`, `ac_recirculation`, `seat_heat_driver` and `drl`. Older cloud command
+`ac_temp_step`, `fan_speed_step`, `ac_recirculation`, `seat_heat_driver`, `seat_heat_pass` and `drl`. Older cloud command
 types remain audit history only and are rejected before a phrase can be sent to D+.
 
 Every command is acked back with `{"id", "status", "result"}` where status is
@@ -643,7 +654,13 @@ vehicle id are present — the same hard gate applies to telemetry and trip summ
 
 - **Live instantaneous power is integer-kW — but "fractional power is impossible" is retired.** Engine power is an *integer-kW* field in BYD's own data; reading the same fid as float returns a `-1.0` sentinel. That still holds for every live read through D+ `getVal` / `getDiPars` and at the autoservice fid layer, and D+ faithfully passes the integer, as does this app. What changed: **D+ 2.0's segment endpoints do expose pack voltage, pack current, SoH and fractional energy** — measured on car `way` 2026-08-18, `332.0 V × 198.5 A = 65.902 kW`, i.e. D+ computes `P = V × I` internally after all. Those are per-segment aggregates, not a live float, but the open segment refreshes about every 3 s, so fractional power is derivable at that cadence rather than only as a session average. Nothing consumes it yet — see `docs/DIPLUS_DATA.md` and **B-14**, and note the new endpoints carry their own sentinel family that the existing filters do not catch.
 - **The BMS `kwh_charged` counter is cell-only** — roughly 47 % below grid-metered energy. It is sent as a **diagnostic** and must not be used for cost. VoltFlow deliberately computes cost from `SOC_delta% × capacity ÷ efficiency`. This was tried the other way and reverted; do not re-propose it.
-- **A full `nativestack` port was evaluated and rejected** — ~40 per-vehicle-validated fids, more on-device ADB load, and no new data, while D+ still cannot be removed (its stall-sentry keeps the head unit awake while parked and it is the only actuation channel).
-- **D+ still cannot be dropped.** B-07 (replacing D+ reads with direct autoservice reads) has *partly* shipped: the daemon now sends an autoservice-only payload while parked/charging when D+ is stale (§7). But driving still relies on D+ for reads, the app's own loop has no fallback, and D+ remains the only actuation channel and stall-sentry — so the dependency stands.
+- **A full `nativestack` port was evaluated and rejected** — ~40 per-vehicle-validated fids,
+  more on-device ADB load and no new read data. The bounded widget writer does not change that
+  decision: it covers only six individually verified fixed actions.
+- **D+ still cannot be dropped.** B-07 (replacing D+ reads with direct autoservice reads) has
+  *partly* shipped: the daemon now sends an autoservice-only payload while parked/charging when
+  D+ is stale, and the widget has six direct actions. Driving still relies on D+ for reads;
+  cloud/daemon comfort commands still use its phrase endpoint; and its stall-sentry keeps the
+  head unit awake while parked.
 - **Termux and Shizuku do not bypass the platform lock.** They need the same one-time ADB/root bootstrap. The unlock is done on the tablet, without a computer, but it cannot be skipped.
 - **The head unit's SQLite is older than its Android version implies — no UPSERT.** DiLink reports `ro.build.version.release=10` / `sdk=29`, but it does *not* ship stock Android 10's SQLite 3.28. `INSERT ... ON CONFLICT(...) DO UPDATE` (SQLite 3.24+) fails at statement-prepare time with `near "ON": syntax error (code 1 SQLITE_ERROR)`. Write raw Room SQL against roughly **3.22-era syntax**: use `INSERT OR REPLACE`, or Room's `@Upsert`, which generates INSERT-then-UPDATE. **This is invisible locally** — Room validates `@Query` against its own bundled SQLite grammar at build time, so `compileDebugKotlin` and the full unit-test suite pass a statement the car cannot parse. It only fails on the head unit, at runtime. See the v0.5.2 entry in `CHANGELOG.md` for the four-day outage this caused.

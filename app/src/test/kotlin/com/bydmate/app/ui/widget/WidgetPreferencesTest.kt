@@ -37,6 +37,13 @@ class WidgetPreferencesTest {
     }
 
     @Test
+    fun `quick controls default to disabled and persist when enabled`() {
+        assertFalse(prefs.isQuickControlsEnabled())
+        prefs.setQuickControlsEnabled(true)
+        assertTrue(prefs.isQuickControlsEnabled())
+    }
+
+    @Test
     fun `position defaults are 0 0 when unset`() {
         assertEquals(0, prefs.getX())
         assertEquals(0, prefs.getY())
