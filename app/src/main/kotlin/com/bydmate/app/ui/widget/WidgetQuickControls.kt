@@ -54,7 +54,8 @@ internal fun WidgetQuickControlsView(
     alpha: Float,
     scaleFactor: Float,
     commandPending: Boolean,
-    onSet: (WidgetQuickControl, Boolean) -> Unit,
+    states: Map<WidgetQuickControl, Boolean?>,
+    onToggle: (WidgetQuickControl) -> Unit,
 ) {
     val baseDensity = LocalDensity.current
     val scaledDensity = Density(
@@ -94,24 +95,27 @@ internal fun WidgetQuickControlsView(
                         title = "ВОДИТЕЛЬ",
                         subtitle = "Подогрев 2",
                         control = WidgetQuickControl.DRIVER_SEAT_HEAT,
+                        enabled = states[WidgetQuickControl.DRIVER_SEAT_HEAT],
                         commandPending = commandPending,
-                        onSet = onSet,
+                        onToggle = onToggle,
                     )
                     QuickControlColumn(
                         modifier = Modifier.weight(1f),
                         title = "ДХО",
                         subtitle = "DRL",
                         control = WidgetQuickControl.DRL,
+                        enabled = states[WidgetQuickControl.DRL],
                         commandPending = commandPending,
-                        onSet = onSet,
+                        onToggle = onToggle,
                     )
                     QuickControlColumn(
                         modifier = Modifier.weight(1f),
                         title = "ПАССАЖИР",
                         subtitle = "Подогрев 2",
                         control = WidgetQuickControl.PASSENGER_SEAT_HEAT,
+                        enabled = states[WidgetQuickControl.PASSENGER_SEAT_HEAT],
                         commandPending = commandPending,
-                        onSet = onSet,
+                        onToggle = onToggle,
                     )
                 }
             }
@@ -125,8 +129,9 @@ private fun QuickControlColumn(
     title: String,
     subtitle: String,
     control: WidgetQuickControl,
+    enabled: Boolean?,
     commandPending: Boolean,
-    onSet: (WidgetQuickControl, Boolean) -> Unit,
+    onToggle: (WidgetQuickControl) -> Unit,
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         androidx.compose.material3.Text(
@@ -148,8 +153,13 @@ private fun QuickControlColumn(
             modifier = Modifier.padding(top = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            QuickControlButton("ВКЛ", AccentGreen, !commandPending) { onSet(control, true) }
-            QuickControlButton("ВЫКЛ", TextMuted.copy(alpha = 0.45f), !commandPending) { onSet(control, false) }
+            // One toggle: green = on, grey = off. Unknown (DRL before the first tap, or a failed
+            // seat read) shows grey "—" and a tap turns it on.
+            QuickControlButton(
+                label = when (enabled) { true -> "ВКЛ"; false -> "ВЫКЛ"; null -> "—" },
+                color = if (enabled == true) AccentGreen else TextMuted.copy(alpha = 0.45f),
+                enabled = !commandPending,
+            ) { onToggle(control) }
         }
     }
 }
@@ -171,6 +181,6 @@ private fun QuickControlButton(
             .clip(RoundedCornerShape(6.dp))
             .background(color)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 6.dp),
     )
 }

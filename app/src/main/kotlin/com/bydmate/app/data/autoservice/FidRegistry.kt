@@ -154,6 +154,7 @@ object FidRegistry {
     const val FID_WORK_MODE = 874512420
     /** AC block (dev 1000), same values as di+. Inside temp returns sentinel with ignition off. */
     const val FID_AC_POWER_STATE = 1077936144
+    const val FID_AC_CONTROL_MODE = 1077936146
     const val FID_AC_CYCLE_MODE = 1077936148
     const val FID_AC_WIND_LEVEL = 1077936156
     const val FID_AC_TEMP_MAIN = 1077936168

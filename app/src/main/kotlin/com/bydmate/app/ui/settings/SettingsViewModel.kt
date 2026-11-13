@@ -11,6 +11,8 @@ import androidx.lifecycle.viewModelScope
 import com.bydmate.app.diagnostics.DiagnosticsBundle
 import com.bydmate.app.diagnostics.DiagnosticsReporter
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
+import com.bydmate.app.data.autoservice.AutoserviceActuation
+import com.bydmate.app.data.autoservice.AutoserviceTx10Probe
 import com.bydmate.app.data.cloud.CloudTelemetryAckParser
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.cloud.VoltflowLinkClient
@@ -172,6 +174,9 @@ data class SettingsUiState(
     val cloudSyncAdvancedOpen: Boolean = false,
     val cloudSyncLinking: Boolean = false,
     val appLanguage: String = SettingsRepository.DEFAULT_APP_LANGUAGE,
+    /** Last fixed direct-autoservice probes run from the temporary on-device diagnostics page. */
+    val autoserviceDiagnosticLog: List<String> = emptyList(),
+    val autoserviceDiagnosticRunning: Boolean = false,
 )
 
 @HiltViewModel
@@ -469,6 +474,76 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val ok = runCatching { adbOnDeviceClient.connect().isSuccess }.getOrDefault(false)
             _uiState.update { it.copy(adbStatus = if (ok) AdbStatus.CONNECTED else AdbStatus.FAILED) }
+        }
+    }
+
+    /**
+     * Executes one compile-time fixed autoservice action for the temporary car-side test page.
+     * There is no free-form fid, value, or shell-command route here. Every result is kept in the
+     * visible report and emitted under the `AdbOnDeviceClient` log tag as `AUTOSERVICE_DIAG`.
+     */
+    fun runAutoserviceDiagnostic(action: AutoserviceActuation) {
+        if (_uiState.value.autoserviceDiagnosticRunning) return
+        _uiState.update { it.copy(autoserviceDiagnosticRunning = true) }
+        viewModelScope.launch {
+            val connected = runCatching {
+                adbOnDeviceClient.isConnected() || adbOnDeviceClient.connect().isSuccess
+            }.getOrDefault(false)
+            val result = if (connected) {
+                runCatching { adbOnDeviceClient.executeAutoserviceActuation(action) }.getOrNull()
+            } else {
+                null
+            }
+            val line = when {
+                !connected -> "${action.name}: ADB не подключён"
+                result == null -> "${action.name}: нет ответа autoservice"
+                !result.accepted -> "${action.name}: Binder отклонил запись"
+                result.verified == true -> "${action.name}: OK, read-back=${result.observedValue}"
+                result.verified == false -> "${action.name}: запись принята, read-back=${result.observedValue} — НЕ СОВПАЛ"
+                else -> "${action.name}: запись принята; read-back отсутствует"
+            }
+            Log.i("AutoserviceDiag", line)
+            _uiState.update { state ->
+                state.copy(
+                    adbStatus = if (connected) AdbStatus.CONNECTED else state.adbStatus,
+                    autoserviceDiagnosticRunning = false,
+                    autoserviceDiagnosticLog = (listOf(line) + state.autoserviceDiagnosticLog).take(24),
+                )
+            }
+        }
+    }
+
+    fun clearAutoserviceDiagnosticLog() {
+        _uiState.update { it.copy(autoserviceDiagnosticLog = emptyList()) }
+    }
+
+    /** Runs one of the fixed tx-10 compatibility probes from the supplied command sheet. */
+    fun runAutoserviceTx10Probe(probe: AutoserviceTx10Probe) {
+        if (_uiState.value.autoserviceDiagnosticRunning) return
+        _uiState.update { it.copy(autoserviceDiagnosticRunning = true) }
+        viewModelScope.launch {
+            val connected = runCatching {
+                adbOnDeviceClient.isConnected() || adbOnDeviceClient.connect().isSuccess
+            }.getOrDefault(false)
+            val result = if (connected) {
+                runCatching { adbOnDeviceClient.executeAutoserviceTx10Probe(probe) }.getOrNull()
+            } else {
+                null
+            }
+            val reply = result?.reply?.replace(Regex("\\s+"), " ")?.take(180)
+            val line = when {
+                !connected -> "TX10 ${probe.name}: ADB не подключён"
+                result == null -> "TX10 ${probe.name}: нет ответа autoservice"
+                else -> "TX10 ${probe.name}: $reply"
+            }
+            Log.i("AutoserviceDiag", line)
+            _uiState.update { state ->
+                state.copy(
+                    adbStatus = if (connected) AdbStatus.CONNECTED else state.adbStatus,
+                    autoserviceDiagnosticRunning = false,
+                    autoserviceDiagnosticLog = (listOf(line) + state.autoserviceDiagnosticLog).take(24),
+                )
+            }
         }
     }
 

@@ -77,6 +77,8 @@ object WidgetController {
     private var quickControlsVisible = false
     private var commandScope: CoroutineScope? = null
     private var commandPendingState = mutableStateOf(false)
+    /** Toggle state per quick control; DRL is remembered from the last successful tap. */
+    private val quickStates = mutableStateOf<Map<WidgetQuickControl, Boolean?>>(emptyMap())
 
     private var dataScope: CoroutineScope? = null
     private var dataJob: Job? = null
@@ -459,7 +461,8 @@ object WidgetController {
                     alpha = alphaState.value,
                     scaleFactor = scaleState.value,
                     commandPending = commandPendingState.value,
-                    onSet = ::sendQuickControl,
+                    states = quickStates.value,
+                    onToggle = ::toggleQuickControl,
                 )
             }
         }
@@ -469,6 +472,7 @@ object WidgetController {
         try {
             windowManager.addView(compose, params)
             quickControlsVisible = true
+            refreshSeatHeatStates(appCtx)
         } catch (e: Exception) {
             Log.w(TAG, "addView quick controls: ${e.message}")
             hideQuickControls()
@@ -509,6 +513,32 @@ object WidgetController {
     private fun quickControlsY(widgetY: Int, controlsHeight: Int, metrics: DisplayMetrics): Int =
         (widgetY + currentWidgetHpx).coerceAtMost((metrics.heightPixels - controlsHeight).coerceAtLeast(0))
 
+    private fun quickExecutor(context: Context): WidgetQuickCommandExecutor =
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            WidgetQuickCommandEntryPoint::class.java,
+        ).widgetQuickCommandExecutor()
+
+    private fun refreshSeatHeatStates(context: Context) {
+        val scope = commandScope ?: return
+        scope.launch {
+            val read = try {
+                quickExecutor(context).readSeatHeatStates()
+            } catch (e: Exception) {
+                Log.w(TAG, "seat heat read failed: ${e.message}")
+                emptyMap()
+            }
+            quickStates.value = quickStates.value + mapOf(
+                WidgetQuickControl.DRIVER_SEAT_HEAT to read[WidgetQuickControl.DRIVER_SEAT_HEAT],
+                WidgetQuickControl.PASSENGER_SEAT_HEAT to read[WidgetQuickControl.PASSENGER_SEAT_HEAT],
+            )
+        }
+    }
+
+    private fun toggleQuickControl(control: WidgetQuickControl) {
+        sendQuickControl(control, enabled = quickStates.value[control] != true)
+    }
+
     private fun sendQuickControl(control: WidgetQuickControl, enabled: Boolean) {
         if (commandPendingState.value) return
         val context = widgetView?.context ?: return
@@ -516,16 +546,17 @@ object WidgetController {
         commandPendingState.value = true
         scope.launch {
             val result = try {
-                val executor = EntryPointAccessors.fromApplication(
-                    context.applicationContext,
-                    WidgetQuickCommandEntryPoint::class.java,
-                ).widgetQuickCommandExecutor()
-                executor.set(control, enabled)
+                quickExecutor(context).set(control, enabled)
             } catch (e: Exception) {
                 Log.e(TAG, "quick control failed: ${e.message}")
                 WidgetQuickCommandExecutor.Result.Failed
             }
             commandPendingState.value = false
+            if (result is WidgetQuickCommandExecutor.Result.Sent) {
+                quickStates.value = quickStates.value + (control to enabled)
+            } else if (control != WidgetQuickControl.DRL) {
+                refreshSeatHeatStates(context)
+            }
             val message = when (result) {
                 is WidgetQuickCommandExecutor.Result.Sent -> result.message
                 is WidgetQuickCommandExecutor.Result.Rejected -> "Команда отклонена: ${result.reason}"

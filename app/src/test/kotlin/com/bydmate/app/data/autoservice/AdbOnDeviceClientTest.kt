@@ -129,6 +129,40 @@ class AdbOnDeviceClientTest {
     }
 
     @Test
+    fun `diagnostic AUTO write remains a fixed set fid with read back`() = runTest {
+        val write = "service call autoservice 6 i32 1000 i32 501219352 i32 1"
+        val read = "service call autoservice 5 i32 1000 i32 1077936146"
+        val client = newClient(FakeProtocol(execResponses = mapOf(
+            write to "Result: Parcel(00000001)",
+            read to "Result: Parcel(00000000 00000001   '........')",
+        )))
+        client.connect()
+
+        val result = client.executeAutoserviceActuation(AutoserviceActuation.AC_AUTO)
+
+        assertEquals(AutoserviceActuationResult(true, true, 1), result)
+    }
+
+    @Test
+    fun `tx10 AUTO compatibility probe keeps its three supplied calls in one shell request`() = runTest {
+        val probe = AutoserviceTx10Probe.AUTO_ON
+        val command =
+            "service call autoservice 10 i32 1000 i32 1077936138 i32 1 null;" +
+                "service call autoservice 10 i32 1000 i32 1077936139 i32 1 null;" +
+                "service call autoservice 10 i32 1000 i32 1077936140 i32 1 null"
+        val fake = FakeProtocol(execResponses = mapOf(command to "Result: Parcel(00000001)"))
+        val client = newClient(fake)
+        client.connect()
+
+        val result = client.executeAutoserviceTx10Probe(probe)
+
+        assertEquals(AutoserviceTx10Probe.AUTO_ON, probe)
+        assertEquals(command, result?.command)
+        assertEquals("Result: Parcel(00000001)", result?.reply)
+        assertEquals(listOf(command), fake.execCalls)
+    }
+
+    @Test
     fun `rejected direct write never attempts read back`() = runTest {
         val fake = FakeProtocol(execResponses = mapOf(
             "service call autoservice 6 i32 1023 i32 1125122068 i32 1" to

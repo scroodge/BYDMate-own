@@ -537,10 +537,12 @@ Four of them, in order:
 1. **Movement guard** — `movementBlockReason(type, data)` skips climate types (`ac`, `ac_temp_step`, `fan_speed_step`, `ac_recirculation`), which are allowed while driving; every other type is rejected unless speed is 0 and gear is P (stationary-charging is accepted as a P-equivalent). Rejections: `vehicle_moving`, `gear_not_park`, `gear_unknown`.
 2. **12 V guard** — rejects with `aux_voltage_low` below **11.8 V**, so a weak aux battery is not drained by actuation.
 3. **Actuation allowlists** — cloud/daemon commands pass `CommandAllowlist.buildPhrase()` and
-   map only fixed types to D+ phrases. The local widget passes `AutoserviceActuation`, an enum
-   limited to driver/passenger seat heat off/level 2 and DRL on/off; it cannot supply a fid or
-   value. Seat-heat writes require matching autoservice read-back; DRL has no reliable read fid,
-   so only its accepted write is reported.
+   map only fixed types to D+ phrases. The local widget passes `AutoserviceActuation` actions for
+   driver/passenger seat heat off/level 2 and DRL on/off. A temporary on-device «Проверка команд»
+   page uses additional compile-time fixed climate, recirculation, rear-defrost and seat-level
+   actions for visual validation. Neither surface can supply a caller-provided fid or value.
+   Seat-heat writes require matching autoservice read-back; DRL and rear defrost have no reliable
+   read fid, so only accepted writes are reported.
 4. **Deny list** — any produced phrase containing `发送CAN`, `执行SHELL`, `执行TSHELL`, `点击`, `滑动`, `按钮`, `按键`, `浮窗`, `下电` is rejected outright. `DiParsControlClient` blocks the same patterns again at the send site.
 
 The validated command contract contains only `window`, `windows_preset`, `ac`,

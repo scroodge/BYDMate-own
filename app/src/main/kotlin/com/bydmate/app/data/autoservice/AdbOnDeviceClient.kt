@@ -39,9 +39,41 @@ enum class AutoserviceActuation(
     internal val readBack: AutoserviceRead? = null,
     internal val expectedReadBack: Int? = null,
 ) {
+    AC_POWER_OFF(
+        dev = 1000, setFid = 501219364, value = 0,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_POWER_STATE), expectedReadBack = 0,
+    ),
+    AC_POWER_ON(
+        dev = 1000, setFid = 501219364, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_POWER_STATE), expectedReadBack = 1,
+    ),
+    AC_MANUAL(
+        dev = 1000, setFid = 501219352, value = 0,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CONTROL_MODE), expectedReadBack = 0,
+    ),
+    AC_AUTO(
+        dev = 1000, setFid = 501219352, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CONTROL_MODE), expectedReadBack = 1,
+    ),
+    AC_RECIRCULATION_FRESH(
+        dev = 1000, setFid = 501219355, value = 0,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CYCLE_MODE), expectedReadBack = 0,
+    ),
+    AC_RECIRCULATION_INTERNAL(
+        dev = 1000, setFid = 501219355, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CYCLE_MODE), expectedReadBack = 1,
+    ),
+    /** Firmware candidate: no read-back fid and not yet visually verified on car `way`. */
+    AC_REAR_DEFROST_OFF(dev = 1000, setFid = 501219357, value = 0),
+    /** Firmware candidate: no read-back fid and not yet visually verified on car `way`. */
+    AC_REAR_DEFROST_ON(dev = 1000, setFid = 501219357, value = 1),
     DRIVER_SEAT_HEAT_OFF(
         dev = 1023, setFid = 1125122068, value = 1,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885835), expectedReadBack = 1,
+    ),
+    DRIVER_SEAT_HEAT_LEVEL_1(
+        dev = 1023, setFid = 1125122068, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885835), expectedReadBack = 2,
     ),
     DRIVER_SEAT_HEAT_LEVEL_2(
         dev = 1023, setFid = 1125122068, value = 3,
@@ -50,6 +82,10 @@ enum class AutoserviceActuation(
     PASSENGER_SEAT_HEAT_OFF(
         dev = 1023, setFid = 1125122076, value = 1,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 1,
+    ),
+    PASSENGER_SEAT_HEAT_LEVEL_1(
+        dev = 1023, setFid = 1125122076, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 2,
     ),
     PASSENGER_SEAT_HEAT_LEVEL_2(
         dev = 1023, setFid = 1125122076, value = 3,
@@ -64,6 +100,56 @@ data class AutoserviceActuationResult(
     /** `null` means the action has no reliable read fid (currently DRL). */
     val verified: Boolean?,
     val observedValue: Int? = null,
+)
+
+/**
+ * Fixed compatibility probes copied verbatim from the on-car test sheet. Unlike
+ * [AutoserviceActuation], these intentionally use transact 10 so the test page can record what
+ * this older command shape does on the current head unit. They are not production controls.
+ */
+enum class AutoserviceTx10Probe(
+    val label: String,
+    private val calls: List<String>,
+) {
+    CLIMATE_OFF("Климат ВЫКЛ", listOf(autoserviceTx10(1000, 1077936137, 0))),
+    CLIMATE_ON("Климат ВКЛ", listOf(autoserviceTx10(1000, 1077936137, 1))),
+    AUTO_OFF("AUTO ВЫКЛ (3 события)", listOf(
+        autoserviceTx10(1000, 1077936138, 0), autoserviceTx10(1000, 1077936139, 0), autoserviceTx10(1000, 1077936140, 0),
+    )),
+    AUTO_ON("AUTO ВКЛ (3 события)", listOf(
+        autoserviceTx10(1000, 1077936138, 1), autoserviceTx10(1000, 1077936139, 1), autoserviceTx10(1000, 1077936140, 1),
+    )),
+    RECIRCULATION_FRESH("Рециркуляция наружный", listOf(autoserviceTx10(1000, 1077936148, 0))),
+    RECIRCULATION_INTERNAL("Рециркуляция внутренний", listOf(autoserviceTx10(1000, 1077936148, 1))),
+    REAR_DEFROST_OFF("Заднее стекло ВЫКЛ", listOf(autoserviceTx10(1000, 1128267825, 0))),
+    REAR_DEFROST_ON("Заднее стекло ВКЛ", listOf(autoserviceTx10(1000, 1128267825, 1))),
+    DRL_OFF("ДХО ВЫКЛ", listOf(autoserviceTx10(1004, 985661476, 2))),
+    DRL_ON("ДХО ВКЛ", listOf(autoserviceTx10(1004, 985661476, 1))),
+    DRIVER_HEAT_OFF("Подогрев водителя ВЫКЛ", listOf(autoserviceTx10(1023, 1335885835, 1))),
+    DRIVER_HEAT_LEVEL_1("Подогрев водителя 1", listOf(autoserviceTx10(1023, 1335885835, 2))),
+    DRIVER_HEAT_LEVEL_2("Подогрев водителя 2", listOf(autoserviceTx10(1023, 1335885835, 3))),
+    PASSENGER_HEAT_OFF("Подогрев пассажира ВЫКЛ", listOf(autoserviceTx10(1023, 1335885843, 1))),
+    PASSENGER_HEAT_LEVEL_1("Подогрев пассажира 1", listOf(autoserviceTx10(1023, 1335885843, 2))),
+    PASSENGER_HEAT_LEVEL_2("Подогрев пассажира 2", listOf(autoserviceTx10(1023, 1335885843, 3))),
+    DRIVER_VENT_OFF("Вентиляция водителя ВЫКЛ", listOf(autoserviceTx10(1023, 1335885832, 1))),
+    DRIVER_VENT_LEVEL_1("Вентиляция водителя 1", listOf(autoserviceTx10(1023, 1335885832, 2))),
+    DRIVER_VENT_LEVEL_2("Вентиляция водителя 2", listOf(autoserviceTx10(1023, 1335885832, 3))),
+    PASSENGER_VENT_OFF("Вентиляция пассажира ВЫКЛ", listOf(autoserviceTx10(1023, 1335885840, 1))),
+    PASSENGER_VENT_LEVEL_1("Вентиляция пассажира 1", listOf(autoserviceTx10(1023, 1335885840, 2))),
+    PASSENGER_VENT_LEVEL_2("Вентиляция пассажира 2", listOf(autoserviceTx10(1023, 1335885840, 3))),
+    ;
+
+    /** AUTO keeps all three calls in one ADB shell request, as supplied in the test sheet. */
+    fun shellCommand(): String = calls.joinToString(";")
+
+}
+
+private fun autoserviceTx10(dev: Int, fid: Int, value: Int): String =
+    "service call autoservice 10 i32 $dev i32 $fid i32 $value null"
+
+data class AutoserviceTx10ProbeResult(
+    val command: String,
+    val reply: String,
 )
 
 data class DaemonSupervisorResult(
@@ -108,6 +194,8 @@ interface AdbOnDeviceClient {
      * path exists here; this is intentionally separate from the read-only [exec] boundary.
      */
     suspend fun executeAutoserviceActuation(action: AutoserviceActuation): AutoserviceActuationResult? = null
+    /** Runs one fixed tx-10 compatibility probe; never accepts a caller-supplied shell command. */
+    suspend fun executeAutoserviceTx10Probe(probe: AutoserviceTx10Probe): AutoserviceTx10ProbeResult? = null
     /**
      * Grants PACKAGE_USAGE_STATS appop to our own package via shell uid. The
      * only non-autoservice write we permit through this client — needed so
@@ -259,24 +347,48 @@ class AdbOnDeviceClientImpl @Inject constructor(
                 "service call autoservice 6 i32 ${action.dev} i32 ${action.setFid} i32 ${action.value}",
             ) ?: return@withContext null
             val accepted = SET_INT_ACCEPTED_REGEX.containsMatchIn(write)
-            if (!accepted) return@withContext AutoserviceActuationResult(accepted = false, verified = false)
+            if (!accepted) {
+                Log.i(TAG, "AUTOSERVICE_DIAG action=$action accepted=false write=${write.trim()}")
+                return@withContext AutoserviceActuationResult(accepted = false, verified = false)
+            }
 
-            val read = action.readBack ?: return@withContext AutoserviceActuationResult(
-                accepted = true,
-                verified = null,
-            )
+            val read = action.readBack ?: run {
+                Log.i(TAG, "AUTOSERVICE_DIAG action=$action accepted=true verified=unavailable write=${write.trim()}")
+                return@withContext AutoserviceActuationResult(accepted = true, verified = null)
+            }
             val raw = p.exec(read.command()) ?: return@withContext AutoserviceActuationResult(
                 accepted = true,
                 verified = false,
             )
             val observed = PARCEL_INT_REGEX.find(raw)?.groupValues?.get(1)?.toLong(16)?.toInt()
-            AutoserviceActuationResult(
+            val result = AutoserviceActuationResult(
                 accepted = true,
                 verified = observed == action.expectedReadBack,
                 observedValue = observed,
             )
+            Log.i(
+                TAG,
+                "AUTOSERVICE_DIAG action=$action accepted=true verified=${result.verified} " +
+                    "expected=${action.expectedReadBack} observed=$observed write=${write.trim()} read=${raw.trim()}",
+            )
+            result
         } catch (e: Exception) {
             Log.w(TAG, "executeAutoserviceActuation($action) failed: ${e.message}")
+            null
+        }
+    }
+
+    override suspend fun executeAutoserviceTx10Probe(
+        probe: AutoserviceTx10Probe,
+    ): AutoserviceTx10ProbeResult? = withContext(Dispatchers.IO) {
+        val p = protocol ?: return@withContext null
+        val command = probe.shellCommand()
+        try {
+            val reply = p.exec(command) ?: return@withContext null
+            Log.i(TAG, "AUTOSERVICE_TX10 probe=${probe.name} command=$command reply=${reply.trim()}")
+            AutoserviceTx10ProbeResult(command = command, reply = reply)
+        } catch (e: Exception) {
+            Log.w(TAG, "executeAutoserviceTx10Probe(${probe.name}) failed: ${e.message}")
             null
         }
     }

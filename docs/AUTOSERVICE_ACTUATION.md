@@ -5,8 +5,10 @@ di+ `/api/sendCmd` phrases. Read-side fids live in
 [`DIPLUS_DATA.md`](DIPLUS_DATA.md) and `FidRegistry.kt`; the transact-code table is in
 [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) §1. Work plan: `docs/BACKLOG.md` B-34.
 
-- **Обновлено:** 2026-11-06 · car `way` (Leopard 3, DiLink 3.0, CANFD), shell uid over
-  network ADB from a Mac, gear P, ignition on. Not yet implemented in the APK.
+- **Обновлено:** 2026-11-13 · car `way` (Leopard 3, DiLink 3.0, CANFD), shell uid over
+  network ADB from a Mac, gear P, ignition on. A temporary APK-only page «Проверка команд»
+  exposes the fixed climate/seat/DRL set below for on-car acceptance and visual testing. It is
+  neither a cloud command nor a daemon capability, and it accepts no arbitrary fid/value input.
 
 ## Call shape
 
@@ -22,6 +24,10 @@ service call autoservice 6 i32 <dev> i32 <SET-fid> i32 <value>   # setInt
 
 - **Write fids are not read fids.** Each control has a separate `*_SET` fid. Writing to the
   read fid fails with -10011, and reading a `*_SET` fid also returns -10011.
+- **Temporary tx-10 compatibility probes:** the APK page also includes each fixed `tx 10 … null`
+  call supplied for the climate, lights and front seats (including the three-call AUTO packet).
+  These are intentionally kept separate from the `setInt` actions above: their Binder reply and
+  visible vehicle effect are the test result, not a claim that the supplied fid is a verified writer.
 - **Where the fids come from:** the car's `/system/framework/framework.jar`, class
   `android.hardware.bydauto.BYDAutoFeatureIds`. `*_SET` fids have only two variants:
   non-CANFD Toyota, and everything else. The table below is the "everything else" branch.

@@ -76,6 +76,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bydmate.app.diagnostics.DiagnosticsBundle
 import com.bydmate.app.R
+import com.bydmate.app.data.autoservice.AutoserviceActuation
+import com.bydmate.app.data.autoservice.AutoserviceTx10Probe
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.util.BackgroundRestriction
@@ -278,6 +280,15 @@ fun GatewayScreen(
             strings = strings,
         )
     }
+    val directAutoserviceCard: @Composable () -> Unit = {
+        DirectAutoserviceDiagnosticsCard(
+            running = state.autoserviceDiagnosticRunning,
+            report = state.autoserviceDiagnosticLog,
+            onAction = viewModel::runAutoserviceDiagnostic,
+            onTx10Probe = viewModel::runAutoserviceTx10Probe,
+            onClear = viewModel::clearAutoserviceDiagnosticLog,
+        )
+    }
     val diagnosticsSending by viewModel.diagnosticsSending.collectAsStateWithLifecycle()
     val logCaptureCard: @Composable () -> Unit = {
         LogCaptureCard(strings = strings)
@@ -373,6 +384,9 @@ fun GatewayScreen(
                     advancedCard()
                     logCaptureCard()
                 }
+            GatewaySection.DIRECT_AUTOSERVICE ->
+                if (wide) WideColumn(Modifier.widthIn(max = 760.dp)) { directAutoserviceCard() }
+                else directAutoserviceCard()
         }
     }
 
@@ -473,7 +487,7 @@ private fun VoltFlowBackground(content: @Composable BoxScope.() -> Unit) {
     )
 }
 
-private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS, UPDATES }
+private enum class GatewaySection { HOME, LINK, SETTINGS, DIAGNOSTICS, DIRECT_AUTOSERVICE, UPDATES }
 
 @Composable
 private fun SectionNav(
@@ -488,6 +502,7 @@ private fun SectionNav(
         GatewaySection.LINK to strings.navLink,
         GatewaySection.SETTINGS to strings.navSettings,
         GatewaySection.DIAGNOSTICS to strings.diagnostics,
+        GatewaySection.DIRECT_AUTOSERVICE to strings.directAutoservice,
         GatewaySection.UPDATES to strings.updates,
     )
     val button: @Composable (GatewaySection, String, Modifier) -> Unit = { target, label, mod ->
@@ -1383,6 +1398,165 @@ private fun CloudDiagnosticsCard(
     }
 }
 
+/**
+ * Temporary, car-side verification UI for a fixed set of autoservice writes.
+ * It deliberately exposes no editable fid, value, or shell input. Results are additionally
+ * emitted to logcat with the `AUTOSERVICE_DIAG` marker by AdbOnDeviceClient.
+ */
+@Composable
+private fun DirectAutoserviceDiagnosticsCard(
+    running: Boolean,
+    report: List<String>,
+    onAction: (AutoserviceActuation) -> Unit,
+    onTx10Probe: (AutoserviceTx10Probe) -> Unit,
+    onClear: () -> Unit,
+) {
+    GatewayCard {
+        Text("Проверка прямых команд", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Временно: команды идут напрямую в autoservice через on-device ADB, минуя di+. " +
+                "Не используйте экран во время движения. После каждого нажатия проверьте результат на автомобиле.",
+            color = AccentOrange,
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+        )
+        DirectControlRow(
+            title = "Климат",
+            actions = listOf("ВЫКЛ" to AutoserviceActuation.AC_POWER_OFF, "ВКЛ" to AutoserviceActuation.AC_POWER_ON),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Режим климата",
+            actions = listOf("РУЧНОЙ" to AutoserviceActuation.AC_MANUAL, "AUTO" to AutoserviceActuation.AC_AUTO),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Рециркуляция",
+            actions = listOf("НАРУЖНЫЙ" to AutoserviceActuation.AC_RECIRCULATION_FRESH, "ВНУТРЕННИЙ" to AutoserviceActuation.AC_RECIRCULATION_INTERNAL),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Заднее стекло",
+            hint = "Кандидат из firmware: нет read-back, на машине ещё не проверен.",
+            actions = listOf("ВЫКЛ" to AutoserviceActuation.AC_REAR_DEFROST_OFF, "ВКЛ" to AutoserviceActuation.AC_REAR_DEFROST_ON),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "ДХО",
+            actions = listOf("ВЫКЛ" to AutoserviceActuation.DRL_OFF, "ВКЛ" to AutoserviceActuation.DRL_ON),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Подогрев водителя",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.DRIVER_SEAT_HEAT_OFF,
+                "1" to AutoserviceActuation.DRIVER_SEAT_HEAT_LEVEL_1,
+                "2" to AutoserviceActuation.DRIVER_SEAT_HEAT_LEVEL_2,
+            ),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Подогрев пассажира",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.PASSENGER_SEAT_HEAT_OFF,
+                "1" to AutoserviceActuation.PASSENGER_SEAT_HEAT_LEVEL_1,
+                "2" to AutoserviceActuation.PASSENGER_SEAT_HEAT_LEVEL_2,
+            ),
+            running = running,
+            onAction = onAction,
+        )
+        Text("Исходные команды tx 10", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "Точная форма из присланного списка. Ответ Binder сохраняется целиком в logcat как AUTOSERVICE_TX10; " +
+                "в AUTO три вызова отправляются одной ADB-командой.",
+            color = AccentOrange,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+        Tx10ProbeRow("Климат", listOf("ВЫКЛ" to AutoserviceTx10Probe.CLIMATE_OFF, "ВКЛ" to AutoserviceTx10Probe.CLIMATE_ON), running, onTx10Probe)
+        Tx10ProbeRow("AUTO", listOf("ВЫКЛ" to AutoserviceTx10Probe.AUTO_OFF, "ВКЛ" to AutoserviceTx10Probe.AUTO_ON), running, onTx10Probe)
+        Tx10ProbeRow("Рециркуляция", listOf("НАРУЖНЫЙ" to AutoserviceTx10Probe.RECIRCULATION_FRESH, "ВНУТРЕННИЙ" to AutoserviceTx10Probe.RECIRCULATION_INTERNAL), running, onTx10Probe)
+        Tx10ProbeRow("Заднее стекло", listOf("ВЫКЛ" to AutoserviceTx10Probe.REAR_DEFROST_OFF, "ВКЛ" to AutoserviceTx10Probe.REAR_DEFROST_ON), running, onTx10Probe)
+        Tx10ProbeRow("ДХО", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRL_OFF, "ВКЛ" to AutoserviceTx10Probe.DRL_ON), running, onTx10Probe)
+        Tx10ProbeRow("Подогрев водителя", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRIVER_HEAT_OFF, "1" to AutoserviceTx10Probe.DRIVER_HEAT_LEVEL_1, "2" to AutoserviceTx10Probe.DRIVER_HEAT_LEVEL_2), running, onTx10Probe)
+        Tx10ProbeRow("Подогрев пассажира", listOf("ВЫКЛ" to AutoserviceTx10Probe.PASSENGER_HEAT_OFF, "1" to AutoserviceTx10Probe.PASSENGER_HEAT_LEVEL_1, "2" to AutoserviceTx10Probe.PASSENGER_HEAT_LEVEL_2), running, onTx10Probe)
+        Tx10ProbeRow("Вентиляция водителя", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRIVER_VENT_OFF, "1" to AutoserviceTx10Probe.DRIVER_VENT_LEVEL_1, "2" to AutoserviceTx10Probe.DRIVER_VENT_LEVEL_2), running, onTx10Probe)
+        Tx10ProbeRow("Вентиляция пассажира", listOf("ВЫКЛ" to AutoserviceTx10Probe.PASSENGER_VENT_OFF, "1" to AutoserviceTx10Probe.PASSENGER_VENT_LEVEL_1, "2" to AutoserviceTx10Probe.PASSENGER_VENT_LEVEL_2), running, onTx10Probe)
+        if (report.isNotEmpty()) {
+            Gap(4.dp)
+            Text("Результаты этого запуска", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            SelectionContainer {
+                Text(
+                    report.joinToString("\n"),
+                    color = TextSecondary,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 14.sp,
+                )
+            }
+            Button(
+                onClick = onClear,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextSecondary),
+            ) { Text("Очистить результаты", fontSize = 12.sp) }
+        }
+    }
+}
+
+@Composable
+private fun DirectControlRow(
+    title: String,
+    actions: List<Pair<String, AutoserviceActuation>>,
+    running: Boolean,
+    onAction: (AutoserviceActuation) -> Unit,
+    hint: String? = null,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        hint?.let { Text(it, color = AccentOrange, fontSize = 10.sp, lineHeight = 14.sp) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            actions.forEach { (label, action) ->
+                Button(
+                    onClick = { onAction(action) },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
+                ) { Text(if (running) "…" else label, fontSize = 11.sp) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Tx10ProbeRow(
+    title: String,
+    actions: List<Pair<String, AutoserviceTx10Probe>>,
+    running: Boolean,
+    onProbe: (AutoserviceTx10Probe) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("$title · tx10", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            actions.forEach { (label, probe) ->
+                Button(
+                    onClick = { onProbe(probe) },
+                    enabled = !running,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
+                ) { Text(if (running) "…" else label, fontSize = 11.sp) }
+            }
+        }
+    }
+}
+
 @Composable
 private fun GatewayHint(text: String) {
     Text(text, color = TextSecondary, fontSize = 11.sp)
@@ -1528,6 +1702,7 @@ private data class GatewayStrings(
     val navHome: String,
     val navLink: String,
     val navSettings: String,
+    val directAutoservice: String,
     val notLinked: String,
     val linkCar: String,
     val keepWifiAwakeHint: String,
@@ -1651,6 +1826,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             navHome = "Главная",
             navLink = "Привязка",
             navSettings = "Настройки",
+            directAutoservice = "Проверка команд",
             notLinked = "Авто не привязано к VoltFlow",
             linkCar = "Привязать авто",
             save = "Сохранить",
@@ -1770,6 +1946,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             navHome = "Home",
             navLink = "Link",
             navSettings = "Settings",
+            directAutoservice = "Command test",
             notLinked = "This car is not linked to VoltFlow",
             linkCar = "Link this car",
             save = "Save",
@@ -1889,6 +2066,7 @@ private fun gatewayStrings(language: String): GatewayStrings =
             navHome = "Галоўная",
             navLink = "Прывязка",
             navSettings = "Налады",
+            directAutoservice = "Праверка каманд",
             notLinked = "Аўто не прывязана да VoltFlow",
             linkCar = "Прывязаць аўто",
             save = "Захаваць",
