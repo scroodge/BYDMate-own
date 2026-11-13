@@ -9,6 +9,9 @@ import com.bydmate.app.data.cloud.CloudTelemetryPayload
 import com.bydmate.app.data.cloud.DaemonDurableIngress
 import com.bydmate.app.data.cloud.DaemonTelemetrySpool
 import com.bydmate.app.data.cloud.ShellCameraSnapshotIpc
+import com.bydmate.app.data.remote.CameraSnapshotResult
+import com.bydmate.app.data.remote.CameraSnapshotUpload
+import com.bydmate.app.data.remote.camera.BmmCameraGrabber
 import com.bydmate.app.data.cloud.ShellContentQueueIpc
 import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.AckOutbox
@@ -1068,7 +1071,7 @@ object CommandDaemon {
                 val id = cmd.getString("id")
                 val type = cmd.getString("type")
                 val params = jsonObjectToMap(cmd.optJSONObject("params") ?: JSONObject())
-                acks.put(executeCommand(control, data, id, type, params))
+                acks.put(executeCommand(ok, conf, control, data, id, type, params))
             }
             deliverAcks(ok, conf, acks)
             pacedForAcks(nextPollMs)
@@ -1076,6 +1079,8 @@ object CommandDaemon {
     }
 
     private suspend fun executeCommand(
+        ok: OkHttpClient,
+        conf: Conf,
         control: DiParsControlClient,
         data: DiParsData?,
         id: String,
@@ -1084,8 +1089,10 @@ object CommandDaemon {
     ): JSONObject {
         if (type == CAMERA_SNAPSHOT_COMMAND_TYPE) {
             CommandAllowlist.auxVoltageBlockReason(data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
+            captureCameraDirect(ok, conf, id)?.let { return ack(id, it.status, it.result) }
             val snapshot = ShellCameraSnapshotIpc().capture(id)
                 ?: return ack(id, "failed", mapOf("error" to "camera_capture_bridge_failed"))
+            log("camera snapshot via app: ${snapshot.status} ${snapshot.result}")
             return ack(id, snapshot.status, snapshot.result)
         }
         CommandAllowlist.movementBlockReason(type, data)?.let { return ack(id, "rejected", mapOf("error" to it)) }
@@ -1109,6 +1116,32 @@ object CommandDaemon {
                 }
             }
         }
+    }
+
+    /**
+     * Shell-uid capture straight from `bmmcamera` and upload from here, no app or di+ needed.
+     * Null means "not captured": the caller falls back to the app bridge (di+ player path).
+     * An upload failure after a good capture is returned as is — retrying through the app
+     * would capture a second photo for the same command.
+     */
+    private fun captureCameraDirect(ok: OkHttpClient, conf: Conf, id: String): CameraSnapshotResult? {
+        val url = CameraSnapshotUpload.urlFromTelemetry(conf.telemetryUrl, id) ?: run {
+            log("camera direct: no upload URL in telemetry_url")
+            return null
+        }
+        val jpeg = BmmCameraGrabber.captureSurroundJpeg { log(it) } ?: return null
+        val result = CameraSnapshotUpload.put(
+            http = ok,
+            url = url,
+            apiKey = conf.apiKey,
+            vehicleId = conf.vehicleId,
+            vehicleUid = conf.vehicleUid,
+            app = "VoltFlow-Mate-Daemon",
+            jpeg = jpeg,
+            source = CameraSnapshotUpload.SOURCE_DIRECT,
+        )
+        log("camera snapshot direct: ${jpeg.size} B upload → ${result.status} ${result.result["error"] ?: ""}".trimEnd())
+        return result
     }
 
     private fun pacedForAcks(nextPollMs: Long): Long =

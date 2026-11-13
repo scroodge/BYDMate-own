@@ -184,6 +184,37 @@ window. A later power-on clears it immediately. Logs show `parked wake window st
 normal wakelock acquire/release evidence; verify a parked 30-minute run on-car before relying on it
 for remote control latency.
 
+### Camera snapshot (`camera_snapshot`)
+
+The daemon captures the photo itself first, straight from BYD's camera stack. It loads
+`/system/framework/bmmcamera.jar` (`android.hardware.AVMCamera`) with its own class loader,
+opens the surround-view camera and takes the first preview frame. The frame is a 4-tile NV21
+strip, which the daemon rearranges into a 2×2 grid, encodes as JPEG and uploads itself with
+`PUT /api/bydmate/camera-snapshots/{id}` (`BmmCameraGrabber`, `NvFrame`,
+`CameraSnapshotUpload`). Neither the app nor di+ is involved. The ack carries
+`source: "direct"`.
+
+- **Camera id.** `AVMCamera.open(id)` returns null because the camera map
+  `vehicle.config.cam_sort` is hidden by SELinux, both from shell and from apps (logcat:
+  `Access denied finding property`). di+ opens by id through the private constructor, and so
+  do we. The id comes from `BmmCameraInfo` if it can be read, otherwise
+  `FALLBACK_SURROUND_CAMERA_ID = 1`. A frame that is not a 4:1 strip of 4:3 tiles is
+  rejected, so an unknown camera at that id never gets uploaded.
+- **Fallback.** If the capture returns null, the daemon asks the app over the
+  `content call` bridge. The app tries the same direct capture first, then the di+
+  `live-player.html` path; that ack says `source: "diplus"`. An upload that fails after a
+  good capture is reported as is and not retried through the app.
+- **Field log lines:** `camera direct: camera 1 5120x960 → 2560x1920 jpeg <n> B`, then
+  `camera snapshot direct: <n> B upload → done`. On failure there is one
+  `camera direct: <reason>` line, then `camera snapshot via app: …`.
+- **Evidence (`way`, DiLink 3.0, 2026-11-06, ignition on).** From shell uid, camera 0 is
+  the 1920×1080 front camera that sees through the windscreen, and camera 1 is the
+  5120×960 surround strip. Cameras 2–6 open but send no frame. The APK's
+  `BmmCameraGrabber` running under `app_process` from shell produced a 2560×1920 JPEG
+  (704 KB) in 137 ms, while di+'s own capture process (`vankpl`) kept running. Under the
+  app uid via `run-as`, camera 1 also delivered a frame. **Unverified:** the app's real
+  `untrusted_app` context, the parked/off state, other models in the fleet.
+
 ### Launcher source of truth
 
 There are two copies of the watchdog launcher in the repository:

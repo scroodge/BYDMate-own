@@ -12,11 +12,11 @@ import com.bydmate.app.data.repository.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
-import okhttp3.MediaType.Companion.toMediaType
+import android.util.Log
+import com.bydmate.app.data.remote.camera.BmmCameraGrabber
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -29,9 +29,11 @@ data class CameraSnapshotResult(
 )
 
 /**
- * Captures one 1920×1080 JPEG from di+'s local 2×2 `pano` stream. di+ already hosts a
- * mpegts.js player at localhost; using that player avoids exposing the FLV stream to the
- * phone or adding a second native H.264/FLV implementation to Mate.
+ * Captures one 2×2 surround-view JPEG and uploads it. First straight from BYD's camera stack
+ * ([BmmCameraGrabber], 2560×1920, no di+). If that fails — another model, a linker namespace
+ * that blocks the vendor JNI library in the app process — it falls back to one 1920×1080
+ * frame from di+'s local `pano` stream through di+'s own mpegts.js player at localhost.
+ * The ack's `source` says which path produced the photo.
  */
 @Singleton
 class CameraSnapshotService @Inject constructor(
@@ -54,41 +56,33 @@ class CameraSnapshotService @Inject constructor(
         val vehicleId = settingsRepository
             .getString(SettingsRepository.KEY_CLOUD_SYNC_VEHICLE_ID, "")
             .trim()
-        val uploadUrl = uploadUrlFromTelemetry(telemetryUrl, commandId)
+        val uploadUrl = CameraSnapshotUpload.urlFromTelemetry(telemetryUrl, commandId)
         if (uploadUrl == null || apiKey.isBlank() || vehicleId.isBlank()) {
             return CameraSnapshotResult("failed", mapOf("error" to "camera_snapshot_not_configured"))
         }
 
-        val jpeg = runCatching { capturePanoJpeg() }.getOrElse {
+        val direct = withContext(Dispatchers.IO) {
+            BmmCameraGrabber.captureSurroundJpeg { Log.i(TAG, it) }
+        }
+        val jpeg = direct ?: runCatching { capturePanoJpeg() }.getOrElse {
+            Log.w(TAG, "camera snapshot: di+ player capture failed too")
             return CameraSnapshotResult("failed", mapOf("error" to "camera_capture_failed"))
         }
-        val request = Request.Builder()
-            .url(uploadUrl)
-            .header("X-API-Key", apiKey)
-            .header("X-Vehicle-Id", vehicleId)
-            .header("X-Vehicle-Uid", settingsRepository.getOrCreateVehicleUid())
-            .header("X-App", "VoltFlow-Mate")
-            .put(jpeg.toRequestBody("image/jpeg".toMediaType()))
-            .build()
-        return runCatching {
-            http.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    return@use CameraSnapshotResult("failed", mapOf("error" to "camera_upload_http_${response.code}"))
-                }
-                val body = JSONObject(response.body?.string().orEmpty())
-                if (!body.optBoolean("ok")) {
-                    return@use CameraSnapshotResult("failed", mapOf("error" to "camera_upload_failed"))
-                }
-                CameraSnapshotResult(
-                    "done",
-                    mapOf(
-                        "storage_path" to body.getString("storage_path"),
-                        "captured_at" to body.getString("captured_at"),
-                        "view" to "pano",
-                    ),
-                )
-            }
-        }.getOrElse { CameraSnapshotResult("failed", mapOf("error" to "camera_upload_failed")) }
+        val source = if (direct != null) CameraSnapshotUpload.SOURCE_DIRECT else CameraSnapshotUpload.SOURCE_DIPLUS
+        val result = withContext(Dispatchers.IO) {
+            CameraSnapshotUpload.put(
+                http = http,
+                url = uploadUrl,
+                apiKey = apiKey,
+                vehicleId = vehicleId,
+                vehicleUid = settingsRepository.getOrCreateVehicleUid(),
+                app = "VoltFlow-Mate",
+                jpeg = jpeg,
+                source = source,
+            )
+        }
+        Log.i(TAG, "camera snapshot: source=$source ${jpeg.size} B → ${result.status}")
+        return result
     }
 
     @SuppressLint("SetJavaScriptEnabled", "AddJavascriptInterface")
@@ -131,17 +125,8 @@ class CameraSnapshotService @Inject constructor(
         }
     }
 
-    private fun uploadUrlFromTelemetry(telemetryUrl: String, commandId: String): String? {
-        val base = telemetryUrl.trimEnd('/')
-        val apiBase = when {
-            base.endsWith("/telemetry") -> base.removeSuffix("/telemetry")
-            base.contains("/api/bydmate") -> base.substringBeforeLast('/')
-            else -> return null
-        }
-        return "$apiBase/camera-snapshots/$commandId"
-    }
-
     private companion object {
+        const val TAG = "CameraSnapshot"
         const val LOCAL_PLAYER_URL = "http://127.0.0.1:8988/live-player.html"
         const val JS_BRIDGE = "VoltFlowSnapshot"
         const val CAPTURE_TIMEOUT_MS = 30_000L

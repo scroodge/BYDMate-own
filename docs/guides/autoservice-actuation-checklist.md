@@ -148,6 +148,33 @@ dev `1006` unless noted. Restore right away.
 | 8.10 | Mute | 1002 | `1309024272` | `1108344846` | 1 then 0 | mute icon | | |
 | 8.11 | Cluster backlight | 1007 | `1043333144` | `1274019896` | 10, then Before (1–22) | cluster dims | | |
 
+## 9. Camera snapshot — direct capture (0.6.5 / 348 and later)
+
+How the path works: [`../REMOTE_COMMAND_DAEMON.md`](../REMOTE_COMMAND_DAEMON.md#camera-snapshot-camera_snapshot).
+Trigger each case from the web («снимок с камер»). Then read the daemon log and the app log:
+
+```sh
+L() { adb -s $CAR shell 'grep -E "camera (direct|snapshot)" /data/local/tmp/voltflow_cmd_daemon.log | tail -4'; }
+A() { adb -s $CAR shell 'logcat -d -s CameraSnapshot:* | tail -4'; }
+```
+
+The command is taken by whichever poller reaches it first. A line in `L` means the daemon
+took it; a line in `A` with no `L` line means the app took it.
+
+| # | Case | Do | Expect | Result |
+|---|---|---|---|---|
+| 9.1 | Car on, app alive | press snapshot | web shows a 2×2 photo 2560×1920; `source: direct`; `L` or `A` shows `camera 1 5120x960 → 2560x1920` | |
+| 9.2 | Which poller took it | look at `L` and `A` from 9.1 | record daemon or app. If app: `A` shows `source=direct`, which proves the capture also works in the real `untrusted_app` context | |
+| 9.3 | App path | if 9.2 was the daemon, repeat 9.1 until `A` handles one | `A`: `source=direct … → done`. If it shows `UnsatisfiedLinkError` or `SecurityException` instead, the same command must still end `source=diplus` | |
+| 9.4 | Daemon only | stop the app (`am force-stop dev.scroodge.cloudevmate`), press snapshot | `L`: `camera snapshot direct: <n> B upload → done`, photo in web | |
+| 9.5 | di+ untouched | right after 9.1–9.4: `ps -A -o NAME \| grep -E "vankpl\|aps_diplus"`, open di+ live view | both processes alive, di+ live view plays | |
+| 9.6 | Repeat | press snapshot 3× about 10 s apart | 3 × `done`, no `open(1) failed` | |
+| 9.7 | Parked, car off | lock the car, wait 5 min, press snapshot | record: `direct` photo, or `camera direct: no frame` → `via app` → `diplus` / `failed`. Any of these is a valid answer — write down which | |
+| 9.8 | Fallback works | only if 9.7 or 9.3 gave no direct photo | ack `source: diplus` and a 1920×1080 photo — the old path still works | |
+| 9.9 | Photo check | open the photo from 9.1 | four views, natural colours (a yellow car stays yellow); no green or purple tint | |
+
+Restart the app after 9.4 (open it once) and confirm the heartbeat is fresh again (seconds).
+
 ## After the session
 
 1. Check every **Before** value was restored. Re-read the whole table if unsure.

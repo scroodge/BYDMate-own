@@ -45,6 +45,7 @@ class DaemonQueueBrokerProvider : ContentProvider() {
                     putString(RESULT_ERROR, result.result["error"] as? String)
                     putString(RESULT_STORAGE_PATH, result.result["storage_path"] as? String)
                     putString(RESULT_CAPTURED_AT, result.result["captured_at"] as? String)
+                    putString(RESULT_SOURCE, result.result["source"] as? String)
                 }
             }
             else -> throw IllegalArgumentException("Unsupported method")
@@ -76,6 +77,7 @@ class DaemonQueueBrokerProvider : ContentProvider() {
         const val RESULT_ERROR = "error"
         const val RESULT_STORAGE_PATH = "storage_path"
         const val RESULT_CAPTURED_AT = "captured_at"
+        const val RESULT_SOURCE = "source"
         private const val MAX_ENCODED_CHARS = 90 * 1024
     }
 }

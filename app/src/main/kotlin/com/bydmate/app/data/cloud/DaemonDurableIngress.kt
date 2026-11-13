@@ -73,6 +73,7 @@ class ShellCameraSnapshotIpc {
             Regex("error=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("error", it) }
             Regex("storage_path=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("storage_path", it) }
             Regex("captured_at=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("captured_at", it) }
+            Regex("source=([^,}]+)").find(output)?.groupValues?.get(1)?.let { put("source", it) }
             if (status == "done") put("view", "pano")
         }
         return ShellCameraSnapshotResult(status, result)
