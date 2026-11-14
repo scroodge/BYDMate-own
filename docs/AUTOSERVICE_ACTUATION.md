@@ -5,7 +5,7 @@ di+ `/api/sendCmd` phrases. Read-side fids live in
 [`DIPLUS_DATA.md`](DIPLUS_DATA.md) and `FidRegistry.kt`; the transact-code table is in
 [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) §1. Work plan: `docs/BACKLOG.md` B-34.
 
-- **Обновлено:** 2026-11-13 · car `way` (Leopard 3, DiLink 3.0, CANFD), shell uid over
+- **Обновлено:** 2026-11-14 · car `way` (Leopard 3, DiLink 3.0, CANFD), shell uid over
   network ADB from a Mac, gear P, ignition on. A temporary APK-only page «Проверка команд»
   exposes the fixed climate/seat/DRL set below for on-car acceptance and visual testing. It is
   neither a cloud command nor a daemon capability, and it accepts no arbitrary fid/value input.
@@ -24,10 +24,11 @@ service call autoservice 6 i32 <dev> i32 <SET-fid> i32 <value>   # setInt
 
 - **Write fids are not read fids.** Each control has a separate `*_SET` fid. Writing to the
   read fid fails with -10011, and reading a `*_SET` fid also returns -10011.
-- **Temporary tx-10 compatibility probes:** the APK page also includes each fixed `tx 10 … null`
-  call supplied for the climate, lights and front seats (including the three-call AUTO packet).
-  These are intentionally kept separate from the `setInt` actions above: their Binder reply and
-  visible vehicle effect are the test result, not a claim that the supplied fid is a verified writer.
+- **Use tx 6 only.** Tx 10 is `setIntArray(dev, int[] fids, int[] values)`; `service call`
+  must send each array as `i32 <length>` followed by the elements. The removed APK tx-10 probes
+  sent `i32 <dev> i32 <fid> i32 <value> null`, so the service read the fid as an array length of
+  about 10⁹ and crashed (see «On-car diagnostic acceptance»). Those probes also targeted **read**
+  fids, which would answer -10011 even in a well-formed call. Removed from the APK on 2026-11-14.
 - **Where the fids come from:** the car's `/system/framework/framework.jar`, class
   `android.hardware.bydauto.BYDAutoFeatureIds`. `*_SET` fids have only two variants:
   non-CANFD Toyota, and everything else. The table below is the "everything else" branch.
@@ -45,25 +46,65 @@ user confirmed it on the car's screen or physically.
 | Control | dev | SET fid | Values | Read fid (CANFD) | Evidence |
 |---|---|---|---|---|---|
 | AC power | 1000 | `501219364` | 0 off · 1 on | `1077936144` | read-back 1→0→1, seen |
-| AC control mode | 1000 | `501219352` | 0 manual · 1 AUTO | `1077936146` | read-back 0→1, fan changed by itself, AUTO seen |
+| AC control mode | 1000 | `501219352` | 0 AUTO · 1 manual | `1077936146` | **visual acceptance 2026-11-14:** 0 lights A/C AUTO; 1 clears it. Full write matrix by shell ADB, same day, each seen: manual + write 0 → AUTO; AUTO + write 0 → stays AUTO (idempotent, not a toggle); AUTO + write 1 → manual; manual + write 1 → stays manual. **AC off + write 0 → AC turns on in AUTO** (power 1, fan 3) — one write is a complete «climate on, AUTO»; AC off + write 1 → nothing, AC stays off. Read fid has the same meaning and reads 1 whenever AC is off; screen AUTO always read 0 |
 | Fan level | 1000 | `501219340` | 0–7 | `1077936156` | read-back 3→4, seen |
 | Recirculation | 1000 | `501219355` | 0 fresh · 1 recirculate | `1077936148` | read-back 0→1→0, seen |
 | Driver temp | 1000 | `501219368` | °C 17–33 | `1077936168` | read-back 24→22→24, seen |
 | Driver seat heat | 1023 | `1125122068` | 1 off · 2 level 1 · 3 level 2 | `1335885835` | read-back 1→2→3→1, both levels seen |
 | Passenger seat heat | 1023 | `1125122076` | 1 off · 2 level 1 · 3 level 2 | `1335885843` | read-back 1→2→3→1, level 2 seen |
-| DRL | 1004 | `1125122118` | 1 on · 2 off | — (`1231040528` always reads 0) | accepted, off/on seen; **no read-back** |
-| Window LF (driver) | 1001 | `1125122104` | 1 open full · 2 close · 4 half · 5 vent | `947912728` (%) | vent → 9 %, close → 0 % |
+| Passenger temp | 1000 | `501219376` | °C 17–33 | `1077936176` | 2026-11-14 read-back 24→22→24; **no visible effect on `way`** (single-zone climate) |
+| Front defrost | 1000 | `501219362` | 0 off · 1 on | `1077936150` | 2026-11-14 read-back 0→1→0, seen; car sets airflow 5 + fan 5 on its own, airflow back to 4 on off |
+| Rear defrost | 1000 | `501219357` | 0 off · 1 on | — | 2026-11-14 accepted, on/off seen; **no read-back** |
+| Airflow mode | 1000 | `501219336` | 1 face · 2 face+foot · 3 foot · 4 foot+defrost · 5 defrost · 6 face+foot+defrost · 7 face+defrost | `1077936152` | 2026-11-14 read-back 4→1→3→4; 1 and 3 seen; clears AUTO |
+| Compressor (A/C) | 1000 | `501219344` | 0 off · 1 on | `1077936137` | 2026-11-14 read-back 1→0→1, A/C key seen; turns on by itself with AC power |
+| Max cooling | 1000 | `1337983004` | 0 off · 1 on | `1314914324` | 2026-11-14 read-back 0→1→0, seen; on: car sets 17 °C, fan 7, recirc; off: restores 24 °C, fan 3, fresh |
+| Ventilation | 1000 | `501219394` | 0 off · 1 on | `1314914314` | 2026-11-14 read-back 0→1→0, seen; on: compressor off, fan 1 |
+| Quick air clean | 1000 | `1330642960` | 1 start | `1033895944` (1 running · 2 finished) | 2026-11-14 read-back 0→1, seen; **one-shot**: ends by itself with a pop-up, read → 2. Writing 0 is rejected (-10014) — never send a stop |
+| Auto air clean (setting) | 1000 | `1337982992` | 1 on · 2 off | `1301291046` | 2026-11-14 write 0 accepted but read stayed 1; write 2 → read 2; restored 1. Screen state not confirmed |
+| Close windows on lock (setting) | 1023 | `1311768646` | 0 off · 1 on | `1222639648` | 2026-11-14 read-back 0→1→0, toggle seen in settings |
+| Smart welcome light (setting) | 1023 | `1330643013` | 1 on · 2 off | `1011875848` | 2026-11-14 write 0 accepted, read stayed 1; 2 → read 2, toggle off seen; restored 1 |
+| Interior light | 1023 | `1330643002` | 1 off · 2 on | — | 2026-11-14 accepted; 2 → light on, 1 → off, seen; **no read-back** |
+| Media mute | 1002 | `1309024272` | 0 / 1 | `1108344846` | 2026-11-14 read-back 0→1→0, mute seen |
+| Media volume | 1002 | `1309020176` | 0–100 | `1108344840` | 2026-11-14 read-back 1→5→1 |
+| DRL | 1004 | `1125122118` | 1 on · 2 off | `985661476` | direct read returned **2** (off) on `way`, 2026-11-14; Di+ uses the same `getDayTimeLightState()` path |
+| Window LF (driver) | 1001 | `1125122104` | 1 open full · 2 close · 3 stop · 4 half · 5 vent | `947912728` (%) | vent → 9 %, close → 0 %; 2026-11-14 ignition on: 4 → 43 % in ~2 s, 1 → 98 % in ~2 s, 3 during travel stops it |
 | Window RF | 1001 | `1125122107` | same | `1267728400` (%) | vent → 9 %, close → 0 % |
 | Window LR | 1001 | `1125122112` | same | `947912736` (%) | vent → 11 %, close → 0 % |
 | Window RR | 1001 | `1125122115` | same | `1267728408` (%) | vent → 11 %, close → 0 % |
 
+## On-car diagnostic acceptance, 2026-11-14
+
+The temporary APK page «Проверка команд» was installed on `way`; the owner checked the
+screen physically. This is authoritative for this head unit, even where it contradicts the
+vendor-wrapper names or an earlier read-back interpretation.
+
+- **AC control mode is visually inverted from the earlier table:** writing
+  `501219352 = 0` (the button was labelled «РУЧНОЙ») lights the A/C AUTO indicator; writing
+  `= 1` (labelled «AUTO») does not. Until a follow-up proves a separate UI condition, expose
+  value **0** as AUTO and value **1** as manual on `way`.
+- The extra widget initially used the wrong DRL getter: `1231040528`
+  (`getDayRunningLightState()`) always returns `0` on `way`. Di+'s visible `DRL` state instead
+  comes from `getDayTimeLightState()` → `985661476`; direct `getInt(1004, 985661476)` returned
+  **2** on 2026-11-14 while DRL was off. This is the independent read-back to use in Mate.
+- **`tx 10 … null` crashes `autoservice` — never send it.** 2026-11-14, AC off: the first
+  call of the «AUTO ВКЛ» triple (`service call autoservice 10 i32 1000 i32 1077936138 i32 1 null`)
+  replied `Broken pipe`; the next calls got `Service autoservice does not exist`; CRASHALOG
+  wrote a TOMBSTONE at 09:05:12 and init restarted the service (new PID, started 09:04:51).
+  Side effect seen by the owner: quick air clean started by itself (read → 2 finished).
+  Every vehicle Binder client loses its connection during the restart. Cause: the call is
+  malformed — the fid lands in the array-length slot of `setIntArray`. All tx-10 probes were
+  removed from the «Проверка команд» page the same day; the tx-6 `setInt` rows cover the same
+  controls.
+
 How these map to today's di+ commands:
 
 - `seat_heat_driver level 2` (phrase `主驾座椅加热2档`) maps to value **3**, not 2.
-- Window values 1 (open full) and 4 (half) are **unverified on-car**; only 5 and 2 were
-  exercised.
-- There is **no "open to N %" write**. The vendor wrapper accepts only the 0–5 states above,
-  so `window pct` has no direct equivalent.
+- Window values 1 (open full → 98 %), 4 (half → 43 %) and 3 (stop) are verified on-car with
+  ignition on, 2026-11-14 (driver window only; the other three share the values).
+- **Open to N %:** there is no direct "N %" value, but write 2 or 1, poll the % read fid
+  (one read ≈ 0.2 s, the glass moves ≈ 3–4 % per read) and write 3 when within ~3 % of the
+  target. Measured 2026-11-14: closing from 98 %, stop issued at 27 % → settled at 23 %
+  (target 25 %). Implementable in the daemon; not in code yet.
 - `ac_temp_step` / `fan_speed_step` have no direct equivalent either: to step, read the
   current value and write it ±1.
 
@@ -77,28 +118,14 @@ range checks and constants. Every row still needs an on-car write test.
 
 | Group | Control | dev | SET fid | Values | Read fid | Read now |
 |---|---|---|---|---|---|---|
-| AC | Passenger temp | 1000 | `501219376` | °C 17–33 | `1077936176` | 24 |
-| AC | Separate temp zones | 1000 | `501219346` | 0 / 1 | `1077936164` | 3 |
-| AC | Front defrost | 1000 | `501219362` | 0 off · 1 on | `1077936150` | 0 |
-| AC | Rear defrost | 1000 | `501219357` | 0 off · 1 on | — | — |
-| AC | Airflow mode | 1000 | `501219336` | 1 face · 2 face+foot · 3 foot · 4 foot+defrost · 5 defrost · 6 face+foot+defrost · 7 face+defrost | `1077936152` | 4 |
-| AC | Compressor (A/C) | 1000 | `501219344` | 0 off · 1 on | `1077936137` | 0 |
-| AC | Max cooling | 1000 | `1337983004` | 0 off · 1 on | `1314914324` | 0 |
-| AC | Ventilation | 1000 | `501219394` | 0 off · 1 on | `1314914314` | 0 |
-| AC | Quick air clean | 1000 | `1330642960` | 0–2 | `1033895944` | 0 |
-| AC | Auto air clean | 1000 | `1337982992` | 0–2 | `1301291046` | 1 |
 | Settings | AC "auto air" preset | 1023 | `1311768588` | 1–3 | — | — |
 | Settings | AC auto fan preset | 1023 | `1311768592` | 1–3 | — | — |
-| Seats | Steering-wheel heat | 1023 | `944767029` | 1 off · 2 on | `1116733454` | 0 (unclear if fitted) |
 | Body | Sunroof | 1001 | `1330642976` | 0 or 21–100 %, 252–255 special | `FidRegistry` sunroof | — |
 | Body | Sunshade | 1001 | `1330642984` | 0–100 %, 254/255 special | `FidRegistry` sunshade | — |
 | Body | Sunroof + sunshade stop | 1001 | both above | wrapper `setMoonRoofAndSunshadeStop()` | — | — |
 | Body | Tailgate open height | 1023 | `1069547584` | 15–100 % | `1074790408` | 0 |
-| Settings | Close windows on lock | 1023 | `1311768646` | 0 / 1 | `1222639648` | 0 |
 | Settings | Auto lock while driving | 1023 | `1312817160` | 0 / 1 | `1081081876` | 1 |
 | Settings | Remote window up / down | 1023 | `1311768602` / `1311768604` | 0 / 1 | — | — |
-| Light | Smart welcome light | 1023 | `1330643013` | 0–2 | `1011875848` | 1 |
-| Light | Interior light | 1023 | `1330643002` | 1 / 2 | — | — |
 | Charging | Charging mode | 1009 | `668530` (literal) | 1 immediate · 2 scheduled | `1231032338` | 0 |
 | Charging | Charge timer | 1009 | `1276129320`… (6 fids) | switch, type 3/4, hour, minute, weekdays | — | — |
 | Charging | Charging port flap | 1023 | `1311768630` | 0 / 1 / 2 | `1196425228` | 1 |
@@ -108,9 +135,7 @@ range checks and constants. Every row still needs an on-car write test.
 | Charging | Wireless phone charger | 1009 | `1312817218` | 0–2 | `1105199120` | 1 |
 | Drive | Energy mode | 1006 | `734003254` | 1–3 (1 EV · 2 forced EV · 3 HEV) | `874512420` | 3 |
 | Drive | Operation mode | 1006 | `734003229` | 1 eco · 2 sport · 3 normal · 4 snow · 5 mud · 6 sand | `555745294` | 1 |
-| Media | Volume | 1002 | `1309020176` | 0–100 | `1108344840` | 4 |
-| Media | Mute | 1002 | `1309024272` | 0 / 1 | `1108344846` | 0 |
-| Cluster | Backlight brightness | 1007 | `1043333144` | 1–22 | `1274019896` | 18 |
+| Cluster | Backlight brightness | 1007 | `1043333144` | 1–22 | `1274019896` | 2026-11-14 inconclusive: write 10 → read 21, write 18 → read 5; read fid seems to report the actual (day/night/headlamp-dependent) level, not the setpoint |
 
 ## Firmware-only discovery queue — do not expose yet
 
@@ -169,11 +194,10 @@ When the car is on and a person can observe the result, validate only one row at
    recorded here. Settings, lights and audio remain local until there is a separately
    approved remote-control use case.
 
-Window positions for the planned presets (vent, 25 %, 50 %, full open, close): only 5 and
-2 are proven. Value 4 (half) and 1 (full) were sent on 2026-11-06 with ignition **off**:
-accepted, but no window moved (vent did not move either), so they still need a retest
-with ignition on. 25 % has no direct value. The idea is to open, poll the % read fid, then
-write `WINDOW_STOP` (3) — untested.
+Window positions for the planned presets (vent, 25 %, 50 %, full open, close): all proven
+on 2026-11-14 with ignition on — 5 vent, 4 ≈ 43 %, 1 ≈ 98 %, 2 close, and 25 % via
+close/open + poll + 3 stop (see above). On 2026-11-06 with ignition **off** the same writes
+were accepted but nothing moved: windows need ignition on.
 
 Central door lock is **not** reachable this way. `BYDAutoSettingDevice.setDoorLock` writes
 legacy fid `515647`, and `BYDAutoDoorLockDevice` has no setters.
@@ -188,6 +212,8 @@ These read fids return `0x0000FFFF` (feature link error) on `way`, so the contro
 fitted. Do not offer them for this model.
 
 - Seat ventilation: driver `1335885832`, passenger `1335885840`.
+- Dual-zone climate and steering-wheel heat (owner, 2026-11-14). Passenger-temp writes are
+  accepted and read back, but nothing changes on the car.
 - Rear seat heating: left `1214251019`.
 - Warm source `1314914364`, close-windows-on-rain `1222639659`, mirror flip `1228931096`,
   PM2.5 power `1331691528`, tailgate electric mode `1264582667`, charge-stop capacity

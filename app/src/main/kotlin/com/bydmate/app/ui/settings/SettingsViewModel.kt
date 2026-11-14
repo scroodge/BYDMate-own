@@ -12,7 +12,6 @@ import com.bydmate.app.diagnostics.DiagnosticsBundle
 import com.bydmate.app.diagnostics.DiagnosticsReporter
 import com.bydmate.app.data.autoservice.AdbOnDeviceClient
 import com.bydmate.app.data.autoservice.AutoserviceActuation
-import com.bydmate.app.data.autoservice.AutoserviceTx10Probe
 import com.bydmate.app.data.cloud.CloudTelemetryAckParser
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.cloud.VoltflowLinkClient
@@ -515,36 +514,6 @@ class SettingsViewModel @Inject constructor(
 
     fun clearAutoserviceDiagnosticLog() {
         _uiState.update { it.copy(autoserviceDiagnosticLog = emptyList()) }
-    }
-
-    /** Runs one of the fixed tx-10 compatibility probes from the supplied command sheet. */
-    fun runAutoserviceTx10Probe(probe: AutoserviceTx10Probe) {
-        if (_uiState.value.autoserviceDiagnosticRunning) return
-        _uiState.update { it.copy(autoserviceDiagnosticRunning = true) }
-        viewModelScope.launch {
-            val connected = runCatching {
-                adbOnDeviceClient.isConnected() || adbOnDeviceClient.connect().isSuccess
-            }.getOrDefault(false)
-            val result = if (connected) {
-                runCatching { adbOnDeviceClient.executeAutoserviceTx10Probe(probe) }.getOrNull()
-            } else {
-                null
-            }
-            val reply = result?.reply?.replace(Regex("\\s+"), " ")?.take(180)
-            val line = when {
-                !connected -> "TX10 ${probe.name}: ADB не подключён"
-                result == null -> "TX10 ${probe.name}: нет ответа autoservice"
-                else -> "TX10 ${probe.name}: $reply"
-            }
-            Log.i("AutoserviceDiag", line)
-            _uiState.update { state ->
-                state.copy(
-                    adbStatus = if (connected) AdbStatus.CONNECTED else state.adbStatus,
-                    autoserviceDiagnosticRunning = false,
-                    autoserviceDiagnosticLog = (listOf(line) + state.autoserviceDiagnosticLog).take(24),
-                )
-            }
-        }
     }
 
     /**

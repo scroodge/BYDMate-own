@@ -48,12 +48,14 @@ enum class AutoserviceActuation(
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_POWER_STATE), expectedReadBack = 1,
     ),
     AC_MANUAL(
-        dev = 1000, setFid = 501219352, value = 0,
-        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CONTROL_MODE), expectedReadBack = 0,
-    ),
-    AC_AUTO(
+        // Visual acceptance on car `way` 2026-11-14: 1 clears the A/C AUTO indicator.
         dev = 1000, setFid = 501219352, value = 1,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CONTROL_MODE), expectedReadBack = 1,
+    ),
+    AC_AUTO(
+        // Visual acceptance on car `way` 2026-11-14: 0 lights the A/C AUTO indicator.
+        dev = 1000, setFid = 501219352, value = 0,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1000, FidRegistry.FID_AC_CONTROL_MODE), expectedReadBack = 0,
     ),
     AC_RECIRCULATION_FRESH(
         dev = 1000, setFid = 501219355, value = 0,
@@ -91,65 +93,23 @@ enum class AutoserviceActuation(
         dev = 1023, setFid = 1125122076, value = 3,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 3,
     ),
-    DRL_ON(dev = 1004, setFid = 1125122118, value = 1),
-    DRL_OFF(dev = 1004, setFid = 1125122118, value = 2),
+    DRL_ON(
+        dev = 1004, setFid = 1125122118, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_LIGHT, FidRegistry.FID_DRL_STATE),
+        expectedReadBack = 1,
+    ),
+    DRL_OFF(
+        dev = 1004, setFid = 1125122118, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_LIGHT, FidRegistry.FID_DRL_STATE),
+        expectedReadBack = 2,
+    ),
 }
 
 data class AutoserviceActuationResult(
     val accepted: Boolean,
-    /** `null` means the action has no reliable read fid (currently DRL). */
+    /** `null` means the action has no reliable read fid (currently rear defrost). */
     val verified: Boolean?,
     val observedValue: Int? = null,
-)
-
-/**
- * Fixed compatibility probes copied verbatim from the on-car test sheet. Unlike
- * [AutoserviceActuation], these intentionally use transact 10 so the test page can record what
- * this older command shape does on the current head unit. They are not production controls.
- */
-enum class AutoserviceTx10Probe(
-    val label: String,
-    private val calls: List<String>,
-) {
-    CLIMATE_OFF("Климат ВЫКЛ", listOf(autoserviceTx10(1000, 1077936137, 0))),
-    CLIMATE_ON("Климат ВКЛ", listOf(autoserviceTx10(1000, 1077936137, 1))),
-    AUTO_OFF("AUTO ВЫКЛ (3 события)", listOf(
-        autoserviceTx10(1000, 1077936138, 0), autoserviceTx10(1000, 1077936139, 0), autoserviceTx10(1000, 1077936140, 0),
-    )),
-    AUTO_ON("AUTO ВКЛ (3 события)", listOf(
-        autoserviceTx10(1000, 1077936138, 1), autoserviceTx10(1000, 1077936139, 1), autoserviceTx10(1000, 1077936140, 1),
-    )),
-    RECIRCULATION_FRESH("Рециркуляция наружный", listOf(autoserviceTx10(1000, 1077936148, 0))),
-    RECIRCULATION_INTERNAL("Рециркуляция внутренний", listOf(autoserviceTx10(1000, 1077936148, 1))),
-    REAR_DEFROST_OFF("Заднее стекло ВЫКЛ", listOf(autoserviceTx10(1000, 1128267825, 0))),
-    REAR_DEFROST_ON("Заднее стекло ВКЛ", listOf(autoserviceTx10(1000, 1128267825, 1))),
-    DRL_OFF("ДХО ВЫКЛ", listOf(autoserviceTx10(1004, 985661476, 2))),
-    DRL_ON("ДХО ВКЛ", listOf(autoserviceTx10(1004, 985661476, 1))),
-    DRIVER_HEAT_OFF("Подогрев водителя ВЫКЛ", listOf(autoserviceTx10(1023, 1335885835, 1))),
-    DRIVER_HEAT_LEVEL_1("Подогрев водителя 1", listOf(autoserviceTx10(1023, 1335885835, 2))),
-    DRIVER_HEAT_LEVEL_2("Подогрев водителя 2", listOf(autoserviceTx10(1023, 1335885835, 3))),
-    PASSENGER_HEAT_OFF("Подогрев пассажира ВЫКЛ", listOf(autoserviceTx10(1023, 1335885843, 1))),
-    PASSENGER_HEAT_LEVEL_1("Подогрев пассажира 1", listOf(autoserviceTx10(1023, 1335885843, 2))),
-    PASSENGER_HEAT_LEVEL_2("Подогрев пассажира 2", listOf(autoserviceTx10(1023, 1335885843, 3))),
-    DRIVER_VENT_OFF("Вентиляция водителя ВЫКЛ", listOf(autoserviceTx10(1023, 1335885832, 1))),
-    DRIVER_VENT_LEVEL_1("Вентиляция водителя 1", listOf(autoserviceTx10(1023, 1335885832, 2))),
-    DRIVER_VENT_LEVEL_2("Вентиляция водителя 2", listOf(autoserviceTx10(1023, 1335885832, 3))),
-    PASSENGER_VENT_OFF("Вентиляция пассажира ВЫКЛ", listOf(autoserviceTx10(1023, 1335885840, 1))),
-    PASSENGER_VENT_LEVEL_1("Вентиляция пассажира 1", listOf(autoserviceTx10(1023, 1335885840, 2))),
-    PASSENGER_VENT_LEVEL_2("Вентиляция пассажира 2", listOf(autoserviceTx10(1023, 1335885840, 3))),
-    ;
-
-    /** AUTO keeps all three calls in one ADB shell request, as supplied in the test sheet. */
-    fun shellCommand(): String = calls.joinToString(";")
-
-}
-
-private fun autoserviceTx10(dev: Int, fid: Int, value: Int): String =
-    "service call autoservice 10 i32 $dev i32 $fid i32 $value null"
-
-data class AutoserviceTx10ProbeResult(
-    val command: String,
-    val reply: String,
 )
 
 data class DaemonSupervisorResult(
@@ -194,8 +154,6 @@ interface AdbOnDeviceClient {
      * path exists here; this is intentionally separate from the read-only [exec] boundary.
      */
     suspend fun executeAutoserviceActuation(action: AutoserviceActuation): AutoserviceActuationResult? = null
-    /** Runs one fixed tx-10 compatibility probe; never accepts a caller-supplied shell command. */
-    suspend fun executeAutoserviceTx10Probe(probe: AutoserviceTx10Probe): AutoserviceTx10ProbeResult? = null
     /**
      * Grants PACKAGE_USAGE_STATS appop to our own package via shell uid. The
      * only non-autoservice write we permit through this client — needed so
@@ -374,21 +332,6 @@ class AdbOnDeviceClientImpl @Inject constructor(
             result
         } catch (e: Exception) {
             Log.w(TAG, "executeAutoserviceActuation($action) failed: ${e.message}")
-            null
-        }
-    }
-
-    override suspend fun executeAutoserviceTx10Probe(
-        probe: AutoserviceTx10Probe,
-    ): AutoserviceTx10ProbeResult? = withContext(Dispatchers.IO) {
-        val p = protocol ?: return@withContext null
-        val command = probe.shellCommand()
-        try {
-            val reply = p.exec(command) ?: return@withContext null
-            Log.i(TAG, "AUTOSERVICE_TX10 probe=${probe.name} command=$command reply=${reply.trim()}")
-            AutoserviceTx10ProbeResult(command = command, reply = reply)
-        } catch (e: Exception) {
-            Log.w(TAG, "executeAutoserviceTx10Probe(${probe.name}) failed: ${e.message}")
             null
         }
     }

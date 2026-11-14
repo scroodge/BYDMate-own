@@ -225,12 +225,17 @@ This path unlocks what D+ cannot give: **`FID_SOH`** (battery state of health),
 **`FID_CHARGING_CAPACITY`** (per-session kWh into the cells), `FID_LIFETIME_KWH`,
 lifetime mileage, HV pack voltage, battery chemistry, float SOC.
 
-The generic client is intentionally **write-barriered**. Its only autoservice-write exception
-is `AutoserviceActuation`: six compile-time fixed widget actions (both front-seat heat: off/
-level 2; DRL: on/off), with heat read back before reporting success. It does not accept a
-caller-provided fid, value or shell string. The other fixed writes grant `PACKAGE_USAGE_STATS`
-to the app's own package (needed for camera-overlay detection), start D+'s MainService and
-launch the daemon.
+The generic client is intentionally **write-barriered**. Its autoservice-write exceptions are
+compile-time fixed `AutoserviceActuation` actions: the widget uses both front-seat heat (off/
+level 2) and DRL; the temporary on-device «Проверка команд» page also exercises fixed climate,
+recirculation, rear-defrost and seat-level actions, all as tx 6 `setInt`. (Its former `tx 10`
+probes were malformed `setIntArray` calls that crashed `autoservice` on `way` and were removed on
+2026-11-14 — see `AUTOSERVICE_ACTUATION.md`.) Neither surface accepts a caller-provided
+fid, value or shell string. Seat heat and DRL are read back; the DRL state is the direct
+`getDayTimeLightState` fid `985661476`, not the unrelated `1231040528` getter that returns 0 on
+`way`. The other fixed writes grant
+`PACKAGE_USAGE_STATS` to the app's own package (needed for camera-overlay detection), start
+D+'s MainService and launch the daemon.
 
 The same ADB key is what makes the survival daemon, remote commands, and
 telemetry-while-parked possible. Without it the app still streams normal live
@@ -541,8 +546,8 @@ Four of them, in order:
    driver/passenger seat heat off/level 2 and DRL on/off. A temporary on-device «Проверка команд»
    page uses additional compile-time fixed climate, recirculation, rear-defrost and seat-level
    actions for visual validation. Neither surface can supply a caller-provided fid or value.
-   Seat-heat writes require matching autoservice read-back; DRL and rear defrost have no reliable
-   read fid, so only accepted writes are reported.
+   Seat-heat and DRL writes require matching autoservice read-back; rear defrost has no reliable
+   read fid, so it is reported only as accepted.
 4. **Deny list** — any produced phrase containing `发送CAN`, `执行SHELL`, `执行TSHELL`, `点击`, `滑动`, `按钮`, `按键`, `浮窗`, `下电` is rejected outright. `DiParsControlClient` blocks the same patterns again at the send site.
 
 The validated command contract contains only `window`, `windows_preset`, `ac`,

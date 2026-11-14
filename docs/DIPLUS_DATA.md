@@ -4,9 +4,11 @@ How VoltFlow Mate reads vehicle data from **di+** on the BYD DiLink head unit, t
 documented readable-parameter catalog, the known "no data" sentinels, and a captured live
 snapshot.
 
-- **Installed on car `way`:** di+ **`2.0.0b9`** (`versionCode 169`) as of 2026-11-03.
-  The parameter catalog below is unchanged between generations and applies to both.
-- **Previous baseline:** `1.3.8b16` (`versionCode 143`), kept at
+- **Installed on car `way`:** di+ **`2.0.0b12`** (`versionCode 172`) as of 2026-11-14.
+  Its APK and matching car `framework.jar` were pulled directly from the head unit; the local
+  research copies are intentionally outside this repository in `/Users/way/Dev/BYD_MA/RND/`.
+- **Previous baselines:** `2.0.0b9` (`versionCode 169`, repository archive) and
+  `1.3.8b16` (`versionCode 143`), kept at
   `research/diplus.1.3.8-beta16.apk` for rollback.
 - **What differs between the two:**
   [di+ 2.0.0-beta1 — delta vs 1.3.8-beta16](#di-200-beta1--delta-vs-138-beta16).
@@ -30,7 +32,8 @@ Current first-party reference: [di+ Apifox API](https://s.apifox.cn/c3ce5ff5-754
 The parameter catalog below is cross-checked against its
 [`getVal`](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391/473237176e0)
 and [`getDiPars`](https://s.apifox.cn/c3ce5ff5-754f-438c-aef2-055d85aa0391/473237177e0)
-pages and the locally archived `research/diplus-2.0.0b9.apk`.
+pages and the locally archived 2.0.0b9 APK. The installed 2.0.0b12 is retained with the
+matching framework as described above.
 
 Code: [`DiParsClient`](../app/src/main/kotlin/com/bydmate/app/data/remote/DiParsClient.kt)
 (template + parse) → `DiParsData` →
@@ -40,9 +43,26 @@ Trip DB: [`DiPlusDbReader`](../app/src/main/kotlin/com/bydmate/app/data/remote/D
 
 ### Confirmed climate commands
 
-On `way` with di+ 2.0.0b9, the relative blower commands are verified to move the
+On `way` with di+ 2.0.0b9 (the historical acceptance version), the relative blower commands are verified to move the
 current `风量档位` by exactly one level: `迪加升风速` (up) and `迪加降风速` (down).
 `迪加设置风速N` is listed by di+ but did not actuate and is deliberately unsupported.
+
+### Direct daytime-light state — independent of di+
+
+The 2.0.0b12 decompile shows that the visible Di+ DRL indicator calls the system wrapper
+`BYDAutoLightDevice.getDayTimeLightState()`. That wrapper reaches BYD's native autoservice
+stack (`BYDAutoManager.nativeGetInt`); it is not read from the Di+ HTTP cache or a Di+ service.
+
+On `way`, the equivalent shell-UID read is:
+
+```sh
+service call autoservice 5 i32 1004 i32 985661476
+```
+
+The result is `1` for DRL on and `2` for DRL off (direct result `2` observed 2026-11-14).
+`1231040528` is a different `getDayRunningLightState()` fid and returns `0` on this car; do
+not use it for the widget. VoltFlow Mate's quick-control drawer reads `985661476` directly
+alongside the two front-seat heat state fids.
 
 ### Reading it manually over adb
 

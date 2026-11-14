@@ -22,19 +22,21 @@ class WidgetQuickCommandExecutor @Inject constructor(
     }
 
     /**
-     * Current seat-heat state read straight from autoservice (read fids verified on car `way`,
-     * docs/AUTOSERVICE_ACTUATION.md). DRL has no reliable read fid, so it is not in the map.
+     * Current quick-control state read straight from autoservice (read fids verified on car `way`,
+     * docs/AUTOSERVICE_ACTUATION.md). This does not depend on Di+ or its cached telemetry.
      */
-    suspend fun readSeatHeatStates(): Map<WidgetQuickControl, Boolean?> {
+    suspend fun readQuickControlStates(): Map<WidgetQuickControl, Boolean?> {
         if (!adbClient.isConnected() && adbClient.connect().isFailure) return emptyMap()
         val reads = listOfNotNull(
             AutoserviceActuation.DRIVER_SEAT_HEAT_OFF.readBack,
             AutoserviceActuation.PASSENGER_SEAT_HEAT_OFF.readBack,
+            AutoserviceActuation.DRL_ON.readBack,
         )
         val values = adbClient.execAutoserviceReads(reads) ?: return emptyMap()
         return mapOf(
             WidgetQuickControl.DRIVER_SEAT_HEAT to seatHeatOn(values.getOrNull(0)),
             WidgetQuickControl.PASSENGER_SEAT_HEAT to seatHeatOn(values.getOrNull(1)),
+            WidgetQuickControl.DRL to drlOn(values.getOrNull(2)),
         )
     }
 
@@ -82,6 +84,13 @@ class WidgetQuickCommandExecutor @Inject constructor(
 internal fun seatHeatOn(raw: Int?): Boolean? = when (raw) {
     1 -> false
     2, 3 -> true
+    else -> null
+}
+
+/** Direct daytime-light state: 1 on, 2 off; any other answer is unknown. */
+internal fun drlOn(raw: Int?): Boolean? = when (raw) {
+    1 -> true
+    2 -> false
     else -> null
 }
 

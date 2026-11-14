@@ -77,7 +77,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bydmate.app.diagnostics.DiagnosticsBundle
 import com.bydmate.app.R
 import com.bydmate.app.data.autoservice.AutoserviceActuation
-import com.bydmate.app.data.autoservice.AutoserviceTx10Probe
 import com.bydmate.app.service.TrackingService
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.util.BackgroundRestriction
@@ -285,7 +284,6 @@ fun GatewayScreen(
             running = state.autoserviceDiagnosticRunning,
             report = state.autoserviceDiagnosticLog,
             onAction = viewModel::runAutoserviceDiagnostic,
-            onTx10Probe = viewModel::runAutoserviceTx10Probe,
             onClear = viewModel::clearAutoserviceDiagnosticLog,
         )
     }
@@ -1408,7 +1406,6 @@ private fun DirectAutoserviceDiagnosticsCard(
     running: Boolean,
     report: List<String>,
     onAction: (AutoserviceActuation) -> Unit,
-    onTx10Probe: (AutoserviceTx10Probe) -> Unit,
     onClear: () -> Unit,
 ) {
     GatewayCard {
@@ -1471,23 +1468,6 @@ private fun DirectAutoserviceDiagnosticsCard(
             running = running,
             onAction = onAction,
         )
-        Text("Исходные команды tx 10", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "Точная форма из присланного списка. Ответ Binder сохраняется целиком в logcat как AUTOSERVICE_TX10; " +
-                "в AUTO три вызова отправляются одной ADB-командой.",
-            color = AccentOrange,
-            fontSize = 11.sp,
-            lineHeight = 15.sp,
-        )
-        Tx10ProbeRow("Климат", listOf("ВЫКЛ" to AutoserviceTx10Probe.CLIMATE_OFF, "ВКЛ" to AutoserviceTx10Probe.CLIMATE_ON), running, onTx10Probe)
-        Tx10ProbeRow("AUTO", listOf("ВЫКЛ" to AutoserviceTx10Probe.AUTO_OFF, "ВКЛ" to AutoserviceTx10Probe.AUTO_ON), running, onTx10Probe)
-        Tx10ProbeRow("Рециркуляция", listOf("НАРУЖНЫЙ" to AutoserviceTx10Probe.RECIRCULATION_FRESH, "ВНУТРЕННИЙ" to AutoserviceTx10Probe.RECIRCULATION_INTERNAL), running, onTx10Probe)
-        Tx10ProbeRow("Заднее стекло", listOf("ВЫКЛ" to AutoserviceTx10Probe.REAR_DEFROST_OFF, "ВКЛ" to AutoserviceTx10Probe.REAR_DEFROST_ON), running, onTx10Probe)
-        Tx10ProbeRow("ДХО", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRL_OFF, "ВКЛ" to AutoserviceTx10Probe.DRL_ON), running, onTx10Probe)
-        Tx10ProbeRow("Подогрев водителя", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRIVER_HEAT_OFF, "1" to AutoserviceTx10Probe.DRIVER_HEAT_LEVEL_1, "2" to AutoserviceTx10Probe.DRIVER_HEAT_LEVEL_2), running, onTx10Probe)
-        Tx10ProbeRow("Подогрев пассажира", listOf("ВЫКЛ" to AutoserviceTx10Probe.PASSENGER_HEAT_OFF, "1" to AutoserviceTx10Probe.PASSENGER_HEAT_LEVEL_1, "2" to AutoserviceTx10Probe.PASSENGER_HEAT_LEVEL_2), running, onTx10Probe)
-        Tx10ProbeRow("Вентиляция водителя", listOf("ВЫКЛ" to AutoserviceTx10Probe.DRIVER_VENT_OFF, "1" to AutoserviceTx10Probe.DRIVER_VENT_LEVEL_1, "2" to AutoserviceTx10Probe.DRIVER_VENT_LEVEL_2), running, onTx10Probe)
-        Tx10ProbeRow("Вентиляция пассажира", listOf("ВЫКЛ" to AutoserviceTx10Probe.PASSENGER_VENT_OFF, "1" to AutoserviceTx10Probe.PASSENGER_VENT_LEVEL_1, "2" to AutoserviceTx10Probe.PASSENGER_VENT_LEVEL_2), running, onTx10Probe)
         if (report.isNotEmpty()) {
             Gap(4.dp)
             Text("Результаты этого запуска", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
@@ -1528,29 +1508,6 @@ private fun DirectControlRow(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = CardSurfaceElevated, contentColor = TextPrimary),
-                ) { Text(if (running) "…" else label, fontSize = 11.sp) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun Tx10ProbeRow(
-    title: String,
-    actions: List<Pair<String, AutoserviceTx10Probe>>,
-    running: Boolean,
-    onProbe: (AutoserviceTx10Probe) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("$title · tx10", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            actions.forEach { (label, probe) ->
-                Button(
-                    onClick = { onProbe(probe) },
-                    enabled = !running,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue, contentColor = TextPrimary),
                 ) { Text(if (running) "…" else label, fontSize = 11.sp) }
             }
         }

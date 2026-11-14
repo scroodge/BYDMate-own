@@ -77,7 +77,7 @@ object WidgetController {
     private var quickControlsVisible = false
     private var commandScope: CoroutineScope? = null
     private var commandPendingState = mutableStateOf(false)
-    /** Toggle state per quick control; DRL is remembered from the last successful tap. */
+    /** Toggle state per quick control; read directly from autoservice when the drawer opens. */
     private val quickStates = mutableStateOf<Map<WidgetQuickControl, Boolean?>>(emptyMap())
 
     private var dataScope: CoroutineScope? = null
@@ -472,7 +472,7 @@ object WidgetController {
         try {
             windowManager.addView(compose, params)
             quickControlsVisible = true
-            refreshSeatHeatStates(appCtx)
+            refreshQuickControlStates(appCtx)
         } catch (e: Exception) {
             Log.w(TAG, "addView quick controls: ${e.message}")
             hideQuickControls()
@@ -519,19 +519,16 @@ object WidgetController {
             WidgetQuickCommandEntryPoint::class.java,
         ).widgetQuickCommandExecutor()
 
-    private fun refreshSeatHeatStates(context: Context) {
+    private fun refreshQuickControlStates(context: Context) {
         val scope = commandScope ?: return
         scope.launch {
             val read = try {
-                quickExecutor(context).readSeatHeatStates()
+                quickExecutor(context).readQuickControlStates()
             } catch (e: Exception) {
-                Log.w(TAG, "seat heat read failed: ${e.message}")
+                Log.w(TAG, "quick-control state read failed: ${e.message}")
                 emptyMap()
             }
-            quickStates.value = quickStates.value + mapOf(
-                WidgetQuickControl.DRIVER_SEAT_HEAT to read[WidgetQuickControl.DRIVER_SEAT_HEAT],
-                WidgetQuickControl.PASSENGER_SEAT_HEAT to read[WidgetQuickControl.PASSENGER_SEAT_HEAT],
-            )
+            quickStates.value = quickStates.value + read
         }
     }
 
@@ -554,8 +551,8 @@ object WidgetController {
             commandPendingState.value = false
             if (result is WidgetQuickCommandExecutor.Result.Sent) {
                 quickStates.value = quickStates.value + (control to enabled)
-            } else if (control != WidgetQuickControl.DRL) {
-                refreshSeatHeatStates(context)
+            } else {
+                refreshQuickControlStates(context)
             }
             val message = when (result) {
                 is WidgetQuickCommandExecutor.Result.Sent -> result.message

@@ -123,7 +123,7 @@ object FidRegistry {
     // 2026-11-04, ignition OFF, side by side with di+ getDiPars: every value below matched
     // di+ except where noted. Parked-only check — speed/gear D/power in motion and the
     // AC block while running are still unvalidated; the toggle exists to validate them.
-    // Not used: DRL (1004/1231040528 read 0 while di+ said 1), 4.2's alternate trunk
+    // Not used: the unrelated DRL getter (1004/1231040528 reads 0 on this car), 4.2's alternate trunk
     // (1074790416) and window-RR (947912752), which return sentinel on this car.
     const val DEV_AC = 1000
     const val DEV_LIGHT = 1004
@@ -133,6 +133,8 @@ object FidRegistry {
     const val DEV_SPEED = 1013
     const val DEV_SETTING = 1023
     const val DEV_LOCK = 1032
+    /** Daytime-light state used by Di+: 1 on, 2 off; verified directly on `way` 2026-11-14. */
+    const val FID_DRL_STATE = 985661476
 
     /** Vehicle speed, km/h (transact 7=float). `Speed.SPEED_AUTO_SPEED`. */
     const val FID_SPEED = -1807745016

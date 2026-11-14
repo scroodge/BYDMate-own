@@ -130,36 +130,17 @@ class AdbOnDeviceClientTest {
 
     @Test
     fun `diagnostic AUTO write remains a fixed set fid with read back`() = runTest {
-        val write = "service call autoservice 6 i32 1000 i32 501219352 i32 1"
+        val write = "service call autoservice 6 i32 1000 i32 501219352 i32 0"
         val read = "service call autoservice 5 i32 1000 i32 1077936146"
         val client = newClient(FakeProtocol(execResponses = mapOf(
             write to "Result: Parcel(00000001)",
-            read to "Result: Parcel(00000000 00000001   '........')",
+            read to "Result: Parcel(00000000 00000000   '........')",
         )))
         client.connect()
 
         val result = client.executeAutoserviceActuation(AutoserviceActuation.AC_AUTO)
 
-        assertEquals(AutoserviceActuationResult(true, true, 1), result)
-    }
-
-    @Test
-    fun `tx10 AUTO compatibility probe keeps its three supplied calls in one shell request`() = runTest {
-        val probe = AutoserviceTx10Probe.AUTO_ON
-        val command =
-            "service call autoservice 10 i32 1000 i32 1077936138 i32 1 null;" +
-                "service call autoservice 10 i32 1000 i32 1077936139 i32 1 null;" +
-                "service call autoservice 10 i32 1000 i32 1077936140 i32 1 null"
-        val fake = FakeProtocol(execResponses = mapOf(command to "Result: Parcel(00000001)"))
-        val client = newClient(fake)
-        client.connect()
-
-        val result = client.executeAutoserviceTx10Probe(probe)
-
-        assertEquals(AutoserviceTx10Probe.AUTO_ON, probe)
-        assertEquals(command, result?.command)
-        assertEquals("Result: Parcel(00000001)", result?.reply)
-        assertEquals(listOf(command), fake.execCalls)
+        assertEquals(AutoserviceActuationResult(true, true, 0), result)
     }
 
     @Test
@@ -178,16 +159,20 @@ class AdbOnDeviceClientTest {
     }
 
     @Test
-    fun `drl accepts only the fixed write and has no fabricated read back`() = runTest {
+    fun `drl write has fixed direct read back`() = runTest {
         val write = "service call autoservice 6 i32 1004 i32 1125122118 i32 1"
-        val fake = FakeProtocol(execResponses = mapOf(write to "Result: Parcel(00000001)"))
+        val read = "service call autoservice 5 i32 1004 i32 985661476"
+        val fake = FakeProtocol(execResponses = mapOf(
+            write to "Result: Parcel(00000001)",
+            read to "Result: Parcel(00000000 00000001   '........')",
+        ))
         val client = newClient(fake)
         client.connect()
 
         val result = client.executeAutoserviceActuation(AutoserviceActuation.DRL_ON)
 
-        assertEquals(AutoserviceActuationResult(true, null), result)
-        assertEquals(listOf(write), fake.execCalls)
+        assertEquals(AutoserviceActuationResult(true, true, 1), result)
+        assertEquals(listOf(write, read), fake.execCalls)
     }
 
     @Test

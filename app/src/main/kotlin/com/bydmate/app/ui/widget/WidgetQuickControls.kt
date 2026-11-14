@@ -153,8 +153,8 @@ private fun QuickControlColumn(
             modifier = Modifier.padding(top = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            // One toggle: green = on, grey = off. Unknown (DRL before the first tap, or a failed
-            // seat read) shows grey "—" and a tap turns it on.
+            // One toggle: green = on, grey = off. Unknown after a failed direct autoservice read
+            // shows grey "—" and a tap turns it on.
             QuickControlButton(
                 label = when (enabled) { true -> "ВКЛ"; false -> "ВЫКЛ"; null -> "—" },
                 color = if (enabled == true) AccentGreen else TextMuted.copy(alpha = 0.45f),

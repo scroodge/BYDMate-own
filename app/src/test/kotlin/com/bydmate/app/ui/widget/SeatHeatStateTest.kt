@@ -20,4 +20,14 @@ class SeatHeatStateTest {
         assertEquals(null, seatHeatOn(0))
         assertEquals(null, seatHeatOn(4))
     }
+
+    @Test
+    fun `direct DRL state maps to the initial widget state`() {
+        assertEquals(true, drlOn(1))
+        assertEquals(false, drlOn(2))
+        assertEquals(null, drlOn(null))
+        assertEquals(null, drlOn(0))
+        assertEquals(null, drlOn(3))
+    }
+
 }
