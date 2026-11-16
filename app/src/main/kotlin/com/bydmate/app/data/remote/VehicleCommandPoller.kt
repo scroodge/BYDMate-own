@@ -1,11 +1,13 @@
 package com.bydmate.app.data.remote
 
+import android.content.Context
 import android.util.Log
 import com.bydmate.app.data.cloud.CloudBatteryCapacity
 import com.bydmate.app.data.cloud.CloudRangeReserve
 import com.bydmate.app.data.cloud.CloudLinkStatus
 import com.bydmate.app.data.cloud.CloudTelemetrySender
 import com.bydmate.app.data.repository.SettingsRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,6 +22,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,6 +30,7 @@ import kotlin.math.min
 
 @Singleton
 class VehicleCommandPoller @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val controlClient: DiParsControlClient,
     private val cameraSnapshotService: CameraSnapshotService,
     private val settingsRepository: SettingsRepository,
@@ -105,6 +109,24 @@ class VehicleCommandPoller @Inject constructor(
 
     val isRunning: Boolean get() = pollingJob?.isActive == true
 
+    @Volatile private var lastStandby: Boolean? = null
+
+    /** True while the shell daemon is polling commands itself; see [CommandStandby]. */
+    private fun daemonOwnsCommands(): Boolean {
+        val raw = try {
+            context.getExternalFilesDir(null)?.let { File(it, CommandStandby.BEACON_FILE) }
+                ?.takeIf { it.exists() }?.readText()
+        } catch (_: Exception) {
+            null
+        }
+        val standby = CommandStandby.appShouldStandby(raw, System.currentTimeMillis())
+        if (standby != lastStandby) {
+            lastStandby = standby
+            Log.i(TAG, if (standby) "Commands: standby, daemon executes" else "Commands: app executes")
+        }
+        return standby
+    }
+
     private suspend fun pollOnce(): Long {
         if (settingsRepository.getString(SettingsRepository.KEY_CLOUD_SYNC_ENABLED, SettingsRepository.DEFAULT_CLOUD_SYNC_ENABLED) != "true") {
             doorbell.stop()
@@ -124,6 +146,7 @@ class VehicleCommandPoller @Inject constructor(
         // Acks lost on an earlier poll go first: the web is still waiting on those commands.
         if (!ackOutbox.isEmpty) deliverAcks(ackUrl, apiKey, vehicleId, vehicleUid, null)
 
+        val standby = daemonOwnsCommands()
         return try {
             val httpUrl = commandsUrl.toHttpUrlOrNull() ?: return BASE_POLL_MS
             val request = Request.Builder()
@@ -133,6 +156,7 @@ class VehicleCommandPoller @Inject constructor(
                 .header("X-Vehicle-Uid", vehicleUid)
                 .header("X-App", "VoltFlow-Mate")
                 .header("X-Doorbell", "1")
+                .apply { if (standby) header(CommandStandby.HEADER, "1") }
                 .get()
                 .build()
 

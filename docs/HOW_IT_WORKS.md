@@ -531,7 +531,24 @@ VoltFlow /api/bydmate/commands ──poll──> poller / daemon
                             POST /api/bydmate/commands/ack <────┘
 ```
 
-Cloud/daemon actuation is a D+ voice-assistant phrase (`迪加`-style) pushed to `sendCmd`.
+**Direct path (B-34, 0.6.6).** The daemon first tries `DirectCommand`: fixed tx-6 `setInt`
+writes to `autoservice` with read-back, no di+. It runs only on a validated car type
+(`persist.sys.car.type` in `DirectCommand.VALIDATED_CAR_TYPES`, today `160` = `way`), only when
+its own `autoservice` guard reads (speed, gear, charge gun, 12 V) clear the command — fail-closed,
+unlike the di+ guard, which passes when di+ has no data — and only when the control's pre-read is
+plausible. Otherwise, and when an absolute command's write is refused or never reads back, the
+same command goes to the di+ phrase below. Steps (`ac_temp_step`, `fan_speed_step`) are not
+re-sent through di+ after an accepted write, and neither is `window` to N % once the glass moved.
+Acks carry `path: direct | diplus`; the daemon log has one `direct '<type>' …` line per command.
+
+**One executor.** After each successful poll the daemon writes
+`<app externalFilesDir>/voltflow_daemon_commands` (epoch ms). While it is under 150 s old the app
+polls with `X-Command-Standby: 1`: the cloud still returns every config field but claims no
+command, so only the daemon executes. Without a daemon (no ADB) the file never appears and the
+app executes as before. Needs the cloud change from the same date; an older server ignores the
+header and both keep claiming, as before.
+
+Otherwise cloud/daemon actuation is a D+ voice-assistant phrase (`迪加`-style) pushed to `sendCmd`.
 The floating widget is the narrow exception: its three controls use fixed direct-autoservice
 `setInt` writes via on-device ADB shell, with no D+ fallback and no generic direct-write API.
 

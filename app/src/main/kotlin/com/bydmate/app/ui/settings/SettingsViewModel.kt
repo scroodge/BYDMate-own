@@ -496,7 +496,7 @@ class SettingsViewModel @Inject constructor(
             val line = when {
                 !connected -> "${action.name}: ADB не подключён"
                 result == null -> "${action.name}: нет ответа autoservice"
-                !result.accepted -> "${action.name}: Binder отклонил запись"
+                !result.accepted -> "${action.name}: Binder отклонил запись — ${result.refusedReply ?: "нет ответа"}"
                 result.verified == true -> "${action.name}: OK, read-back=${result.observedValue}"
                 result.verified == false -> "${action.name}: запись принята, read-back=${result.observedValue} — НЕ СОВПАЛ"
                 else -> "${action.name}: запись принята; read-back отсутствует"

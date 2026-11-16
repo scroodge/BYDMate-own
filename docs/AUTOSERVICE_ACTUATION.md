@@ -5,7 +5,7 @@ di+ `/api/sendCmd` phrases. Read-side fids live in
 [`DIPLUS_DATA.md`](DIPLUS_DATA.md) and `FidRegistry.kt`; the transact-code table is in
 [`EV_PRO_APP_ANALYSIS.md`](EV_PRO_APP_ANALYSIS.md) §1. Work plan: `docs/BACKLOG.md` B-34.
 
-- **Обновлено:** 2026-11-14 · car `way` (Leopard 3, DiLink 3.0, CANFD), shell uid over
+- **Обновлено:** 2026-11-14 · car `way` (元UP / Yuan Up, `persist.sys.car.type=160`, DiLink 3.0, CANFD), shell uid over
   network ADB from a Mac, gear P, ignition on. A temporary APK-only page «Проверка команд»
   exposes the fixed climate/seat/DRL set below for on-car acceptance and visual testing. It is
   neither a cloud command nor a daemon capability, and it accepts no arbitrary fid/value input.
@@ -120,6 +120,8 @@ range checks and constants. Every row still needs an on-car write test.
 |---|---|---|---|---|---|---|
 | Settings | AC "auto air" preset | 1023 | `1311768588` | 1–3 | — | — |
 | Settings | AC auto fan preset | 1023 | `1311768592` | 1–3 | — | — |
+| Seats | Driver seat ventilation | 1023 | `1125122064` (`0x43100010`, from `<clinit>`: non-Toyota) | 1 off · 2 · 3 (assumed = seat heat) | `1335885832` | `0xFFFF` on `way` (not fitted); 2026-11-16 write 1 → `00000001` |
+| Seats | Passenger seat ventilation | 1023 | `1125122072` (`0x43100018`) | same | `1335885840` | same; write 1 → `00000001` |
 | Body | Sunroof | 1001 | `1330642976` | 0 or 21–100 %, 252–255 special | `FidRegistry` sunroof | — |
 | Body | Sunshade | 1001 | `1330642984` | 0–100 %, 254/255 special | `FidRegistry` sunshade | — |
 | Body | Sunroof + sunshade stop | 1001 | both above | wrapper `setMoonRoofAndSunshadeStop()` | — | — |
@@ -220,3 +222,15 @@ fitted. Do not offer them for this model.
   `1132462120` and switch `1132462118`, SOC save `1186988086`.
 - Legacy literal read fids answer -10011, so these are unknown: PM2.5 switch `42448`,
   mirror auto-fold `244159`.
+
+## Seat ventilation test (2026-11-16)
+
+A fleet owner with ventilated seats sent a test sheet that writes the ventilation **read** fids
+(`service call autoservice 6 i32 1023 i32 1335885832|1335885840 i32 1|2`). On `way` both answer
+`ffffd8e5` (-10011, not writable), like every read fid tried so far. The real writers, from the
+car's `framework.jar` `BYDAutoFeatureIds.<clinit>`, are `1125122064` (driver) and `1125122072`
+(passenger) — the same block as the verified seat-heat writers `1125122068` / `1125122076` — and
+both accept a write on `way` (`00000001`; no visible effect, the feature is not fitted). The
+«Проверка прямых команд» page carries both forms (`*_SEAT_VENT_SET_*` and `*_SEAT_VENT_SHEET_*`)
+and shows the raw reply of a refused write. Not a cloud command until a car with the feature
+confirms values and read-back.

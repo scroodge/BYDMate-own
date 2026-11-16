@@ -14,7 +14,10 @@ process, so command polling stops the moment the car sleeps.
 [`CommandDaemon`](../app/src/main/kotlin/com/bydmate/app/daemon/CommandDaemon.kt) is the
 survival-proof twin. It is launched as a **shell-uid `app_process` daemon** (the same mechanism
 DI+ `aps_diplus` uses), which is **not an "app"** and therefore
-survives the force-stop. It needs **no Android Context**: both telemetry read and actuation go
+survives the force-stop — and because it is always up, it is the **only** command executor
+whenever it runs: the app polls in standby (`CommandStandby`, `X-Command-Standby: 1`) and
+the daemon writes most commands straight to `autoservice` (`DirectCommand`, B-34), falling
+back to di+ phrases; see `HOW_IT_WORKS.md` §6.1. It needs **no Android Context**: both telemetry read and actuation go
 over plain localhost HTTP to DiPlus at `http://127.0.0.1:8988`, and it reuses the app's own
 [`CommandAllowlist`](../app/src/main/kotlin/com/bydmate/app/data/remote/CommandAllowlist.kt) (movement /
 aux-voltage guards + phrase allowlist) and DiPlus clients verbatim — no command logic is duplicated.

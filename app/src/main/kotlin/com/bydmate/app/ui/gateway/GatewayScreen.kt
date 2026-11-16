@@ -1468,6 +1468,55 @@ private fun DirectAutoserviceDiagnosticsCard(
             running = running,
             onAction = onAction,
         )
+        Text(
+            "Вентиляция сидений — тест. Нажмите каждую кнопку, посмотрите на сиденье и пришлите " +
+                "строки из «Результаты этого запуска».",
+            color = AccentOrange,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
+        DirectControlRow(
+            title = "Вентиляция водителя",
+            hint = "Поле записи из прошивки (1125122064).",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.DRIVER_SEAT_VENT_SET_OFF,
+                "1" to AutoserviceActuation.DRIVER_SEAT_VENT_SET_LEVEL_1,
+                "2" to AutoserviceActuation.DRIVER_SEAT_VENT_SET_LEVEL_2,
+            ),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Вентиляция пассажира",
+            hint = "Поле записи из прошивки (1125122072).",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.PASSENGER_SEAT_VENT_SET_OFF,
+                "1" to AutoserviceActuation.PASSENGER_SEAT_VENT_SET_LEVEL_1,
+                "2" to AutoserviceActuation.PASSENGER_SEAT_VENT_SET_LEVEL_2,
+            ),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Вентиляция водителя · из списка",
+            hint = "Команды из присланного списка как есть (1335885832).",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.DRIVER_SEAT_VENT_SHEET_OFF,
+                "СЛАБО" to AutoserviceActuation.DRIVER_SEAT_VENT_SHEET_LEVEL_1,
+            ),
+            running = running,
+            onAction = onAction,
+        )
+        DirectControlRow(
+            title = "Вентиляция пассажира · из списка",
+            hint = "Команды из присланного списка как есть (1335885840).",
+            actions = listOf(
+                "ВЫКЛ" to AutoserviceActuation.PASSENGER_SEAT_VENT_SHEET_OFF,
+                "СЛАБО" to AutoserviceActuation.PASSENGER_SEAT_VENT_SHEET_LEVEL_1,
+            ),
+            running = running,
+            onAction = onAction,
+        )
         if (report.isNotEmpty()) {
             Gap(4.dp)
             Text("Результаты этого запуска", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)

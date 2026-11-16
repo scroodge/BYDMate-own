@@ -154,7 +154,8 @@ class AdbOnDeviceClientTest {
 
         val result = client.executeAutoserviceActuation(AutoserviceActuation.DRIVER_SEAT_HEAT_OFF)
 
-        assertEquals(AutoserviceActuationResult(false, false), result)
+        // The raw refusal reaches the diagnostics page so a tester can report the error code.
+        assertEquals(AutoserviceActuationResult(false, false, refusedReply = "Result: Parcel(ffffd8e5)"), result)
         assertEquals(1, fake.execCalls.size)
     }
 

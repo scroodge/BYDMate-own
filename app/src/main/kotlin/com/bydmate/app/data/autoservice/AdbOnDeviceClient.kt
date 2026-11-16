@@ -93,6 +93,58 @@ enum class AutoserviceActuation(
         dev = 1023, setFid = 1125122076, value = 3,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885843), expectedReadBack = 3,
     ),
+    /*
+     * Seat ventilation, on-car test only (`way` reads 0xFFFF: not fitted; not a cloud command).
+     *
+     * SET_*: the real writers from the car's framework.jar `BYDAutoFeatureIds.<clinit>`:
+     * `SET_DRIVER_SEAT_VENTILATING_STATE_SET = isCanFD ? 0x43100010 : isToyota ? 0x23200010 : 0x43100010`,
+     * passenger 0x43100018 — the same block as the verified seat-heat writers (0x43100014 /
+     * 0x4310001c). Values assumed to follow seat heat: 1 off · 2 level 1 · 3 level 2.
+     *
+     * SHEET_*: the owner's test sheet verbatim. It writes the ventilation *read* fids
+     * 1335885832 / 1335885840; on `way` a read fid always refused writes with -10011. Kept so
+     * one test run shows which form that car accepts.
+     */
+    DRIVER_SEAT_VENT_SET_OFF(
+        dev = 1023, setFid = 1125122064, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885832), expectedReadBack = 1,
+    ),
+    DRIVER_SEAT_VENT_SET_LEVEL_1(
+        dev = 1023, setFid = 1125122064, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885832), expectedReadBack = 2,
+    ),
+    DRIVER_SEAT_VENT_SET_LEVEL_2(
+        dev = 1023, setFid = 1125122064, value = 3,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885832), expectedReadBack = 3,
+    ),
+    PASSENGER_SEAT_VENT_SET_OFF(
+        dev = 1023, setFid = 1125122072, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885840), expectedReadBack = 1,
+    ),
+    PASSENGER_SEAT_VENT_SET_LEVEL_1(
+        dev = 1023, setFid = 1125122072, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885840), expectedReadBack = 2,
+    ),
+    PASSENGER_SEAT_VENT_SET_LEVEL_2(
+        dev = 1023, setFid = 1125122072, value = 3,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885840), expectedReadBack = 3,
+    ),
+    DRIVER_SEAT_VENT_SHEET_OFF(
+        dev = 1023, setFid = 1335885832, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885832), expectedReadBack = 1,
+    ),
+    DRIVER_SEAT_VENT_SHEET_LEVEL_1(
+        dev = 1023, setFid = 1335885832, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885832), expectedReadBack = 2,
+    ),
+    PASSENGER_SEAT_VENT_SHEET_OFF(
+        dev = 1023, setFid = 1335885840, value = 1,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885840), expectedReadBack = 1,
+    ),
+    PASSENGER_SEAT_VENT_SHEET_LEVEL_1(
+        dev = 1023, setFid = 1335885840, value = 2,
+        readBack = AutoserviceRead(FidRegistry.TX_GET_INT, 1023, 1335885840), expectedReadBack = 2,
+    ),
     DRL_ON(
         dev = 1004, setFid = 1125122118, value = 1,
         readBack = AutoserviceRead(FidRegistry.TX_GET_INT, FidRegistry.DEV_LIGHT, FidRegistry.FID_DRL_STATE),
@@ -110,6 +162,8 @@ data class AutoserviceActuationResult(
     /** `null` means the action has no reliable read fid (currently rear defrost). */
     val verified: Boolean?,
     val observedValue: Int? = null,
+    /** Raw Binder reply of a refused write, e.g. `Parcel(ffffd8e5 …)` = -10011 (read-only fid). */
+    val refusedReply: String? = null,
 )
 
 data class DaemonSupervisorResult(
@@ -307,7 +361,11 @@ class AdbOnDeviceClientImpl @Inject constructor(
             val accepted = SET_INT_ACCEPTED_REGEX.containsMatchIn(write)
             if (!accepted) {
                 Log.i(TAG, "AUTOSERVICE_DIAG action=$action accepted=false write=${write.trim()}")
-                return@withContext AutoserviceActuationResult(accepted = false, verified = false)
+                return@withContext AutoserviceActuationResult(
+                    accepted = false,
+                    verified = false,
+                    refusedReply = write.replace(Regex("\\s+"), " ").trim().take(80),
+                )
             }
 
             val read = action.readBack ?: run {

@@ -17,6 +17,7 @@ import com.bydmate.app.data.remote.CommandAllowlist
 import com.bydmate.app.data.remote.AckOutbox
 import com.bydmate.app.data.remote.CommandDoorbell
 import com.bydmate.app.data.remote.CommandStateProbe
+import com.bydmate.app.data.remote.CommandStandby
 import com.bydmate.app.data.remote.CommandWake
 import com.bydmate.app.data.remote.DoorbellConfig
 import com.bydmate.app.data.remote.RingRetry
@@ -24,6 +25,7 @@ import com.bydmate.app.data.remote.CommandPollingCadence
 import com.bydmate.app.data.remote.DiParsClient
 import com.bydmate.app.data.remote.DiParsControlClient
 import com.bydmate.app.data.remote.DiParsData
+import com.bydmate.app.data.remote.DirectCommand
 import com.bydmate.app.data.remote.HistoryStatusClient
 import com.bydmate.app.data.remote.PackReading
 import com.bydmate.app.data.remote.IternioIntervalPolicy
@@ -32,6 +34,7 @@ import com.bydmate.app.data.remote.resolveTelemetrySoc
 import com.bydmate.app.domain.CloudSocPreference
 import com.bydmate.app.domain.SocSource
 import com.bydmate.app.domain.ChargingStateClassifier
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -559,6 +562,25 @@ object CommandDaemon {
     private const val APP_HEARTBEAT_FILE =
         "/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/voltflow_mate_heartbeat"
 
+    /** Read by the app's `VehicleCommandPoller`: see [CommandStandby]. */
+    private const val DAEMON_COMMAND_BEACON_FILE =
+        "/storage/emulated/0/Android/data/dev.scroodge.cloudevmate/files/" + CommandStandby.BEACON_FILE
+
+    /**
+     * Tells the app this daemon is polling commands, so the app polls in standby and the daemon
+     * is the only executor. tmp + rename so the app never reads half a number.
+     */
+    private fun writeCommandBeacon() {
+        try {
+            val target = File(DAEMON_COMMAND_BEACON_FILE)
+            val tmp = File(target.parentFile, "${target.name}.tmp")
+            tmp.writeText(System.currentTimeMillis().toString())
+            if (!tmp.renameTo(target)) tmp.delete()
+        } catch (_: Exception) {
+            // No beacon simply means the app keeps executing commands, as before.
+        }
+    }
+
     /**
      * Beacon age past which a *history-writing* push may proceed: 20 missed 1 Hz beacons.
      * The more conservative of the two — a false "app is dead" here stores a duplicate
@@ -992,6 +1014,7 @@ object CommandDaemon {
                 val interval = pollOnce(ok, conf, control, latestData, doorbell)
                 if (interval != null) {
                     pollOk = true
+                    writeCommandBeacon()
                     backoffMs = BASE_POLL_MS
                     interval
                 } else {
@@ -1102,6 +1125,7 @@ object CommandDaemon {
             is CommandAllowlist.BuildResult.Rejected ->
                 ack(id, "rejected", mapOf("error" to built.reason))
             is CommandAllowlist.BuildResult.Ok -> {
+                executeDirect(id, type, params, built.phrase)?.let { return it }
                 val sent = control.sendObserved(built.phrase, CommandStateProbe.forCommand(type, params))
                 if (sent.accepted) {
                     val obs = sent.observation
@@ -1109,13 +1133,125 @@ object CommandDaemon {
                         "executed '$type' → '${built.phrase}'" +
                             (obs?.let { " ${it.field}: ${it.before} → ${it.after} verified=${it.verified}" } ?: ""),
                     )
-                    ack(id, "done", CommandStateProbe.doneResult(built.phrase, obs))
+                    ack(id, "done", CommandStateProbe.doneResult(built.phrase, obs) + ("path" to "diplus"))
                 } else {
                     log("FAILED '$type' → '${built.phrase}'")
                     ack(id, "failed", mapOf("error" to "sendCmd_failed", "phrase" to built.phrase))
                 }
             }
         }
+    }
+
+    /**
+     * B-34: runs [type] as a fixed `autoservice` write when [DirectCommand] has a plan for it.
+     * Returns the ack, or null to send the same command through di+ — no plan (type without a
+     * direct writer, or a pre-read that does not look like this car), a write the head unit
+     * refused, or an absolute command whose read-back never arrived.
+     */
+    private suspend fun executeDirect(
+        id: String,
+        type: String,
+        params: Map<String, Any?>,
+        phrase: String,
+    ): JSONObject? {
+        val carType = directCarType
+        if (!DirectCommand.carTypeValidated(carType)) {
+            log("direct '$type': car type '$carType' not validated → di+")
+            return null
+        }
+        val guardState = DirectCommand.Guard(
+            speedKmh = readAutoserviceFloatFid(DirectCommand.GUARD_SPEED.dev, DirectCommand.GUARD_SPEED.fid)
+                ?.takeIf { it in 0.0..400.0 },
+            gear = readAutoserviceIntFid(DirectCommand.GUARD_GEAR.dev, DirectCommand.GUARD_GEAR.fid),
+            chargeGunState = readAutoserviceIntFid(DirectCommand.GUARD_GUN.dev, DirectCommand.GUARD_GUN.fid),
+            voltage12v = readAutoserviceFloatFid(DirectCommand.GUARD_12V.dev, DirectCommand.GUARD_12V.fid)
+                ?.takeIf { it in 5.0..20.0 },
+        )
+        when (val g = DirectCommand.guard(type, guardState)) {
+            is DirectCommand.GuardResult.Blocked -> {
+                log("direct '$type' blocked: ${g.reason} $guardState")
+                return ack(id, "rejected", mapOf("error" to g.reason, "path" to "direct"))
+            }
+            DirectCommand.GuardResult.Unknown -> {
+                log("direct '$type': guard state unreadable $guardState → di+")
+                return null
+            }
+            DirectCommand.GuardResult.Clear -> Unit
+        }
+        if (type == "window") return executeDirectWindow(id, params, phrase)
+        val read: suspend (DirectCommand.Read) -> Int? = { DirectCommand.parseRead(shellOutput(it.shellCommand())) }
+        val plan = DirectCommand.plan(type, params, read)
+        if (plan == null) {
+            log("direct '$type': no plan → di+")
+            return null
+        }
+        val outcome = DirectCommand.execute(
+            plan = plan,
+            write = { DirectCommand.isAccepted(shellOutput(it.shellCommand())) },
+            read = read,
+            nowMs = { System.currentTimeMillis() },
+            sleep = { delay(it) },
+        )
+        log(
+            "direct '$type' accepted=${outcome.accepted} verified=${outcome.verified} " +
+                "${plan.field}: ${outcome.before} → ${outcome.after}",
+        )
+        if (DirectCommand.shouldRetryViaDiplus(plan, outcome)) {
+            log("direct '$type' unconfirmed → di+")
+            return null
+        }
+        return ack(id, "done", DirectCommand.doneResult(phrase, plan, outcome))
+    }
+
+    /**
+     * `window` to an arbitrary %: closed loop in [DirectCommand.executeWindow]. Not retried
+     * through di+ once the glass has moved — a second mover would fight the first.
+     */
+    private suspend fun executeDirectWindow(id: String, params: Map<String, Any?>, phrase: String): JSONObject? {
+        val target = DirectCommand.windowTarget(params) ?: return null
+        val outcome = DirectCommand.executeWindow(
+            target = target,
+            write = { DirectCommand.isAccepted(shellOutput(it.shellCommand())) },
+            readAll = { DirectCommand.parseReadLines(shellScriptOutput(DirectCommand.windowReadAllCommand()), 4) },
+            nowMs = { System.currentTimeMillis() },
+            sleep = { delay(it) },
+        )
+        if (outcome == null) {
+            log("direct 'window': window % unreadable → di+")
+            return null
+        }
+        log(
+            "direct 'window' ${target.windows}→${target.pct}% accepted=${outcome.accepted} " +
+                "verified=${outcome.verified} window_pct: ${outcome.before} → ${outcome.after}",
+        )
+        if (!outcome.accepted) {
+            log("direct 'window' refused → di+")
+            return null
+        }
+        return ack(id, "done", DirectCommand.windowDoneResult(phrase, outcome))
+    }
+
+    /** Like [shellOutput] for a fixed multi-command line (`a; b`), which needs a shell. */
+    private fun shellScriptOutput(script: String): String? = try {
+        val proc = Runtime.getRuntime().exec(arrayOf("sh", "-c", script))
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        out
+    } catch (_: Exception) {
+        null
+    }
+
+    /** `persist.sys.car.type`, read once: it is a factory value and never changes at runtime. */
+    private val directCarType: String? by lazy { shellOutput("getprop persist.sys.car.type")?.trim() }
+
+    /** Full stdout of one fixed `service call`, or null when it could not run. */
+    private fun shellOutput(command: String): String? = try {
+        val proc = Runtime.getRuntime().exec(command)
+        val out = proc.inputStream.bufferedReader().readText()
+        proc.waitFor()
+        out
+    } catch (_: Exception) {
+        null
     }
 
     /**
